@@ -372,9 +372,9 @@ def _build_request(
         )
 
     # O7 + I2: when the caller hasn't explicitly overridden temperature,
-    # pick one based on context data quality AND market regime — sparse
-    # data or high-volatility regime → higher temperature (hedged,
-    # cautious); rich data in calm regime → lower temperature.
+    # sparse data gets a higher temperature for cautious, hedged language;
+    # rich data and high-volatility/crisis regimes use a lower temperature
+    # for focused, conservative output.
     if temperature is not None:
         final_temperature = temperature
     else:
@@ -443,12 +443,11 @@ def _finalize_analysis(
         _cache_result(cache_key, result)
         return result
 
-    # Warn (don't block) when the AI trend contradicts the engine's
-    # primary direction — the AI is allowed to say "mixed".
-    ctx_dir = ctx.trend_state.get("direction", "")
-    ai_trend = parsed.trend
-    if ctx_dir and ai_trend not in ("mixed", "uncertain"):
-        _log_trend_disagreements(symbol, ctx_dir, ai_trend, parsed)
+    # The model may describe a cross-timeframe disagreement, but it must not
+    # present the opposite of the requested engine timeframe as a clean call.
+    # Keep its narrative available while making the surfaced trend explicitly
+    # mixed and evidence-backed.
+    _enforce_trend_alignment(symbol, ctx, parsed)
 
     # parsed.confidence is already hard-capped at _CONFIDENCE_MAX (see
     # AnalysisResponse._cap_confidence) by the time we see it here. The
@@ -918,30 +917,34 @@ def _uncertainty(
     )
 
 
-def _log_trend_disagreements(
+def _enforce_trend_alignment(
     symbol: str,
-    ctx_direction: str,
-    ai_trend: str,
+    ctx: AnalysisContext,
     response: AnalysisResponse,
 ) -> None:
-    """Warn when the AI trend contradicts the engine's primary direction."""
-    # Map engine directions to the AI's vocabulary
-    engine_bullish = ctx_direction in ("uptrend", "bullish")
-    engine_bearish = ctx_direction in ("downtrend", "bearish")
-    ai_bullish = ai_trend == "bullish"
-    ai_bearish = ai_trend == "bearish"
+    """Prevent an unsupported model trend from contradicting engine truth."""
+    engine_direction = ctx.trend_state.get("direction", "")
+    engine_trend = {
+        "uptrend": "bullish",
+        "bullish": "bullish",
+        "downtrend": "bearish",
+        "bearish": "bearish",
+    }.get(engine_direction)
+    if engine_trend is None or response.trend in ("mixed", "uncertain", engine_trend):
+        return
 
-    if engine_bearish and ai_bullish:
-        logger.warning(
-            "AI bullish for %s but engine direction is %r. Check supporting_factors: %s",
-            symbol,
-            ctx_direction,
-            response.supporting_factors[:3],
-        )
-    elif engine_bullish and ai_bearish:
-        logger.warning(
-            "AI bearish for %s but engine direction is %r. Check supporting_factors: %s",
-            symbol,
-            ctx_direction,
-            response.supporting_factors[:3],
-        )
+    model_trend = response.trend
+    response.trend = "mixed"
+    response.confidence = min(response.confidence, 0.5)
+    conflict = (
+        f"Model proposed {model_trend}, but the quantitative {ctx.timeframe} signal is "
+        f"{engine_trend}; shown as mixed until that conflict is resolved."
+    )
+    if conflict not in response.timeframe_conflicts:
+        response.timeframe_conflicts.append(conflict)
+    logger.warning(
+        "AI %s for %s contradicted the quantitative %s signal; surfaced as mixed",
+        model_trend,
+        symbol,
+        ctx.timeframe,
+    )

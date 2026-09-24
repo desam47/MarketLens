@@ -1442,7 +1442,7 @@ class TestAnalyzeSymbol(unittest.TestCase):
 
     @patch("backend.ai.analyze.ai_manager")
     @patch("backend.ai.analyze.build_context")
-    def test_ai_trend_disagreement_logs_but_does_not_block(self, mock_ctx, mock_ai):
+    def test_ai_trend_disagreement_is_shown_as_mixed_with_evidence(self, mock_ctx, mock_ai):
         mock_ctx.return_value = AnalysisContext(
             symbol="AAPL",
             timeframe="1d",
@@ -1473,9 +1473,9 @@ class TestAnalyzeSymbol(unittest.TestCase):
             model="llama3.2",
         )
         result = asyncio.run(analyze_symbol("AAPL", "1d"))
-        # Result is still the AI's response — quant truth is separate
-        self.assertEqual(result.trend, "bullish")
-        # (Logging assertion would need caplog; out of scope for this test)
+        self.assertEqual(result.trend, "mixed")
+        self.assertLessEqual(result.confidence, 0.5)
+        self.assertTrue(any("quantitative 1d signal is bearish" in c for c in result.timeframe_conflicts))
 
 
 class TestBareKeyLevelsLabeling(unittest.TestCase):
@@ -1746,10 +1746,9 @@ class TestTradePlanCapture(unittest.TestCase):
             model="llama3.2",
         )
 
-    @patch("backend.ai.trade_plan_tracker.record_trade_plan")
     @patch("backend.ai.analyze.ai_manager")
     @patch("backend.ai.analyze.build_context")
-    def test_buy_plan_is_not_captured_without_explicit_confirmation(self, mock_ctx, mock_ai, mock_record):
+    def test_buy_plan_is_not_captured_without_explicit_confirmation(self, mock_ctx, mock_ai):
         mock_ctx.return_value = AnalysisContext(
             symbol="AAPL",
             timeframe="1d",
@@ -1764,13 +1763,11 @@ class TestTradePlanCapture(unittest.TestCase):
         mock_ai.complete = AsyncMock()
         mock_ai.complete.return_value = self._buy_reply()
         result = asyncio.run(analyze_symbol("AAPL", "1d"))
-        mock_record.assert_not_called()
         self.assertEqual(result.trade_plan_validation["status"], "verified")
 
-    @patch("backend.ai.trade_plan_tracker.record_trade_plan")
     @patch("backend.ai.analyze.ai_manager")
     @patch("backend.ai.analyze.build_context")
-    def test_hold_plan_is_not_specially_skipped_here(self, mock_ctx, mock_ai, mock_record):
+    def test_hold_plan_is_not_specially_skipped_here(self, mock_ctx, mock_ai):
         # Hold/avoid is analysis, not an actionable setup, so it must not
         # enter the outcome tracker.
         mock_ctx.return_value = AnalysisContext(
@@ -1783,16 +1780,13 @@ class TestTradePlanCapture(unittest.TestCase):
         mock_ai.complete = AsyncMock()
         mock_ai.complete.return_value = self._hold_reply()
         asyncio.run(analyze_symbol("AAPL", "1d"))
-        mock_record.assert_not_called()
 
-    @patch("backend.ai.trade_plan_tracker.record_trade_plan")
     @patch("backend.ai.analyze.ai_manager")
     @patch("backend.ai.analyze.build_context")
     def test_tracking_is_not_attempted_during_analysis(
         self,
         mock_ctx,
         mock_ai,
-        mock_record,
     ):
         mock_ctx.return_value = AnalysisContext(
             symbol="AAPL",
@@ -1807,20 +1801,16 @@ class TestTradePlanCapture(unittest.TestCase):
         )
         mock_ai.complete = AsyncMock()
         mock_ai.complete.return_value = self._buy_reply()
-        mock_record.side_effect = RuntimeError("db is down")
-        result = asyncio.run(analyze_symbol("AAPL", "1d"))  # must not raise
-        mock_record.assert_not_called()
+        result = asyncio.run(analyze_symbol("AAPL", "1d"))
         self.assertEqual(result.trend, "bullish")
         self.assertIsNotNone(result.trade_plan)
 
-    @patch("backend.ai.trade_plan_tracker.record_trade_plan")
     @patch("backend.ai.analyze.ai_manager")
     @patch("backend.ai.analyze.build_context")
     def test_stale_actionable_plan_is_withheld_and_not_tracked(
         self,
         mock_ctx,
         mock_ai,
-        mock_record,
     ):
         mock_ctx.return_value = AnalysisContext(
             symbol="AAPL",
@@ -1840,7 +1830,6 @@ class TestTradePlanCapture(unittest.TestCase):
         self.assertIsNone(result.trade_plan)
         self.assertEqual(result.trade_plan_validation["status"], "unavailable")
         self.assertIn("stale", result.trade_plan_validation["reason"])
-        mock_record.assert_not_called()
 
 
 # --- Spec compliance: no AI-side indicator calc ----------------------
@@ -2213,6 +2202,24 @@ class TestCorrelationContext(unittest.TestCase):
         self.assertIn("MSFT", called_syms)
         # AAPL is called once (as the primary scan), not twice (as a peer)
         self.assertEqual(called_syms.count("AAPL"), 1)
+
+    @patch("backend.ai.context.market_scanner")
+    def test_peers_without_the_requested_timeframe_are_omitted(self, mock_scanner):
+        primary = _fake_scan_result("AAPL")
+        peer = _fake_scan_result("MSFT")
+        peer.trend_signals = {
+            "ONE_DAY": {
+                "direction": "strong_bullish",
+                "strength": "strong",
+                "confidence": 0.85,
+            }
+        }
+        mock_scanner.scan_symbol.side_effect = [primary, peer]
+
+        ctx = build_context("AAPL", "15m", portfolio_symbols=["MSFT"])
+
+        self.assertEqual(ctx.correlation_context["peer_count"], 0)
+        self.assertEqual(ctx.correlation_context["peers"], [])
 
     def test_render_system_prompt_injects_correlation(self):
         from backend.ai.prompt import render_system_prompt

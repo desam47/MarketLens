@@ -6,7 +6,7 @@ import os
 import sys
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../"))
 
@@ -21,6 +21,13 @@ client = TestClient(app)
 
 
 class TestAnalyzeEndpoint(unittest.TestCase):
+    def test_no_template_id_keeps_the_builtin_prompt(self):
+        from backend.api.ai.router import _sync_resolve_template
+
+        db = MagicMock()
+        self.assertEqual(_sync_resolve_template(db, None), (None, None))
+        db.query.assert_not_called()
+
     @patch("backend.api.ai.router.analyze_symbol")
     def test_force_refresh_is_forwarded(self, mock_analyze):
         from backend.ai.prompt import AnalysisResponse

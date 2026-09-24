@@ -1652,7 +1652,7 @@ until the line is removed. The end-to-end evaluation pins these defaults
   subtests; the targeted panel suite passed with 12 tests; TypeScript,
   production build, Ruff, and `git diff --check` all passed.
 
-## AI Analysis review reliability batches 1–3 (2026-09-24)
+## AI Analysis review reliability batches 1–4 (2026-09-24)
 
 - **Responsive execution and complete background results.** Context building
   now runs outside the async event loop for both blocking and streaming
@@ -1678,6 +1678,12 @@ until the line is removed. The end-to-end evaluation pins these defaults
   is freshly revalidated, records its true provider/model/timeframe, and is
   graded from post-confirmation intraday bars on day D before daily bars from
   D+1.
+- **Final correctness boundaries.** Background-job creation shares the AI
+  rate limiter; peer correlation uses only the requested timeframe and skips
+  peers without it; an opposite model trend is surfaced as mixed with a
+  deterministic quantitative conflict; and saved templates apply only when
+  explicitly selected. The dead request-body and legacy auto-tracking paths
+  are removed.
 - **Regression coverage.** The AI Analysis/task/router slice passed with 158
   tests and 17 subtests; AIAnalysisPanel passed with 13 tests; TypeScript,
   production build, Ruff, and `git diff --check` passed. The detailed issue

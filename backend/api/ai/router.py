@@ -74,15 +74,6 @@ def _parse_portfolio_symbols(raw: str | None) -> list[str] | None:
 # --- Request / Response models ---------------------------------------
 
 
-class AnalyzeRequest(BaseModel):
-    """Optional body for ``POST /api/ai/analyze``."""
-
-    symbol: str = Field(..., min_length=1, max_length=10)
-    timeframe: str = Field(default="1d", pattern=r"^(1d|1h|4h|15m|5m|1m)$")
-    max_tokens: int | None = Field(default=None, ge=100, le=8192)
-    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
-
-
 class ProviderStatusResponse(BaseModel):
     name: str
     healthy: bool
@@ -212,16 +203,10 @@ def _sync_resolve_template(db: Session, template_id: int | None):
             )
         return tmpl_obj.id, tmpl_obj
 
-    # No explicit ID: look up the active default.
-    tmpl_obj = (
-        db.query(AITemplate)
-        .filter(
-            AITemplate.is_default == True,  # noqa: E712
-            AITemplate.is_active == True,  # noqa: E712
-        )
-        .first()
-    )
-    return tmpl_obj.id if tmpl_obj else None, tmpl_obj
+    # A default template is a library/UI preference, not an implicit change
+    # to production analysis behavior. Built-in prompts remain authoritative
+    # unless the caller selects a template explicitly.
+    return None, None
 
 
 def _issue_verified_plan_id(

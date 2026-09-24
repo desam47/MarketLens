@@ -14,12 +14,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from ...ai.background import cancel_job, enqueue_analyze_job, get_job_status
 from ...ai.tasks import analyze_symbol_task
 from ...ai.verified_plan_store import issue_verified_plan
+from ..rate_limit import _ai_limiter, check_rate_limit
 
 router = APIRouter(prefix="/api/ai/jobs", tags=["ai-jobs"])
 
@@ -76,7 +77,10 @@ class JobCancelResponse(JobStatusResponse):
     response_model=JobEnqueueResponse,
     status_code=status.HTTP_202_ACCEPTED,
 )
-def enqueue_job(req: JobEnqueueRequest) -> JobEnqueueResponse:
+def enqueue_job(
+    req: JobEnqueueRequest,
+    _rl: None = Depends(check_rate_limit(_ai_limiter)),
+) -> JobEnqueueResponse:
     """Enqueue a new AI analysis job.
 
     The job runs in a background RQ worker. The response returns a

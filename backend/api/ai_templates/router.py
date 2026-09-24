@@ -153,8 +153,7 @@ def _resolve_template_for_request(db: Session, template_id: int | None) -> AITem
     """Pick the template to use for an analysis call.
 
     - If ``template_id`` given, load it (must be active).
-    - Else, fall back to the default template (if any).
-    - Else, return None (caller uses the system default prompt).
+    - Else, return None (caller uses the built-in system prompt).
     """
     if template_id is not None:
         tmpl = db.query(AITemplate).filter(AITemplate.id == template_id).first()
@@ -166,15 +165,7 @@ def _resolve_template_for_request(db: Session, template_id: int | None) -> AITem
                 detail=f"AI template {template_id} is inactive",
             )
         return tmpl
-    # No explicit id — use the default if one exists.
-    return (
-        db.query(AITemplate)
-        .filter(
-            AITemplate.is_default == True,  # noqa: E712
-            AITemplate.is_active == True,  # noqa: E712
-        )
-        .first()
-    )
+    return None
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────

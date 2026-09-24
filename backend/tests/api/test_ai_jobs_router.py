@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.api.main import app
+from backend.api.rate_limit import _ai_limiter
 from backend.database import Base, engine
 
 
@@ -72,6 +73,15 @@ def test_enqueue_job_returns_202_and_job_id(client):
     assert data["timeframe"] == "4h"
     assert data["template_id"] is None
     assert data["template_name"] is None
+
+
+def test_enqueue_job_uses_the_ai_rate_limit(client):
+    _ai_limiter.reset()
+    responses = [client.post("/api/ai/jobs", json={"symbol": "AAPL"}) for _ in range(11)]
+
+    assert all(response.status_code == 202 for response in responses[:10])
+    assert responses[10].status_code == 429
+    assert _ai_limiter.get_stats()["fallback"]["total_rejected"] == 1
 
 
 def test_enqueue_job_with_template(client):

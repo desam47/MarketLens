@@ -41,42 +41,6 @@ _HOLDING_DAYS = {"scalp": 1, "swing": 10, "position": 60}
 _DEFAULT_HOLDING_DAYS = 10
 
 
-def record_trade_plan(symbol: str, parsed) -> None:
-    """Persist one actionable plan for legacy/internal callers.
-
-    New user-facing flows must use :func:`record_confirmed_trade_plan`,
-    which deduplicates and is called only after fresh server-side validation.
-    """
-    plan = getattr(parsed, "trade_plan", None)
-    if plan is None or plan.recommendation not in ("buy", "sell"):
-        return
-    if not settings.ai_trade_plan_tracking.enabled:
-        return
-
-    from backend.models.ai_trade_plan_outcome import AITradePlanOutcome
-
-    db = SessionLocal()
-    try:
-        db.add(
-            AITradePlanOutcome(
-                symbol=symbol.upper(),
-                recommendation=plan.recommendation,
-                conviction=plan.conviction,
-                time_horizon=plan.time_horizon,
-                entry_zone_low=plan.entry_zone_low,
-                entry_zone_high=plan.entry_zone_high,
-                stop_loss=plan.stop_loss,
-                targets_json=json.dumps(plan.targets),
-                risk_reward=plan.risk_reward,
-                provider=parsed.provider,
-                model=parsed.model,
-            )
-        )
-        db.commit()
-    finally:
-        db.close()
-
-
 def record_confirmed_trade_plan(
     symbol: str,
     plan,

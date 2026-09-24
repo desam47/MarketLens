@@ -1,9 +1,9 @@
 # Version 5 AI Analysis Fixes
 
 **Created:** 2026-09-24
-**Last updated:** 2026-09-24 (batch 3: AA-04, AA-05)
-**Status:** Open. The 2026-09-24 review found 15 issues. Batches 1–3 are fixed; 6 remain. See [Reference](#reference) for how AI Analysis works.
-**Scorecard:** 9 ✅ COMPLETE, 0 ⚠️ PARTIAL, 6 ❌ NOT STARTED, 0 🟡 DEFERRED.
+**Last updated:** 2026-09-24 (batch 4: AA-09, AA-10, AA-12 to AA-15)
+**Status:** Complete. All 15 findings from the 2026-09-24 review are fixed and covered by focused regression tests. See [Reference](#reference) for how AI Analysis works.
+**Scorecard:** 15 ✅ COMPLETE, 0 ⚠️ PARTIAL, 0 ❌ NOT STARTED, 0 🟡 DEFERRED.
 **Source:** 2026-09-24 review of `backend/ai/analyze.py`, `backend/ai/context.py`, `backend/ai/prompt.py` (analysis and trade-plan models), `backend/ai/tasks.py`, `backend/ai/trade_plan_tracker.py`, `backend/api/ai/router.py`, `backend/api/ai/jobs.py`, and `frontend/src/components/AIAnalysisPanel.tsx`, at `b7db6c8`.
 **Related:** [Phase audit](phase_audit_v5.md), [Chat bug fixes](v5_bug_fixes.md), [Phase 5.8 evaluation](phase_5_8_evaluation.md)
 
@@ -33,19 +33,19 @@ Line numbers refer to the code at `b7db6c8`.
 | AA-06 | Medium | Validation | Plan validation ignores the quote's age | Verified | ✅ COMPLETE |
 | AA-07 | Low | Backend | Transient failures are cached for 45 seconds | Verified | ✅ COMPLETE |
 | AA-08 | Low | Validation | A stop or target inside the entry zone passes | Verified | ✅ COMPLETE |
-| AA-09 | Low | API | `POST /api/ai/jobs` is not rate-limited | Code-read | ❌ NOT STARTED |
-| AA-10 | Low | Backend + UI | A model trend that contradicts the engine is only logged | Code-read | ❌ NOT STARTED |
+| AA-09 | Low | API | `POST /api/ai/jobs` is not rate-limited | Code-read | ✅ COMPLETE |
+| AA-10 | Low | Backend + UI | A model trend that contradicts the engine is only logged | Code-read | ✅ COMPLETE |
 | AA-11 | Low | Backend | A cached result reports its original data age | Verified | ✅ COMPLETE |
-| AA-12 | Low | Context | Peer context falls back to a peer's first available signal | Code-read | ❌ NOT STARTED |
-| AA-13 | Low | Backend | The temperature comment contradicts the code | Code-read | ❌ NOT STARTED |
-| AA-14 | Low | Cleanup | `AnalyzeRequest` and `record_trade_plan` are dead code | Code-read | ❌ NOT STARTED |
-| AA-15 | Low | API | A default template silently replaces the built-in prompt | Code-read | ❌ NOT STARTED |
+| AA-12 | Low | Context | Peer context falls back to a peer's first available signal | Code-read | ✅ COMPLETE |
+| AA-13 | Low | Backend | The temperature comment contradicts the code | Code-read | ✅ COMPLETE |
+| AA-14 | Low | Cleanup | `AnalyzeRequest` and `record_trade_plan` are dead code | Code-read | ✅ COMPLETE |
+| AA-15 | Low | API | A default template silently replaces the built-in prompt | Code-read | ✅ COMPLETE |
 
 **Next suggested order:**
 1. ~~**Batch 1:**~~ AA-01, AA-02 and AA-03: done.
 2. ~~**Batch 2:**~~ AA-06, AA-07, AA-08 and AA-11: done.
 3. ~~**Batch 3:**~~ AA-05 and AA-04: done.
-4. **Batch 4 (next):** AA-09, AA-10 and AA-12 to AA-15: the remaining low items.
+4. ~~**Batch 4:**~~ AA-09, AA-10 and AA-12 to AA-15: done.
 
 ---
 
@@ -289,24 +289,35 @@ the plan with the narrative intact.
 
 ### AA-09 — Background jobs are not rate-limited
 
-**Status:** ❌ NOT STARTED
+**Status:** ✅ COMPLETE (2026-09-24, batch 4)
 **Where:** `enqueue_job` (`backend/api/ai/jobs.py:78`).
 
 `/analyze`, `/analyze/stream` and `/track-trade-plan` use the AI rate
 limiter. Enqueuing a job does not, so it bypasses the limit on AI calls.
 
-**Fix:** add `Depends(check_rate_limit(_ai_limiter))`.
+**Resolution:** `POST /api/ai/jobs` now uses the same 10-per-minute
+per-client AI limiter as blocking analysis, streaming analysis, and setup
+tracking. A queued job cannot bypass the AI budget.
+
+**Tests:** eleven enqueue attempts produce ten accepted requests and a 429;
+the AI limiter records the rejection.
 
 ### AA-10 — A contradicting model trend is only logged
 
-**Status:** ❌ NOT STARTED
-**Where:** `_log_trend_disagreements`, called at `analyze.py:421`.
+**Status:** ✅ COMPLETE (2026-09-24, batch 4)
+**Where:** `_enforce_trend_alignment` in `backend/ai/analyze.py`.
 
 When the model says bullish and the engine says downtrend, or the reverse,
 the server logs a warning. The trader sees only the model's trend.
 
-**Fix:** return the engine's direction and a disagreement flag, and show
-both in the panel.
+**Resolution:** an opposite model direction is now surfaced as `mixed`, its
+confidence is capped at 0.50 before any calibration, and a deterministic
+timeframe-conflict message identifies the quantitative requested-timeframe
+direction. The existing panel renders that conflict instead of presenting the
+model's opposite call as clean truth.
+
+**Tests:** an engine downtrend plus a model bullish reply returns `mixed`, a
+confidence no higher than 0.50, and the quantitative 1d conflict text.
 
 ### AA-11 — A cached result reports its original data age
 
@@ -328,7 +339,7 @@ age as approximately fifteen seconds when reused.
 
 ### AA-12 — Peer context falls back to a peer's first available signal
 
-**Status:** ❌ NOT STARTED
+**Status:** ✅ COMPLETE (2026-09-24, batch 4)
 **Where:** `_correlation_context` (`backend/ai/context.py:800`).
 
 A peer's direction comes from its daily signal, or from its first available
@@ -336,31 +347,39 @@ signal when it has no daily one. That is the silent substitution the
 primary timeframe no longer does (see [Timeframe correctness](#timeframe-correctness)).
 It also ignores the requested timeframe.
 
-**Fix:** use the requested timeframe's signal and skip a peer that lacks it.
+**Resolution:** correlation context receives the canonical requested
+timeframe, uses only that peer signal, and omits peers that do not have it.
+`peer_count` now reflects analyzed peers, not merely requested symbols.
+
+**Tests:** a 15-minute analysis omits a peer that only has a daily signal.
 
 ### AA-13 — The temperature comment contradicts the code
 
-**Status:** ❌ NOT STARTED
+**Status:** ✅ COMPLETE (2026-09-24, batch 4)
 **Where:** `_build_request` (`analyze.py:344`).
 
 The comment says a high-volatility regime gives a *higher* temperature, but
 the code lowers it to at most 0.15.
 
-**Fix:** correct the comment.
+**Resolution:** the comment now matches the implementation: sparse context
+uses a higher temperature, while rich context and high-volatility/crisis
+regimes use lower, more conservative temperatures.
 
 ### AA-14 — Dead code
 
-**Status:** ❌ NOT STARTED
+**Status:** ✅ COMPLETE (2026-09-24, batch 4)
 **Where:** `AnalyzeRequest` (`backend/api/ai/router.py:76`); `record_trade_plan` (`backend/ai/trade_plan_tracker.py:43`).
 
 `AnalyzeRequest` is never used, because the routes take query parameters.
 `record_trade_plan` has no callers; only its tests use it.
 
-**Fix:** remove both, and their tests.
+**Resolution:** removed the unused request-body model, legacy auto-capture
+function, and their obsolete tests. The only outcome write path is explicit
+server-verified setup tracking.
 
 ### AA-15 — A default template silently replaces the built-in prompt
 
-**Status:** ❌ NOT STARTED
+**Status:** ✅ COMPLETE (2026-09-24, batch 4)
 **Where:** `_sync_resolve_template` (`backend/api/ai/router.py:200`).
 
 With no `template_id`, `/analyze` uses the active default template. That
@@ -373,8 +392,12 @@ The panel never says a template was used. The live database's only
 template ("System Locked") is not set as the default, so this is latent
 today.
 
-**Fix:** use a template only when one is chosen explicitly, or show its
-name on the result.
+**Resolution:** analysis and template rendering now use a saved template only
+when its ID is explicitly supplied. The library's default marker remains a
+UI/library preference and no longer silently changes production analysis.
+
+**Tests:** an analysis resolver with no template ID returns `(None, None)`
+without querying templates, preserving the built-in prompt.
 
 ---
 
@@ -433,6 +456,16 @@ name on the result.
 blocking-route issuance, background handle reuse, provenance persistence,
 same-day post-confirmation 1-minute grading, D+1 daily grading, and hiding
 the Track action when the server did not issue a handle.
+
+### Batch 4 (2026-09-24)
+
+| Suite | Result |
+|---|---|
+| Focused analysis, tracking, router, job, template, rate-limit, migration, and task tests | 246 passed, 17 subtests passed |
+
+**Regression coverage:** background-job AI rate limiting, model/engine trend
+conflict surfacing, peer timeframe matching, explicit-template-only analysis,
+and removal of obsolete auto-tracking and request-body paths.
 
 ### Batch 2 (2026-09-24)
 

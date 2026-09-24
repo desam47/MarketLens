@@ -760,6 +760,7 @@ def _track_record_context(sym: str) -> dict[str, Any]:
 def _correlation_context(
     sym: str,
     *,
+    timeframe: str,
     portfolio_symbols: list[str] | None = None,
 ) -> dict[str, Any]:
     """O10 — Multi-symbol correlation context.
@@ -781,7 +782,7 @@ def _correlation_context(
     if not peers:
         return {}
 
-    summary: dict[str, Any] = {"peer_count": len(peers), "peers": []}
+    summary: dict[str, Any] = {"peer_count": 0, "peers": []}
     aligned = 0
     opposed = 0
     try:
@@ -798,7 +799,18 @@ def _correlation_context(
                 # reuse path instead of unconditionally running a full scan.
                 scan = _cached_scan(psym)
                 tsig = scan.trend_signals or {}
-                primary = tsig.get("1d") or tsig.get("ONE_DAY") or next(iter(tsig.values()), None)
+                # A peer is comparable only when it has the requested
+                # timeframe. Falling back to the first available signal made
+                # a 15-minute analysis quietly compare a peer's daily or
+                # one-minute direction instead.
+                primary = next(
+                    (
+                        candidate
+                        for raw_timeframe, candidate in tsig.items()
+                        if _canonical_timeframe_key(raw_timeframe) == timeframe
+                    ),
+                    None,
+                )
                 if primary is None:
                     continue
                 if hasattr(primary, "direction"):
@@ -828,6 +840,7 @@ def _correlation_context(
                     same_sector += 1
             except Exception:  # noqa: BLE001
                 continue
+        summary["peer_count"] = len(summary["peers"])
         summary["aligned"] = aligned
         summary["opposed"] = opposed
         summary["same_sector_count"] = same_sector
@@ -1011,7 +1024,7 @@ def build_context(
     f_stats = ex.submit(_signal_stats_context, sym, tf)
     f_tape = ex.submit(_tape_context, sym)
     f_track = ex.submit(_track_record_context, sym)
-    f_corr = ex.submit(_correlation_context, sym, portfolio_symbols=portfolio_symbols)
+    f_corr = ex.submit(_correlation_context, sym, timeframe=tf, portfolio_symbols=portfolio_symbols)
 
     market_regime = _safe_result(f_regime)
     rs_list = _safe_result(f_rs) or []

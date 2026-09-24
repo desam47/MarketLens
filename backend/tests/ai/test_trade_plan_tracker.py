@@ -2,9 +2,8 @@
 Tests for backend.ai.trade_plan_tracker (2026-09-11) — outcome
 tracking for explicitly confirmed buy/sell trade-plan calls.
 
-record_trade_plan / get_track_record each open their own SessionLocal()
-(patched to an in-memory sqlite sessionmaker below); _grade_row /
-_grade_once take a db session directly.
+get_track_record opens its own SessionLocal() (patched to an in-memory sqlite
+sessionmaker below); _grade_row / _grade_once take a db session directly.
 """
 
 import json
@@ -16,7 +15,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from backend.ai import trade_plan_tracker as tracker
-from backend.ai.prompt import AnalysisResponse, TradePlan
+from backend.ai.prompt import TradePlan
 from backend.models import AITradePlanOutcome
 from backend.models.market_data import Bar, DataStatus
 
@@ -36,18 +35,6 @@ def _plan(**over) -> TradePlan:
     )
     base.update(over)
     return TradePlan(**base)
-
-
-def _analysis(**over) -> AnalysisResponse:
-    base = dict(
-        summary="Clean uptrend, buying the dip.",
-        trend="bullish",
-        confidence=0.7,
-        provider="ollama",
-        model="llama3.2",
-    )
-    base.update(over)
-    return AnalysisResponse(**base)
 
 
 def _bar(day: str, *, o, h, low, c, timeframe: str = "1d") -> Bar:
@@ -78,53 +65,6 @@ class _DBBase(unittest.TestCase):
     def tearDown(self):
         self.db.close()
         self.engine.dispose()
-
-
-class TestRecordTradePlan(_DBBase):
-    def setUp(self):
-        super().setUp()
-        p = patch.object(tracker, "SessionLocal", self.Session)
-        p.start()
-        self.addCleanup(p.stop)
-        p2 = patch.object(tracker.settings.ai_trade_plan_tracking, "enabled", True)
-        p2.start()
-        self.addCleanup(p2.stop)
-
-    def test_buy_plan_captured(self):
-        tracker.record_trade_plan("aapl", _analysis(trade_plan=_plan(recommendation="buy")))
-        rows = self.db.query(AITradePlanOutcome).all()
-        self.assertEqual(len(rows), 1)
-        row = rows[0]
-        self.assertEqual(row.symbol, "AAPL")
-        self.assertEqual(row.recommendation, "buy")
-        self.assertEqual(row.status, "open")
-        self.assertEqual(json.loads(row.targets_json), [108.0, 115.0])
-        self.assertEqual(row.provider, "ollama")
-
-    def test_sell_plan_captured(self):
-        plan = _plan(
-            recommendation="sell",
-            entry_zone_low=100.0,
-            entry_zone_high=102.0,
-            stop_loss=106.0,
-            targets=[95.0, 90.0],
-        )
-        tracker.record_trade_plan("MSFT", _analysis(trade_plan=plan))
-        row = self.db.query(AITradePlanOutcome).first()
-        self.assertEqual(row.recommendation, "sell")
-
-    def test_hold_plan_skipped(self):
-        tracker.record_trade_plan("AAPL", _analysis(trade_plan=_plan(recommendation="hold")))
-        self.assertEqual(self.db.query(AITradePlanOutcome).count(), 0)
-
-    def test_no_trade_plan_skipped(self):
-        tracker.record_trade_plan("AAPL", _analysis(trade_plan=None))
-        self.assertEqual(self.db.query(AITradePlanOutcome).count(), 0)
-
-    def test_disabled_flag_skips_capture(self):
-        with patch.object(tracker.settings.ai_trade_plan_tracking, "enabled", False):
-            tracker.record_trade_plan("AAPL", _analysis(trade_plan=_plan()))
-        self.assertEqual(self.db.query(AITradePlanOutcome).count(), 0)
 
 
 class TestConfirmedTradePlan(_DBBase):
