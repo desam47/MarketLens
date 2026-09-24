@@ -790,6 +790,7 @@ def test_comparison_routes_to_ranking_tool(monkeypatch) -> None:
     assert grounded is True
     assert "compare_symbols" in text
     assert requests[0].arguments["metric"] == "volatility_percent"
+    assert requests[0].timeframe == "1d"
     verification = verify_answer(
         text,
         trace,
@@ -798,6 +799,108 @@ def test_comparison_routes_to_ranking_tool(monkeypatch) -> None:
     )
     assert verification.status == "verified"
     complete.assert_not_called()
+
+
+def test_daily_comparison_remains_usable_after_market_close(monkeypatch) -> None:
+    monkeypatch.setattr("backend.ai.chat._is_regular_market_closed", lambda: True)
+    monkeypatch.setattr(
+        "backend.ai.chat.default_registry.execute",
+        lambda request: ToolResult(
+            tool_name=request.tool_name,
+            ok=True,
+            data={
+                "metric": "return_percent",
+                "rankings": [
+                    {"symbol": "AAPL", "rank": 1, "value": 2.5},
+                    {"symbol": "MSFT", "rank": 2, "value": 1.2},
+                ],
+            },
+            provider="MarketLens comparison",
+            source_timestamp="2026-09-23T16:00:00-04:00",
+            freshness_seconds=24.3 * 3600,
+            timeframe="1d",
+        ),
+    )
+    parsed = ChatReplyResponse(
+        reply="Verified semantic route",
+        grounded=True,
+        action="compare_symbols",
+        action_tool_arguments={"symbols": ["AAPL", "MSFT"], "timeframe": "1d"},
+    )
+    trace = []
+
+    text, grounded = _run_market_tool(None, parsed, trace=trace)
+
+    assert grounded is True
+    assert "AAPL 2.50% (rank 1)" in text
+    assert "most recent regular-market close" in text
+    assert trace[0]["ok"] is True
+    assert trace[0]["visual_type"] == "comparison_table"
+
+
+def test_comparison_uses_resolved_daily_timeframe_for_after_close_freshness(monkeypatch) -> None:
+    monkeypatch.setattr("backend.ai.chat._is_regular_market_closed", lambda: True)
+
+    def execute(request):
+        assert request.timeframe == "1d"
+        return ToolResult(
+            tool_name=request.tool_name,
+            ok=True,
+            data={
+                "metric": "return_percent",
+                "rankings": [{"symbol": "AAPL", "rank": 1, "value": 2.5}],
+            },
+            provider="MarketLens comparison",
+            freshness_seconds=24.5 * 3600,
+            timeframe=request.timeframe,
+        )
+
+    monkeypatch.setattr("backend.ai.chat.default_registry.execute", execute)
+    parsed = ChatReplyResponse(
+        reply="Verified semantic route",
+        grounded=True,
+        action="compare_symbols",
+        # Mirrors the deterministic comparison-intent router, which omits
+        # timeframe and relies on the server's resolved daily default.
+        action_tool_arguments={"symbols": ["AAPL", "MSFT"]},
+    )
+
+    text, grounded = _run_market_tool(None, parsed)
+
+    assert grounded is True
+    assert "most recent regular-market close" in text
+
+
+def test_intraday_comparison_still_rejects_stale_bars_after_market_close(monkeypatch) -> None:
+    monkeypatch.setattr("backend.ai.chat._is_regular_market_closed", lambda: True)
+    monkeypatch.setattr(
+        "backend.ai.chat.default_registry.execute",
+        lambda request: ToolResult(
+            tool_name=request.tool_name,
+            ok=True,
+            data={
+                "metric": "return_percent",
+                "rankings": [{"symbol": "AAPL", "rank": 1, "value": 2.5}],
+            },
+            provider="MarketLens comparison",
+            freshness_seconds=24.3 * 3600,
+            timeframe="5m",
+        ),
+    )
+    parsed = ChatReplyResponse(
+        reply="Verified semantic route",
+        grounded=True,
+        action="compare_symbols",
+        action_tool_arguments={"symbols": ["AAPL", "MSFT"], "timeframe": "5m"},
+    )
+    trace = []
+
+    text, grounded = _run_market_tool(None, parsed, trace=trace)
+
+    assert grounded is False
+    assert "24.3 hours old" in text
+    assert trace[0]["failure_kind"] == "stale"
+    assert "visual_type" not in trace[0]
 
 
 def test_scenario_question_routes_to_scenario_tool(monkeypatch) -> None:

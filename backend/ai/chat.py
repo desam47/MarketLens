@@ -4451,14 +4451,37 @@ def _ratio(value: float | None) -> str:
     return "n/a" if value is None else f"{value:,.2f}"
 
 
-def _market_closed_note(subject: str) -> str:
+def _is_market_session_closed() -> bool:
+    """Whether the US market calendar considers the current session closed.
+
+    Chat uses this for end-of-day answers, where the last completed close is
+    the expected reference point rather than a live quote.
+    """
     try:
         from backend.engines.market_calendar import SessionType, us_market_calendar
 
-        if us_market_calendar.get_session_type(datetime.now(UTC)) == SessionType.CLOSED:
-            return f" Market is closed, so {subject} is the most recent session's close."
+        return us_market_calendar.get_session_type(datetime.now(UTC)) == SessionType.CLOSED
     except Exception:
-        pass
+        return False
+
+
+def _is_regular_market_closed() -> bool:
+    """Whether the regular 09:30–16:00 ET session is no longer open.
+
+    An end-of-day bar is valid through premarket and after-hours too: those
+    extended sessions do not make a daily close a live/intraday value.
+    """
+    try:
+        from backend.engines.market_calendar import SessionType, us_market_calendar
+
+        return us_market_calendar.get_session_type(datetime.now(UTC)) != SessionType.REGULAR
+    except Exception:
+        return False
+
+
+def _market_closed_note(subject: str) -> str:
+    if _is_market_session_closed():
+        return f" Market is closed, so {subject} is the most recent session's close."
     return ""
 
 
@@ -5000,6 +5023,7 @@ def _run_market_tool(
         "get_session_stats",
         "why_did_it_move",
         "what_changed",
+        "compare_symbols",
         "signal_explanation",
         "historical_similarity",
     }:
@@ -5143,7 +5167,20 @@ def _run_market_tool(
             arguments=arguments,
         ), True
     if parsed.action == "compare_symbols" and isinstance(result.data.get("rankings"), list):
-        if isinstance(result.freshness_seconds, (int, float)) and result.freshness_seconds > 900:
+        # Daily/weekly rankings describe completed bars. Once the regular
+        # session has closed, those bars remain the correct comparison
+        # reference and the cache age alone must not turn a usable end-of-day
+        # answer into a failure. Intraday comparisons retain the strict
+        # 15-minute limit.
+        comparison_timeframe = str(result.timeframe or arguments.get("timeframe") or "").lower()
+        completed_session_comparison = (
+            comparison_timeframe in {"1d", "1wk"} and _is_regular_market_closed()
+        )
+        if (
+            isinstance(result.freshness_seconds, (int, float))
+            and result.freshness_seconds > 900
+            and not completed_session_comparison
+        ):
             age = f"{result.freshness_seconds / 3600:.1f} hours" if result.freshness_seconds >= 3600 else f"{result.freshness_seconds / 60:.1f} minutes"
             # Do not persist/render the stale ranking table as if it were a
             # usable result. Keep the failed evidence record so the UI can
@@ -5181,7 +5218,18 @@ def _run_market_tool(
             prefix = "$" if metric == "price" else ""
             rows.append(f"{symbol} {prefix}{float(value):.2f}{suffix} (rank {rank})")
         if rows:
-            return f"Verified compare_symbols comparison by {label}: " + "; ".join(rows) + ".", True
+            end_of_day_note = (
+                " As of the most recent regular-market close; the regular session is closed."
+                if completed_session_comparison
+                else ""
+            )
+            return (
+                f"Verified compare_symbols comparison by {label}: "
+                + "; ".join(rows)
+                + "."
+                + end_of_day_note,
+                True,
+            )
     if parsed.action in _BROWSER_LOCAL_ACTIONS:
         return _format_browser_local_reply(
             parsed.action,

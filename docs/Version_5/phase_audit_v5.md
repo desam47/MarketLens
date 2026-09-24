@@ -1302,6 +1302,16 @@ several "complete" claims. Fixed, each with a regression test:
     raw payloads. Provider-error text is intentionally tracked below as a
     separate remaining sanitization gap.
 
+12. **After-close comparison freshness.** The deterministic comparison route
+    now resolves its omitted default timeframe to `1d` before executing the
+    typed tool, so the returned evidence retains its daily scope. Daily and
+    weekly rankings remain usable after the regular market session closes and
+    state that they are based on the latest regular-market close; stale
+    intraday comparisons still fail closed after 15 minutes. Regression
+    coverage checks the resolved default, the end-of-day result/card, and the
+    intraday rejection. A non-persistent live local smoke returned a verified
+    daily AAPL/MSFT ranking after close.
+
 Verification: `backend/tests/ai` plus `backend/tests/api/test_chat_router.py`
 (821 passed) and the frontend ChatPanel/utils suites (72 passed) with a
 clean `tsc --noEmit`.
