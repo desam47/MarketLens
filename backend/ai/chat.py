@@ -66,7 +66,7 @@ from collections import OrderedDict
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 from backend.ai.analyze import analyze_symbol
 from backend.ai.answer_verifier import assign_evidence_ids, verify_answer
@@ -406,6 +406,12 @@ _STATS_INTENT = re.compile(
 _ACTION_INTENT = re.compile(r"\b(alert\w*|notify|remind\w*|watch ?list\w*|track\w*)\b", re.I)
 _OPTIONS_TOOL_INTENT = re.compile(r"\b(options?|calls?|puts?|option chain|implied volatility|open interest|put[/-]?call)\b", re.I)
 _HISTORICAL_TOOL_INTENT = re.compile(r"\b(historical|history|past bars?|candles?|price history|ohlc|replay)\b", re.I)
+# "bought N shares of TICKER on DATE, how much profit" — needs bars to resolve entry/exit price
+_HISTORICAL_PNL_INTENT = re.compile(
+    r"\b(?:bought?|purchased?|got in|entered?)\b.{1,60}\b(?:on\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|\d{4})|in\s+\d{4}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\b"
+    r"|\bhow\s+much\s+(?:profit|loss|gain|money|return|would\s+i\s+(?:make|have|get))\b.{0,80}\b(?:bought?|purchased?|shares?\s+(?:of\s+)?\w+|on\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|\d{4}))\b",
+    re.I,
+)
 _SCANNER_TOOL_INTENT = re.compile(r"\b(screen|scanner|scan|find stocks?|find tickers?|filter my watchlist)\b", re.I)
 _RISK_TOOL_INTENT = re.compile(r"\b(risk dashboard|portfolio risk|position risk|my positions|exposure|drawdown)\b", re.I)
 _SIGNAL_HISTORY_INTENT = re.compile(
@@ -754,6 +760,141 @@ _NAMED_WATCHLIST_LEADING_RE = re.compile(
 def _resolve_named_watchlist_symbols(db, user_content: str) -> list[str]:
     resolved = _resolve_named_watchlist(db, user_content)
     return resolved[1] if resolved else []
+
+
+# Date extraction for historical P&L — matches "Jan 2, 2026", "January 2 2026",
+# "2026-01-02", "01/02/2026", "sept 23, 2026", etc.
+_DATE_RE = re.compile(
+    r"\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
+    r"jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"
+    r"\s+\d{1,2}(?:st|nd|rd|th)?,?\s+\d{4}"
+    r"|\d{1,2}[/-]\d{1,2}[/-]\d{4}"
+    r"|\d{4}-\d{2}-\d{2}",
+    re.I,
+)
+_MONTH_MAP = {
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+}
+
+
+def _parse_date_from_text(text: str) -> date | None:
+    text = text.strip()
+    # ISO: 2026-01-02
+    m = re.match(r"(\d{4})-(\d{2})-(\d{2})", text)
+    if m:
+        try:
+            return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        except ValueError:
+            return None
+    # Numeric: 01/02/2026 or 01-02-2026 (MM/DD/YYYY)
+    m = re.match(r"(\d{1,2})[/-](\d{1,2})[/-](\d{4})", text)
+    if m:
+        try:
+            return date(int(m.group(3)), int(m.group(1)), int(m.group(2)))
+        except ValueError:
+            return None
+    # "Jan 2, 2026" / "January 2 2026" / "Sept 23, 2026"
+    m = re.match(
+        r"(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
+        r"jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"
+        r"\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})",
+        text, re.I,
+    )
+    if m:
+        month = _MONTH_MAP.get(m.group(1).lower()[:3])
+        if month:
+            try:
+                return date(int(m.group(3)), month, int(m.group(2)))
+            except ValueError:
+                return None
+    return None
+
+
+def _compute_historical_pnl(
+    user_content: str, symbol: str
+) -> tuple[CalculationRequest, dict[str, str]] | None:
+    """Resolve entry/exit closing prices from bars for a 'bought N shares on DATE' query.
+
+    Returns ``(CalculationRequest, context)`` so the turn routes through the
+    verified calculator (giving the answer a real evidence trace), or None when
+    the shares/dates can't be parsed — the model planner then handles it.
+    """
+    # Extract share count
+    shares_match = _SHARES_RE.search(user_content)
+    if not shares_match:
+        return None
+    raw_shares = next((g for g in shares_match.groups() if g), None)
+    if not raw_shares:
+        return None
+    shares = float(raw_shares.replace(",", ""))
+
+    # Extract dates — first date = entry, second = exit (default: today)
+    date_strings = _DATE_RE.findall(user_content)
+    if not date_strings:
+        return None
+    entry_date = _parse_date_from_text(date_strings[0])
+    if entry_date is None:
+        return None
+    exit_date = (
+        _parse_date_from_text(date_strings[1]) if len(date_strings) > 1 else None
+    ) or date.today()
+
+    # Fetch daily bars (2y covers any query in the last 2 years)
+    try:
+        from backend.ai.market_tools import BarsRequest, get_bars_tool
+
+        payload = get_bars_tool(BarsRequest(symbol=symbol, timeframe="1d", range="2y", limit=2_000))
+        payload_dict = payload.model_dump(mode="json")
+        bars = payload_dict.get("bars") or []
+        provider = str(payload_dict.get("provider") or "MarketLens")
+    except Exception:
+        return None
+
+    if not bars:
+        return None
+
+    # Find the nearest bar on or after each target date
+    def nearest_bar(target: date) -> dict | None:
+        for bar in bars:
+            ts = str(bar.get("timestamp") or "")
+            try:
+                bar_date = datetime.fromisoformat(ts.replace("Z", "+00:00")).date()
+            except (ValueError, TypeError):
+                continue
+            if bar_date >= target:
+                return bar
+        return None
+
+    entry_bar = nearest_bar(entry_date)
+    exit_bar = nearest_bar(exit_date) or bars[-1]  # fall back to latest bar
+
+    if entry_bar is None:
+        return None
+
+    entry_price = float(entry_bar["close"])
+    exit_price = float(exit_bar["close"])
+    if entry_price <= 0 or exit_price <= 0:
+        return None
+
+    def bar_date_str(bar: dict) -> str:
+        ts = str(bar.get("timestamp") or "")
+        try:
+            return datetime.fromisoformat(ts.replace("Z", "+00:00")).strftime("%b %d, %Y")
+        except (ValueError, TypeError):
+            return ts[:10]
+
+    return CalculationRequest(
+        calculation="position_pnl",
+        entry_price=entry_price,
+        exit_price=exit_price,
+        shares=shares,
+    ), {
+        "symbol": symbol,
+        "entry_date": bar_date_str(entry_bar),
+        "exit_date": bar_date_str(exit_bar),
+        "provider": provider,
+    }
 
 
 def _extract_watchlist_name(user_content: str) -> str | None:
@@ -1677,8 +1818,12 @@ def _format_generic_market_reply(
         details.append(f"timeframe {timeframe_label}")
 
     # Build compact freshness tag: "live, 4s" / "8min old" / "2hr old ⚠"
+    # Daily/weekly bars are inherently end-of-day data — staleness > 15min is
+    # expected and the stale warning/⚠ should not fire for those timeframes.
+    effective_timeframe = timeframe or str(data.get("timeframe") or "")
+    bars_eod = action == "get_bars" and effective_timeframe in ("1d", "1wk", "1w", "daily", "weekly")
     freshness_tag: str | None = None
-    stale = isinstance(freshness_seconds, (int, float)) and freshness_seconds > 900
+    stale = not bars_eod and isinstance(freshness_seconds, (int, float)) and freshness_seconds > 900
     if isinstance(freshness_seconds, (int, float)):
         s = freshness_seconds
         if s < 60:
@@ -2503,6 +2648,19 @@ def _build_deterministic_chat_reply(
                 "stop_price_overrides": stop_overrides,
             },
         )
+    if _HISTORICAL_PNL_INTENT.search(user_content):
+        if len(focus_symbols) != 1:
+            return "Which ticker did you buy?"
+        resolved_pnl = _compute_historical_pnl(user_content, focus_symbols[0])
+        if resolved_pnl is not None:
+            pnl_request, pnl_context = resolved_pnl
+            return ChatReplyResponse(
+                reply="Verified position P&L",
+                grounded=True,
+                action="calculate",
+                action_calculation=pnl_request,
+                action_pnl_context=pnl_context,
+            )
     if _HISTORICAL_TOOL_INTENT.search(user_content):
         if len(focus_symbols) != 1:
             return "Which ticker and timeframe should I use for the historical data?"
@@ -4257,10 +4415,74 @@ def _calculate(db, parsed, *, trace: list[dict] | None = None) -> tuple[str, boo
             },
             "request": request.model_dump(mode="json"),
         })
+    if request.calculation == "position_pnl":
+        return _format_position_pnl_reply(
+            result.data.get("values") or {},
+            request,
+            getattr(parsed, "action_pnl_context", None) or {},
+            provider=result.provider,
+        ), True
     return (
         f"Verified calculation ({result.provider}, source {source_time}, "
         f"session {result.session}): {values}. Formula: {formula}.",
         True,
+    )
+
+
+def _format_position_pnl_reply(
+    values: dict,
+    request,
+    context: dict,
+    *,
+    provider: str,
+) -> str:
+    """Render a position_pnl result as prose.
+
+    Every number printed here is one the calculator returned (or was given), so
+    the answer still verifies against the calculation's own evidence. Direction
+    words are chosen to match the sign — a positive word on a negative result
+    trips the verifier's contradictory-evidence check.
+    """
+    total = float(values.get("total_pnl") or 0.0)
+    per_share = float(values.get("per_share_pnl") or 0.0)
+    cost_basis = float(values.get("cost_basis") or 0.0)
+    exit_value = float(values.get("exit_value") or 0.0)
+    return_percent = float(values.get("return_percent") or 0.0)
+    shares = float(request.shares or 0.0)
+    entry_price = float(request.entry_price or 0.0)
+    exit_price = float(request.exit_price or 0.0)
+
+    symbol = str(context.get("symbol") or "").upper()
+    entry_date = str(context.get("entry_date") or "")
+    exit_date = str(context.get("exit_date") or "")
+    entry_when = f" ({entry_date} close)" if entry_date else ""
+    exit_when = f" ({exit_date} close)" if exit_date else ""
+
+    # "profit"/"loss" only — no up/higher/gain wording, which would contradict a
+    # negative return_percent in the evidence.
+    outcome = "profit" if total >= 0 else "loss"
+
+    session_note = ""
+    try:
+        from backend.engines.market_calendar import SessionType, us_market_calendar
+
+        if us_market_calendar.get_session_type(datetime.now(UTC)) == SessionType.CLOSED:
+            session_note = " Market is closed, so the exit price is the most recent session's close."
+    except Exception:
+        pass
+
+    # The prices came from the bars provider; the arithmetic from the calculator.
+    price_source = str(context.get("provider") or "").strip()
+    source = f"{price_source} prices, {provider}" if price_source else provider
+
+    return (
+        f"{shares:,.0f} shares of {symbol or 'the position'} at ${entry_price:,.4f}"
+        f"{entry_when} cost ${cost_basis:,.2f}. "
+        f"At ${exit_price:,.4f}{exit_when} the position is worth ${exit_value:,.2f} — "
+        f"a {outcome} of ${abs(total):,.2f} "
+        f"(${abs(per_share):,.4f} per share, {return_percent:,.2f}%)."
+        f"{session_note} Excludes commissions, fees, dividends, and taxes. "
+        f"Source: {source}."
     )
 
 

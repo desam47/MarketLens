@@ -21,6 +21,7 @@ CalculationName = Literal[
     "weighted_average",
     "position_size",
     "position_risk",
+    "position_pnl",
     "risk_reward",
     "allocation",
     "volatility",
@@ -55,6 +56,7 @@ class CalculationRequest(BaseModel):
     end_value: float | None = None
     years: float | None = Field(default=None, gt=0)
     entry_price: float | None = Field(default=None, gt=0)
+    exit_price: float | None = Field(default=None, gt=0)
     stop_price: float | None = Field(default=None, gt=0)
     target_price: float | None = Field(default=None, gt=0)
     account_value: float | None = Field(default=None, gt=0)
@@ -206,6 +208,25 @@ def calculate(request: CalculationRequest) -> CalculationResult:
             formulas.append("abs(target_price - entry_price) / per_share_risk")
         else:
             assumptions.append("Reward/risk needs target_price.")
+    elif op == "position_pnl":
+        # Realized/unrealized P&L of a position held from entry to exit.
+        entry, exit_p, shares = _require(request, "entry_price", "exit_price", "shares")
+        per_share = exit_p - entry
+        values = {
+            "per_share_pnl": per_share,
+            "total_pnl": per_share * shares,
+            "cost_basis": entry * shares,
+            "exit_value": exit_p * shares,
+            "return_percent": per_share / entry * 100,
+        }
+        formulas = [
+            "exit_price - entry_price",
+            "per_share_pnl * shares",
+            "entry_price * shares",
+            "exit_price * shares",
+            "per_share_pnl / entry_price * 100",
+        ]
+        assumptions.append("Excludes commissions, fees, dividends, and taxes.")
     elif op == "risk_reward":
         entry, stop, target = _require(request, "entry_price", "stop_price", "target_price")
         risk = abs(entry - stop)

@@ -31,6 +31,20 @@ _NON_TICKER_CAPS = {
     "SEC", "SELL", "SMA", "USD", "UTC", "VWAP",
 }
 _TIMEFRAME_RE = re.compile(r"\b(1m|2m|3m|5m|15m|30m|1h|4h|1d|1wk)\b", re.I)
+# Written calendar dates ("Jan 02, 2026", "23 September 2026"). Their day/year
+# digits are not market-number claims, so they are excluded the same way
+# timeframe tokens are — the slash/dash forms are handled inline further down.
+_MONTH_NAME = (
+    r"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
+    r"jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?"
+)
+_CALENDAR_DATE_RE = re.compile(
+    rf"\b(?:{_MONTH_NAME})\.?\s+\d{{1,2}}(?:st|nd|rd|th)?,?\s+\d{{4}}"
+    rf"|\b\d{{1,2}}(?:st|nd|rd|th)?\s+(?:{_MONTH_NAME})\.?,?\s+\d{{4}}"
+    rf"|\b(?:{_MONTH_NAME})\.?\s+\d{{4}}"
+    rf"|\b(?:{_MONTH_NAME})\.?\s+\d{{1,2}}(?:st|nd|rd|th)?\b",
+    re.I,
+)
 _SESSION_RE = re.compile(r"\b(premarket|pre-market|regular|regular session|after[- ]hours?|extended)\b", re.I)
 _LIVE_RE = re.compile(r"\b(current(?:ly)?|live|latest|today|now|real[- ]?time)\b", re.I)
 _POSITIVE_DIRECTION_RE = re.compile(r"\b(up|higher|gain(?:s|ed)?|positive|bullish|rising|increase(?:d)?)\b", re.I)
@@ -46,6 +60,18 @@ _PHRASAL_DIRECTION_RE = re.compile(
     r"|\b(?:up|down)\s+to\b|\bups and downs\b|\bstop[- ]loss(?:es)?\b",
     re.I,
 )
+
+
+def _is_market_closed() -> bool:
+    """True when US equities are outside every trading session (incl. extended)."""
+    try:
+        from datetime import datetime, timezone
+
+        from backend.engines.market_calendar import SessionType, us_market_calendar
+
+        return us_market_calendar.get_session_type(datetime.now(timezone.utc)) == SessionType.CLOSED
+    except Exception:
+        return False
 
 
 @dataclass(frozen=True)
@@ -139,6 +165,8 @@ def _numbers_from_text(text: str) -> list[tuple[float, str | None, str | None]]:
         start, end = match.span("number")
         if any(timeframe_match.start() <= start and end <= timeframe_match.end() for timeframe_match in _TIMEFRAME_RE.finditer(text)):
             continue
+        if any(date_match.start() <= start and end <= date_match.end() for date_match in _CALENDAR_DATE_RE.finditer(text)):
+            continue
         before = text[max(0, start - 2):start].lower()
         after = text[end:min(len(text), end + 3)].lower()
         # Dates, ordinals, and timeframe tokens are not market-number claims.
@@ -191,6 +219,13 @@ def _safe_uncertainty(issues: list[str], user_content: str = "") -> str:
         return "I couldn't verify that answer because it referenced unsupported market data. Please provide a supported ticker and retry."
     if "live_claim_without_freshness" in issues or "stale_live_claim" in issues:
         lowered = user_content.lower()
+        # For the generic no-timestamp case, explain market-closed state instead of the
+        # confusing "missing trustworthy freshness timestamp" message.
+        if "live_claim_without_freshness" in issues and _is_market_closed():
+            return (
+                "The market is currently closed. The answer above is based on the latest "
+                "available data — prices reflect the most recent session's close."
+            )
         if "relative" in lowered and "qqq" in lowered:
             return (
                 "I couldn't determine which names are weak relative to QQQ because the "

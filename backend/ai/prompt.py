@@ -96,7 +96,16 @@ class TradePlan(BaseModel):
     targets: list[float] = Field(default_factory=list, max_length=3)
     risk_reward: float | None = Field(default=None, ge=0)
     thesis: str = Field(..., min_length=10, max_length=1000)
-    invalidation: str = Field(..., min_length=5, max_length=500)
+    # Weak models (e.g. ministral-3b) sometimes omit invalidation entirely — default
+    # to a safe placeholder so the parse doesn't fail the whole analysis.
+    invalidation: str = Field(default="Not specified.", min_length=5, max_length=500)
+
+    @field_validator("invalidation", mode="before")
+    @classmethod
+    def _invalidation_none_is_default(cls, v: Any) -> Any:
+        if not v:
+            return "Not specified."
+        return v
 
     @field_validator("targets", mode="before")
     @classmethod
@@ -921,6 +930,9 @@ class ChatReplyResponse(BaseModel):
     action_query: str | None = Field(default=None, max_length=300)
     # calculate only: validated request passed to the backend calculator.
     action_calculation: CalculationRequest | None = None
+    # position_pnl only, server-authored (never model-supplied): the symbol and
+    # resolved bar dates behind the entry/exit prices, so the reply can name them.
+    action_pnl_context: dict[str, str] | None = None
     # Read-only market-data tools: arguments are validated again by the
     # registry, so model-generated fields never reach providers unchecked.
     action_tool_arguments: dict[str, Any] | None = None
@@ -1000,11 +1012,15 @@ _ACTION_TOOL_DOCS = (
       to a validated request with one named calculation (percentage_change, \
       dollar_change, return, cagr, weighted_average, position_size, \
       position_risk (entry_price, stop_price, shares; optional \
-      target_price, account_value), risk_reward, allocation, volatility, drawdown, max_drawdown, \
+      target_price, account_value), position_pnl (entry_price, exit_price, \
+      shares), risk_reward, allocation, volatility, drawdown, max_drawdown, \
       correlation, options_breakeven, options_intrinsic_value, \
       options_extrinsic_value, options_max_gain_loss, or expected_move). \
       Never do the arithmetic in reply; the app returns verified values, \
-      formulas, and assumptions.
+      formulas, and assumptions. For "how much profit/loss on N shares held \
+      from date A to date B": call get_bars first to read the two closing \
+      prices, then calculate with position_pnl — it returns total_pnl, \
+      cost_basis, and return_percent, so never multiply anything yourself.
     - get_quote / get_bars / get_indicator / get_support_resistance / \
       get_market_regime / get_market_context / get_news / get_fundamentals / \
       get_options_snapshot / get_watchlist / get_watchlist_intelligence / get_risk_dashboard / \
@@ -1014,7 +1030,11 @@ _ACTION_TOOL_DOCS = (
       are read-only grounded tools. \
       Set action to the exact tool name and put only its request fields in \
       action_tool_arguments (for example, symbol, timeframe, session, and \
-      range). For get_watchlist and get_watchlist_intelligence, use name or \
+      range). get_bars with timeframe="1d" and range="1y" or "2y" is the \
+      right tool to look up a stock's closing price on any past date — use \
+      it whenever a trader asks about profit/loss from a historical entry \
+      date. Historical P&L is always answerable from bars; never refuse a \
+      past-date profit question. For get_watchlist and get_watchlist_intelligence, use name or \
       watchlist_id when the trader named one; otherwise let the server resolve \
       the trader's enabled names across all active lists. For \
       get_watchlist_intelligence, set concern to weak, strong, \
@@ -1508,6 +1528,29 @@ def build_chat_prompt(
             )
             if fits(chunk):
                 parts.append(chunk)
+
+    # Tell the AI whether the market is currently open or closed so it can
+    # proactively mention it when answering "today's profit / current price" queries.
+    try:
+        from datetime import datetime, timezone as _tz
+        from backend.engines.market_calendar import SessionType, us_market_calendar as _cal
+        _session = _cal.get_session_type(datetime.now(_tz.utc))
+        if _session == SessionType.CLOSED:
+            _session_note = (
+                "Market session status: CLOSED. When answering questions about "
+                "current prices or today's profit/loss, mention that the market "
+                "is closed and the answer uses the latest available closing data."
+            )
+        elif _session == SessionType.PREMARKET:
+            _session_note = "Market session status: PREMARKET (pre-market hours)."
+        elif _session == SessionType.AFTER_HOURS:
+            _session_note = "Market session status: AFTER_HOURS (extended trading)."
+        else:
+            _session_note = None
+        if _session_note and fits(_session_note):
+            parts.append(_session_note)
+    except Exception:
+        pass
 
     if market_baseline:
         mb = json.dumps(market_baseline, separators=(",", ":"), default=str)
