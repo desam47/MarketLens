@@ -201,6 +201,12 @@ class WatchlistIntelligenceRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=100)
     watchlist_id: int | None = Field(default=None, ge=1)
     concern: Literal["weak", "strong", "deteriorating", "underperforming", "all"] = "all"
+    benchmark_symbol: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=20,
+        pattern=r"^[A-Za-z0-9.\-]+$",
+    )
     # Scanner intelligence is calculated from the daily scanner snapshot. The
     # explicit field keeps a user's timeframe scope visible in the evidence
     # and leaves room for a future weekly scanner without silently dropping it.
@@ -2274,6 +2280,8 @@ def get_watchlist_intelligence_tool(request: WatchlistIntelligenceRequest) -> Ba
             "session_scope": request.session_scope,
             "top_n": request.limit,
         }
+        if request.benchmark_symbol:
+            briefing_kwargs["benchmark_symbol"] = request.benchmark_symbol.upper()
         # Keep the existing builder call contract for the default daily
         # scanner while still carrying a non-default explicit scope.
         if request.timeframe != "1d":

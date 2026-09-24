@@ -101,6 +101,21 @@ def test_weakness_falls_back_to_multi_timeframe_signals_when_scores_are_missing(
     assert briefing["weakest"][0]["score"] is None
 
 
+def test_relative_strength_can_be_scoped_to_an_explicit_benchmark() -> None:
+    aapl = _result("AAPL", 0.5)
+    msft = _result("MSFT", 0.7)
+    aapl.indicator_values.update({"rs_pct_SPY": 4.0, "rs_pct_QQQ": -2.5})
+    msft.indicator_values.update({"rs_pct_SPY": -1.0, "rs_pct_QQQ": 1.5})
+
+    briefing = build_watchlist_intelligence(
+        [aapl, msft], watchlist_size=2, benchmark_symbol="QQQ"
+    )
+
+    assert briefing["benchmark_symbol"] == "QQQ"
+    assert briefing["relative_strength"][0]["symbol"] == "MSFT"
+    assert briefing["relative_strength"][0]["details"]["benchmark"] == "QQQ"
+
+
 def test_cold_or_partial_cache_is_reported_instead_of_triggering_a_scan() -> None:
     briefing = build_watchlist_intelligence([], watchlist_size=3)
 

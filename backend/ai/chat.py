@@ -1366,6 +1366,8 @@ def _format_browser_local_reply(action: str, data: dict, provider: str, *, query
     if action in {"get_risk_dashboard", "assess_portfolio_risk", "scenario_analysis"}:
         if data.get("available") is False:
             reason = str(data.get("reason") or "No browser-local positions were shared for this turn.")
+            if action == "scenario_analysis":
+                return f"scenario_analysis (portfolio scenario) is unavailable from {source}: {reason}"
             if query == "portfolio_change":
                 return f"Portfolio changes are unavailable from {source}: {reason}"
             if query == "portfolio_weakness":
@@ -1437,6 +1439,243 @@ def _format_browser_local_reply(action: str, data: dict, provider: str, *, query
         return f"Saved scans are verified from {source}: {label} available."
 
     return f"Verified {action} result from {source}."
+
+
+def _format_indicator_reply(
+    data: dict,
+    *,
+    provider: str,
+    freshness_seconds: float | None,
+    timeframe: str | None,
+    arguments: dict,
+    query: str | None = None,
+) -> str:
+    """Format an indicator result without exposing the source bar payload."""
+    symbol = str(data.get("symbol") or arguments.get("symbol") or "the symbol").upper()
+    indicator = str(data.get("indicator") or arguments.get("indicator") or "indicator").lower()
+    labels = {
+        "sma": "SMA",
+        "ema": "EMA",
+        "rsi": "RSI",
+        "change_percent": "change",
+    }
+    if query in {"weekly_return", "monthly_return"} or (query and query.endswith("_bar_return")):
+        labels["change_percent"] = {
+            "weekly_return": "weekly return",
+            "monthly_return": "monthly return",
+        }.get(query, "period return")
+    label = labels.get(indicator, indicator.replace("_", " ").title())
+    period = data.get("period") or arguments.get("period")
+    period_text = f" ({period})" if isinstance(period, int) else ""
+    value = data.get("value")
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return f"I couldn't format the verified {symbol} {label} result because its value was unavailable."
+    if indicator == "rsi":
+        value_text = f"{float(value):.1f}"
+    elif indicator == "change_percent":
+        value_text = f"{float(value):+.2f}%"
+    else:
+        value_text = f"${float(value):.2f}"
+
+    source_timestamp = data.get("source_timestamp")
+    if not source_timestamp:
+        source_timestamp = data.get("timestamp")
+    as_of = str(source_timestamp).split("T", 1)[0] if source_timestamp else None
+    timeframe_label = timeframe or data.get("timeframe") or arguments.get("timeframe") or "specified timeframe"
+    details = [f"{symbol} {label}{period_text}: {value_text}", f"{timeframe_label} bars"]
+    if as_of:
+        details.append(f"as of {as_of}")
+    if provider:
+        details.append(f"source {provider}")
+    reply = "Verified " + ", ".join(details) + "."
+    if isinstance(freshness_seconds, (int, float)) and freshness_seconds > 900:
+        age = (
+            f"{freshness_seconds / 3600:.1f} hours"
+            if freshness_seconds >= 3600
+            else f"{freshness_seconds / 60:.1f} minutes"
+        )
+        reply += f" Warning: this data is {age} old and historical; refresh market data before treating it as current."
+    return reply
+
+
+def _format_generic_market_reply(
+    action: str,
+    data: dict,
+    *,
+    provider: str,
+    freshness_seconds: float | None,
+    source_timestamp: str | None,
+    timeframe: str | None,
+    arguments: dict,
+) -> str:
+    """Render the remaining read-only tools without leaking raw JSON.
+
+    Tool cards and traces retain the structured payload. The transcript gets
+    only a bounded summary so a provider response can never become the Chat
+    answer verbatim.
+    """
+    symbol = str(data.get("symbol") or arguments.get("symbol") or "").upper()
+    labels = {
+        "get_quote": "quote",
+        "get_bars": "historical bars",
+        "get_support_resistance": "support and resistance",
+        "get_market_regime": "market regime",
+        "get_news": "news",
+        "get_fundamentals": "fundamentals",
+        "get_options_snapshot": "options snapshot",
+        "get_alerts": "alerts",
+        "get_signal_history": "signal history",
+        "get_sector_data": "sector data",
+        "get_confluence": "multi-timeframe confluence",
+        "get_relative_strength": "relative strength",
+        "get_tape_state": "tape state",
+        "get_session_stats": "session statistics",
+        "get_calendar": "catalyst calendar",
+        "why_did_it_move": "move evidence",
+        "scenario_analysis": "scenario analysis",
+        "historical_similarity": "historical similarity",
+        "signal_explanation": "signal explanation",
+        "counterargument_review": "counterargument review",
+        "sensitivity_analysis": "sensitivity analysis",
+        "market_event_timeline": "market event timeline",
+        "anomaly_analysis": "anomaly analysis",
+        "assumption_tracking": "assumption review",
+        "build_trade_plan": "trade plan",
+        "assess_portfolio_risk": "portfolio risk",
+        "options_research": "options research",
+        "trade_journal_coach": "trade journal coaching",
+        "decision_checklist": "decision checklist",
+        "export_report": "report",
+    }
+    label = labels.get(action, action.replace("_", " "))
+    if data.get("available") is False:
+        return f"{action} ({label}) is unavailable{f' for {symbol}' if symbol else ''}: {data.get('reason') or 'the required verified data was not available'}."
+
+    details: list[str] = []
+    if symbol:
+        details.append(symbol)
+    if action == "get_quote":
+        if isinstance(data.get("price"), (int, float)):
+            details.append(f"${float(data['price']):.2f}")
+        if isinstance(data.get("change_percent"), (int, float)):
+            details.append(f"{float(data['change_percent']):+.2f}%")
+    elif action in {"get_bars", "get_signal_history", "market_event_timeline", "get_news", "get_calendar", "get_alerts"}:
+        collection_key = {"get_bars": "bars", "get_signal_history": "signals", "market_event_timeline": "events", "get_news": "items", "get_calendar": "events", "get_alerts": "alerts"}.get(action, "")
+        if collection_key and isinstance(data.get(collection_key), list):
+            details.append(f"{len(data[collection_key])} {collection_key}")
+    elif action == "get_support_resistance":
+        for key in ("support", "resistance"):
+            if isinstance(data.get(key), (int, float)):
+                details.append(f"{key} ${float(data[key]):.2f}")
+    elif action == "get_market_regime":
+        if data.get("regime"):
+            details.append(str(data["regime"]).replace("_", " "))
+        if isinstance(data.get("confidence"), (int, float)):
+            details.append(f"confidence {float(data['confidence']):.0%}")
+    elif action == "get_relative_strength":
+        signals = [item for item in data.get("signals", []) if isinstance(item, dict)]
+        for item in signals[:3]:
+            benchmark = item.get("benchmark") or "benchmark"
+            score = item.get("rs_pct")
+            if isinstance(score, (int, float)):
+                details.append(f"vs {benchmark} {float(score):+.2f}%")
+    elif action == "get_session_stats":
+        for key in ("session", "date", "open", "high", "low", "close", "change_percent"):
+            value = data.get(key)
+            if isinstance(value, (int, float)):
+                details.append(f"{key.replace('_', ' ')} {float(value):+.2f}" if key == "change_percent" else f"{key} {float(value):.2f}")
+            elif isinstance(value, str) and key in {"session", "date"}:
+                details.append(f"{key} {value}")
+    elif action in {"get_fundamentals", "get_options_snapshot", "options_research"}:
+        for key in ("near_term_iv", "iv_rank", "pe_ratio", "eps", "revenue", "market_cap"):
+            if isinstance(data.get(key), (int, float)):
+                details.append(f"{key.replace('_', ' ')} {float(data[key]):.2f}")
+        for key in ("chains", "expirations", "legs", "spreads"):
+            if isinstance(data.get(key), list):
+                details.append(f"{len(data[key])} {key}")
+    elif action == "why_did_it_move":
+        facts = data.get("facts") or []
+        correlations = data.get("correlations") or []
+        details.append(f"{len(facts)} verified price/volume facts")
+        details.append(f"{len(correlations)} non-causal correlations")
+        details.append("causation not established")
+    elif action == "anomaly_analysis":
+        anomalies = data.get("anomalies")
+        if isinstance(anomalies, list):
+            details.append(f"{len(anomalies)} detected anomalies")
+    else:
+        for key in ("status", "conclusion", "sample_size", "total_pnl_delta", "risk_reward", "verdict"):
+            value = data.get(key)
+            if isinstance(value, (str, int, float)) and not isinstance(value, bool):
+                details.append(f"{key.replace('_', ' ')} {value}")
+        if not details or (symbol and len(details) == 1):
+            scalar_keys = [key for key, value in data.items() if isinstance(value, (str, int, float)) and not isinstance(value, bool) and key not in {"source_timestamp"}]
+            if scalar_keys:
+                details.append(f"{len(scalar_keys)} verified summary fields")
+
+    timeframe_label = timeframe or data.get("timeframe")
+    if timeframe_label:
+        details.append(f"timeframe {timeframe_label}")
+    if source_timestamp:
+        details.append(f"as of {str(source_timestamp).split('T', 1)[0]}")
+    if provider:
+        details.append(f"source {provider}")
+    reply = f"Verified {action} ({label}" + (f"; {'; '.join(details)}" if details else "") + ")."
+    if isinstance(freshness_seconds, (int, float)) and freshness_seconds > 900:
+        age = f"{freshness_seconds / 3600:.1f} hours" if freshness_seconds >= 3600 else f"{freshness_seconds / 60:.1f} minutes"
+        reply += f" Warning: this data is {age} old; refresh market data before treating it as current."
+    return reply
+
+
+def _format_change_reply(
+    data: dict,
+    *,
+    provider: str,
+    source_timestamp: str | None,
+    freshness_seconds: float | None,
+    timeframe: str | None,
+    arguments: dict,
+) -> str:
+    """Format a current-vs-baseline change without exposing nested bars."""
+    symbol = str(data.get("symbol") or arguments.get("symbol") or "the symbol").upper()
+    changes = data.get("changes")
+    price_change = next(
+        (item for item in changes or [] if isinstance(item, dict) and item.get("type") == "price"),
+        None,
+    )
+    if not isinstance(price_change, dict) or not isinstance(price_change.get("percent"), (int, float)):
+        unknowns = data.get("unknowns") or []
+        reason = unknowns[0].get("reason") if unknowns and isinstance(unknowns[0], dict) else None
+        return f"I couldn't verify {symbol}'s change: {reason or 'the comparison baseline was unavailable'}."
+    percent = float(price_change["percent"])
+    current = price_change.get("current")
+    baseline = price_change.get("baseline")
+    details = [f"{symbol} change: {percent:+.2f}%"]
+    if isinstance(current, (int, float)) and isinstance(baseline, (int, float)):
+        details.append(f"from ${float(baseline):.2f} to ${float(current):.2f}")
+    reference = str(data.get("reference") or arguments.get("reference") or "previous_close")
+    reference_label = {
+        "previous_close": "the previous close",
+        "yesterday": "yesterday's close",
+        "last_visit": "the last visit",
+        "timestamp": "the requested baseline",
+    }.get(reference, reference.replace("_", " "))
+    details.append(f"versus {reference_label}")
+    timeframe_label = timeframe or data.get("timeframe") or arguments.get("timeframe") or "1d"
+    details.append(f"on {timeframe_label}")
+    if source_timestamp:
+        details.append(f"as of {str(source_timestamp).split('T', 1)[0]}")
+    if provider:
+        details.append(f"source {provider}")
+    reply = "Verified " + ", ".join(details) + "."
+    if isinstance(freshness_seconds, (int, float)) and freshness_seconds > 900:
+        age = (
+            f"{freshness_seconds / 3600:.1f} hours"
+            if freshness_seconds >= 3600
+            else f"{freshness_seconds / 60:.1f} minutes"
+        )
+        reply += f" Warning: this data is {age} old; refresh market data before treating it as current."
+    return reply
 
 
 def _expire_carried_confirmation(turn: _Turn) -> None:
@@ -1926,6 +2165,28 @@ def _build_deterministic_chat_reply(
     function prevents the two transport paths from acquiring different
     intent behavior.
     """
+    # Resolve high-confidence market semantics before the broad calculation
+    # hint. Words such as "return" and "change" are valid market metrics,
+    # not requests for arithmetic inputs when a ticker and lookback are
+    # present.
+    semantic_route = route_semantic_intent(
+        user_content,
+        focus_symbols=focus_symbols,
+        planner_state=planner_state,
+    )
+    if semantic_route is not None and semantic_route.action in {
+        "get_indicator",
+        "what_changed",
+        "get_watchlist_intelligence",
+        "get_market_context",
+    }:
+        return ChatReplyResponse(
+            reply=f"Verified semantic route: {semantic_route.action}",
+            grounded=True,
+            action=semantic_route.action,
+            action_query=semantic_route.action_query,
+            action_tool_arguments=semantic_route.arguments,
+        )
     if not _COMPARISON_INTENT.search(user_content) and not _ASSUMPTION_INTENT.search(user_content):
         # Applying this message's overrides is idempotent, so it is safe
         # whether or not _prepare_turn already stored them in memory.
@@ -1985,11 +2246,6 @@ def _build_deterministic_chat_reply(
             action_tool_arguments=arguments,
         )
 
-    semantic_route = route_semantic_intent(
-        user_content,
-        focus_symbols=focus_symbols,
-        planner_state=planner_state,
-    )
     if semantic_route is not None:
         return ChatReplyResponse(
             reply=f"Verified semantic route: {semantic_route.action}",
@@ -4081,6 +4337,9 @@ def _format_watchlist_intelligence(data: dict) -> str:
         "underperforming": ("top_bearish", "deteriorating", "weakest"),
         "all": ("top_bearish", "top_bullish", "deteriorating", "relative_strength"),
     }
+    benchmark_symbol = str(data.get("benchmark_symbol") or "").upper()
+    if benchmark_symbol and concern in {"weak", "underperforming"}:
+        sections[concern] = ("relative_strength", "top_bearish", "deteriorating", "weakest")
 
     rows: list[str] = []
     seen: set[str] = set()
@@ -4130,13 +4389,16 @@ def _format_watchlist_intelligence(data: dict) -> str:
     warnings = [str(item) for item in (data.get("warnings") or []) if item]
 
     if not rows:
-        answer = f"I couldn't identify any {concern} names in \"{watchlist_name}\" from the current scanner cache."
+        qualifier = f" relative to {benchmark_symbol}" if benchmark_symbol else ""
+        answer = f"I couldn't identify any {concern} names{qualifier} in \"{watchlist_name}\" from the current scanner cache."
     elif used_relative_weakness and not clear_weakness and concern in {"weak", "underperforming"}:
         scope = f" on the {timeframe_label} timeframe" if timeframe_label else ""
-        answer = f"No clearly weak names were found in \"{watchlist_name}\". Relative weakest scanner scores{scope}:\n" + "\n".join(rows)
+        qualifier = f" relative to {benchmark_symbol}" if benchmark_symbol else ""
+        answer = f"No clearly weak names were found{qualifier} in \"{watchlist_name}\". Relative weakest scanner scores{scope}:\n" + "\n".join(rows)
     else:
         scope = f" on the {timeframe_label} timeframe" if timeframe_label else ""
-        answer = f"{labels.get(concern, labels['all'])} in \"{watchlist_name}\"{scope}:\n" + "\n".join(rows)
+        qualifier = f" relative to {benchmark_symbol}" if benchmark_symbol else ""
+        answer = f"{labels.get(concern, labels['all'])}{qualifier} in \"{watchlist_name}\"{scope}:\n" + "\n".join(rows)
     if not rows and timeframe_label:
         answer += f" Timeframe: {timeframe_label}."
     if coverage:
@@ -4236,11 +4498,6 @@ def _run_market_tool(
             label = "changes" if parsed.action_query == "portfolio_change" else "weakness ranking"
             return f"Portfolio {label} is unavailable from {result.provider or 'MarketLens'}: {result.error}", False
         return f"I couldn't retrieve that safely: {result.error}", False
-    freshness = (
-        f"{result.freshness_seconds:.1f}s old"
-        if result.freshness_seconds is not None
-        else "freshness unavailable"
-    )
     if trace is not None:
         trace_item = {
             "tool": parsed.action,
@@ -4318,6 +4575,24 @@ def _run_market_tool(
             details.append(f"{classification} classification")
         timeframe = result.timeframe or arguments.get("timeframe") or "1d"
         return f"Verified {symbol} trend ({timeframe}): " + "; ".join(details) + ".", True
+    if parsed.action == "get_indicator":
+        return _format_indicator_reply(
+            result.data,
+            provider=result.provider,
+            freshness_seconds=result.freshness_seconds,
+            timeframe=result.timeframe,
+            arguments=arguments,
+            query=getattr(parsed, "action_query", None),
+        ), True
+    if parsed.action == "what_changed":
+        return _format_change_reply(
+            result.data,
+            provider=result.provider,
+            source_timestamp=result.source_timestamp,
+            freshness_seconds=result.freshness_seconds,
+            timeframe=result.timeframe,
+            arguments=arguments,
+        ), True
     if parsed.action == "compare_symbols" and isinstance(result.data.get("rankings"), list):
         if isinstance(result.freshness_seconds, (int, float)) and result.freshness_seconds > 900:
             age = f"{result.freshness_seconds / 3600:.1f} hours" if result.freshness_seconds >= 3600 else f"{result.freshness_seconds / 60:.1f} minutes"
@@ -4358,27 +4633,22 @@ def _run_market_tool(
             rows.append(f"{symbol} {prefix}{float(value):.2f}{suffix} (rank {rank})")
         if rows:
             return f"Verified compare_symbols comparison by {label}: " + "; ".join(rows) + ".", True
-    if parsed.action in _BROWSER_LOCAL_ACTIONS - {"scenario_analysis"}:
+    if parsed.action in _BROWSER_LOCAL_ACTIONS:
         return _format_browser_local_reply(
             parsed.action,
             _browser_safe_reply_data(parsed.action, result.data),
             result.provider,
-            query=parsed.action_query,
+            query=getattr(parsed, "action_query", None),
         ), True
-    reply_data = (
-        _browser_safe_reply_data(parsed.action, result.data)
-        if parsed.action in _BROWSER_LOCAL_ACTIONS
-        else result.data
-    )
-    payload = json.dumps(reply_data, sort_keys=True, default=str, separators=(",", ":"))
-    if len(payload) > 1200:
-        payload = payload[:1200].rstrip() + "…"
-    return (
-        f"Verified {parsed.action} result from {result.provider} ({freshness}, "
-        f"session {result.session}, timeframe {result.timeframe or 'not specified'}): "
-        f"{payload}",
-        True,
-    )
+    return _format_generic_market_reply(
+        parsed.action,
+        result.data,
+        provider=result.provider,
+        freshness_seconds=result.freshness_seconds,
+        source_timestamp=result.source_timestamp,
+        timeframe=result.timeframe,
+        arguments=arguments,
+    ), True
 
 
 _ACTION_HANDLERS = {

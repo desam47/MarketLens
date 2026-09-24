@@ -86,12 +86,16 @@ def _entry(
     }
 
 
-def _relative_strength(result: ScanResult) -> tuple[str, float] | None:
+def _relative_strength(result: ScanResult, benchmark_symbol: str | None = None) -> tuple[str, float] | None:
     values = {
         key.removeprefix("rs_pct_"): float(value)
         for key, value in result.indicator_values.items()
         if key.startswith("rs_pct_") and isinstance(value, (int, float))
     }
+    if benchmark_symbol:
+        benchmark = benchmark_symbol.upper()
+        value = values.get(benchmark)
+        return (benchmark, value) if value is not None else None
     if values:
         return max(values.items(), key=lambda item: item[1])
     fallback = _number(result.indicator_values.get("relative_strength"))
@@ -131,6 +135,7 @@ def build_watchlist_intelligence(
     session_snapshots: Mapping[str, Mapping[str, Any]] | None = None,
     missing_session_symbols: list[str] | None = None,
     top_n: int = _TOP_N,
+    benchmark_symbol: str | None = None,
 ) -> dict[str, Any]:
     """Create one exact, bounded briefing from already-computed scan data."""
     session_snapshots = {key.upper(): value for key, value in (session_snapshots or {}).items()}
@@ -171,7 +176,7 @@ def build_watchlist_intelligence(
     )
 
     relative_strength = [
-        (result, value) for result in results if (value := _relative_strength(result)) is not None
+        (result, value) for result in results if (value := _relative_strength(result, benchmark_symbol)) is not None
     ]
     relative_strength.sort(key=lambda item: item[1][1], reverse=True)
 
@@ -303,6 +308,7 @@ def build_watchlist_intelligence(
         "weakest": weakest,
         "volume_spikes": [_entry(result, session_snapshots, session_scope=session_scope, metric=_number(result.indicator_values.get("volume_ratio")), metric_label="volume / trailing average") for result in volume_spikes[:top_n]],
         "relative_strength": [_entry(result, session_snapshots, session_scope=session_scope, metric=value[1], metric_label=f"relative strength vs {value[0]}", details={"benchmark": value[0]}) for result, value in relative_strength[:top_n]],
+        "benchmark_symbol": benchmark_symbol.upper() if benchmark_symbol else None,
         "mtf_alignment": [_entry(result, session_snapshots, session_scope=session_scope, metric=float(max(bullish_count, bearish_count)), metric_label="confirmed timeframes", details={"direction": "bullish" if bullish_count > bearish_count else "bearish", "bullish_timeframes": bullish_count, "bearish_timeframes": bearish_count}) for result, bullish_count, bearish_count in mtf_alignment[:top_n]],
         "sector_rotation": sector_rotation[:top_n],
         "warnings": warnings,

@@ -136,6 +136,111 @@ def test_symbol_overview_routes_to_verified_trend_without_ai(monkeypatch) -> Non
     complete.assert_not_called()
 
 
+def test_indicator_result_formats_value_without_raw_historical_bars(monkeypatch) -> None:
+    complete = Mock()
+    monkeypatch.setattr("backend.ai.chat.ai_manager.complete", complete)
+    monkeypatch.setattr(
+        "backend.ai.chat.default_registry.execute",
+        lambda request: ToolResult(
+            tool_name=request.tool_name,
+            ok=True,
+            data={
+                "symbol": "DVLT",
+                "timeframe": "1d",
+                "indicator": "rsi",
+                "period": 14,
+                "value": 42.75,
+                "source_timestamp": "2025-12-11T00:00:00-05:00",
+                "bars": [{"close": 1.44, "volume": 20503393}],
+            },
+            provider="webull",
+            source_timestamp="2025-12-11T00:00:00-05:00",
+            freshness_seconds=76545.3,
+            timeframe="1d",
+        ),
+    )
+    parsed = ChatReplyResponse(
+        reply="Verified semantic route",
+        grounded=True,
+        action="get_indicator",
+        action_tool_arguments={"symbol": "DVLT", "indicator": "rsi", "period": 14, "timeframe": "1d"},
+    )
+
+    text, grounded = _run_market_tool(None, parsed)
+
+    assert grounded is True
+    assert "DVLT RSI (14): 42.8" in text
+    assert "as of 2025-12-11" in text
+    assert "21.3 hours old and historical" in text
+    assert '"bars"' not in text
+    assert "20503393" not in text
+    assert "source webull" in text
+    complete.assert_not_called()
+
+
+def test_daily_change_formats_previous_close_comparison(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "backend.ai.chat.default_registry.execute",
+        lambda request: ToolResult(
+            tool_name=request.tool_name,
+            ok=True,
+            data={
+                "symbol": "DVLT",
+                "timeframe": "1d",
+                "reference": "previous_close",
+                "changes": [{"type": "price", "current": 1.38, "baseline": 1.44, "percent": -4.1666667}],
+                "unknowns": [],
+            },
+            provider="MarketLens comparison",
+            source_timestamp="2026-09-23T00:00:00-04:00",
+            freshness_seconds=76545.3,
+            timeframe="1d",
+        ),
+    )
+    parsed = ChatReplyResponse(
+        reply="Verified semantic route",
+        grounded=True,
+        action="what_changed",
+        action_tool_arguments={"symbol": "DVLT", "reference": "previous_close"},
+    )
+
+    text, grounded = _run_market_tool(None, parsed)
+
+    assert grounded is True
+    assert "DVLT change: -4.17%" in text
+    assert "versus the previous close" in text
+    assert "1d" in text
+    assert '"changes"' not in text
+
+
+def test_generic_market_tool_response_is_readable_without_raw_json(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "backend.ai.chat.default_registry.execute",
+        lambda request: ToolResult(
+            tool_name=request.tool_name,
+            ok=True,
+            data={"symbol": "AAPL", "price": 227.50, "change_percent": 1.25, "raw": {"secret": "value"}},
+            provider="webull",
+            source_timestamp="2026-09-23T16:00:00-04:00",
+            freshness_seconds=60.0,
+        ),
+    )
+    parsed = ChatReplyResponse(
+        reply="Verified semantic route",
+        grounded=True,
+        action="get_quote",
+        action_tool_arguments={"symbol": "AAPL"},
+    )
+
+    text, grounded = _run_market_tool(None, parsed)
+
+    assert grounded is True
+    assert "Verified get_quote (quote" in text
+    assert "$227.50" in text
+    assert "raw" not in text
+    assert "secret" not in text
+
+
 def test_streaming_symbol_overview_uses_the_same_typed_route(monkeypatch) -> None:
     requests = []
 
@@ -315,7 +420,8 @@ def test_what_changed_routes_to_comparison_tool(monkeypatch) -> None:
     )
 
     assert grounded is True
-    assert "what_changed" in text
+    assert "AAPL change: +2.00%" in text
+    assert "versus yesterday's close" in text
     assert requests[0].arguments["reference"] == "yesterday"
     complete.assert_not_called()
 

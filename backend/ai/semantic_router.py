@@ -62,6 +62,29 @@ _WATCHLIST_OVERVIEW = re.compile(
 )
 _MOVE = re.compile(r"\b(?:why did|why is|what caused|explain)\b.*\b(?:move|drop|surge|rally|fall|rise|down|up)\b", re.I)
 _CHANGE = re.compile(r"\b(?:what changed|what has changed|changed since|since yesterday|since my last visit)\b", re.I)
+_DAILY_CHANGE = re.compile(
+    r"\b(?:change|move|return|performance|perform(?:ed|ing)?|down|up)\b",
+    re.I,
+)
+_LOOKBACK_RETURN = re.compile(
+    r"\b(?:return|performance|perform(?:ed|ing)?|did|done|change|move)\b.*?"
+    r"\b(?:this|last|over the last|in the last)?\s*"
+    r"(?:(?P<days>\d{1,3})\s*(?:-?\s*day|d|bars?)|(?P<week>week)|(?P<month>month))\b",
+    re.I,
+)
+_LOOKBACK_RETURN_AFTER = re.compile(
+    r"\b(?:(?P<week>weekly|last\s+week)|(?P<month>monthly|last\s+month))\s+"
+    r"(?:return|performance|change)\b",
+    re.I,
+)
+_EXPLICIT_PERIOD = re.compile(r"\b(?P<period>\d{1,3})\s*(?:-\s*)?(?:day|d|bar|bars)\b", re.I)
+_BENCHMARK_RELATIVE = re.compile(
+    r"\b(?:which|what)\s+(?:of\s+)?(?:my\s+)?(?:names?|stocks?|tickers?|symbols?)\b.*?"
+    r"(?P<concern>weak(?:est|er)?|underperform(?:ing|er)?|lagg(?:ard|ards)?|"
+    r"strong(?:est|er)?|outperform(?:ing|er)?)\b.*?"
+    r"\b(?:relative\s+to|versus|vs\.?|against)\s+(?P<benchmark>[A-Za-z][A-Za-z0-9.\-]*)\b",
+    re.I,
+)
 _OPTIONS = re.compile(r"\b(?:options?|calls?|puts?|option chain|implied volatility|open interest|put[/-]?call)\b", re.I)
 _RISK = re.compile(
     r"\b(?:portfolio risk|position risk|exposure|drawdown|risk dashboard|concentration|"
@@ -203,6 +226,58 @@ def route_semantic_intent(
         if _CHANGE.search(text) and _PORTFOLIO_SCOPE.search(text) and not symbols:
             return SemanticRoute(action="get_risk_dashboard", action_query="portfolio_change")
         return SemanticRoute(action="get_risk_dashboard")
+    benchmark_relative = _BENCHMARK_RELATIVE.search(text)
+    if benchmark_relative:
+        concern_text = benchmark_relative.group("concern").lower()
+        concern = "strong" if concern_text.startswith(("strong", "outperform")) else "underperforming"
+        arguments: dict[str, object] = {
+            "concern": concern,
+            "benchmark_symbol": benchmark_relative.group("benchmark").upper(),
+        }
+        named_scope = _NAMED_WATCHLIST_SCOPE.search(text)
+        if named_scope:
+            arguments["name"] = named_scope.group("name").strip()
+        return SemanticRoute(
+            action="get_watchlist_intelligence",
+            arguments=arguments,
+            action_query="benchmark_relative",
+        )
+    lookback_return = _LOOKBACK_RETURN.search(text)
+    lookback_return_after = _LOOKBACK_RETURN_AFTER.search(text)
+    if lookback_return is None:
+        lookback_return = lookback_return_after
+    if lookback_return and len(symbols) == 1 and not re.search(r"\b(?:today|now|daily)\b", text, re.I):
+        days_value = lookback_return.groupdict().get("days")
+        week_value = lookback_return.groupdict().get("week")
+        if days_value:
+            period = int(days_value)
+            label = f"{period}_bar_return"
+        elif week_value:
+            period, label = 5, "weekly_return"
+        else:
+            period, label = 21, "monthly_return"
+        period = min(max(period, 2), 200)
+        return SemanticRoute(
+            action="get_indicator",
+            arguments={
+                "symbol": symbols[0],
+                "indicator": "change_percent",
+                "period": period,
+                "timeframe": (planner_state or {}).get("timeframe") or "1d",
+            },
+            action_query=label,
+        )
+    if (
+        _DAILY_CHANGE.search(text)
+        and re.search(r"\b(?:today|now|daily)\b", text, re.I)
+        and not _MOVE.search(text)
+        and len(symbols) == 1
+    ):
+        return _single_symbol_route(
+            "what_changed",
+            symbols,
+            arguments={"reference": "previous_close"},
+        )
     route = _watchlist_route(text)
     if route is not None:
         return route
@@ -240,11 +315,17 @@ def route_semantic_intent(
         indicator = indicator_match.group("indicator").lower().replace(" ", "_") if indicator_match else ""
         if indicator == "change":
             indicator = "change_percent"
-        return _single_symbol_route(
-            "get_indicator",
-            symbols,
-            arguments={"indicator": indicator, "timeframe": (planner_state or {}).get("timeframe") or "1d"},
-        )
+        period_match = _EXPLICIT_PERIOD.search(text)
+        period = int(period_match.group("period")) if period_match else 14
+        if not 2 <= period <= 200:
+            period = 14
+        arguments = {
+            "indicator": indicator,
+            "timeframe": (planner_state or {}).get("timeframe") or "1d",
+        }
+        if period_match:
+            arguments["period"] = period
+        return _single_symbol_route("get_indicator", symbols, arguments=arguments)
     if _CONFLUENCE.search(text):
         return _single_symbol_route("get_confluence", symbols)
     if _RELATIVE_STRENGTH.search(text):

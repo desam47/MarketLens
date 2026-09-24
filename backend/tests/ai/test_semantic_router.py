@@ -135,6 +135,48 @@ def test_common_market_and_indicator_questions_map_to_typed_tools() -> None:
     assert indicator.action == "get_indicator"
     assert indicator.arguments == {"symbol": "AAPL", "indicator": "rsi", "timeframe": "1d"}
 
+
+def test_daily_change_question_uses_previous_close_comparison() -> None:
+    route = route_semantic_intent("what was dvlt change today", focus_symbols=["DVLT"])
+
+    assert route is not None
+    assert route.action == "what_changed"
+    assert route.arguments == {"symbol": "DVLT", "reference": "previous_close"}
+
+
+def test_daily_performance_variants_use_previous_close_comparison() -> None:
+    for question, symbol in (
+        ("how did DVLT move today", "DVLT"),
+        ("how much is DVLT down today", "DVLT"),
+        ("DVLT performance today", "DVLT"),
+        ("How did AAPL perform today?", "AAPL"),
+    ):
+        route = route_semantic_intent(question, focus_symbols=[symbol])
+        assert route is not None
+        assert route.action == "what_changed"
+        assert route.arguments["reference"] == "previous_close"
+
+
+def test_lookback_returns_and_explicit_indicator_periods_are_preserved() -> None:
+    weekly = route_semantic_intent("What is AAPL weekly return?", focus_symbols=["AAPL"])
+    monthly = route_semantic_intent("How has AAPL done over the last month?", focus_symbols=["AAPL"])
+    sma = route_semantic_intent("What is AAPL 20-day SMA?", focus_symbols=["AAPL"])
+
+    assert weekly is not None and weekly.action == "get_indicator"
+    assert weekly.action_query == "weekly_return"
+    assert weekly.arguments["period"] == 5
+    assert monthly is not None and monthly.arguments["period"] == 21
+    assert sma is not None and sma.arguments["period"] == 20
+
+
+def test_relative_watchlist_question_preserves_benchmark_scope() -> None:
+    route = route_semantic_intent("Which names are weak relative to QQQ?")
+
+    assert route is not None
+    assert route.action == "get_watchlist_intelligence"
+    assert route.action_query == "benchmark_relative"
+    assert route.arguments == {"concern": "underperforming", "benchmark_symbol": "QQQ"}
+
     risk = route_semantic_intent("Show my positions")
     assert risk is not None
     assert risk.action == "get_risk_dashboard"

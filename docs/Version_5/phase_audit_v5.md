@@ -1,6 +1,6 @@
 # Version 5 Phase Audit
 
-**Last updated:** 2026-09-23 (Chat browser-data/privacy hardening)
+**Last updated:** 2026-09-23 (Chat intent, benchmark scope, and transcript-format hardening)
 **Status:** Active. Planning complete; Phases 5.1–5.8 are complete. Version 5 release handoff to the protected stable branch remains outside this phase audit.
 **Scope:** Grounded tool-using Chat, verified calculations, market/user-data retrieval, bounded orchestration, analysis workflows, structured UI, personalization, and reliability evaluation.
 **Branch workflow:** Version 5 implementation is developed on `development`; `main` remains the protected stable branch and receives reviewed merges only.
@@ -1276,6 +1276,22 @@ several "complete" claims. Fixed, each with a regression test:
    of an unsupported generic answer. The focused semantic-router/Chat/
    verifier regression slice passes with 76 tests, and a fresh browser
    submission confirmed the holdings query persisted the private-scope route.
+
+10. **Metric routing and transcript formatting.** Daily language such as
+    "change today", "move today", "performance today", and "down today" now
+    routes to a previous-close comparison instead of a generic trend or
+    calculation fallback. Weekly/monthly return language and explicit windows
+    such as "20-day SMA" preserve a bounded period in the typed indicator
+    request. Benchmark-relative questions preserve QQQ (or another named
+    benchmark) and the exact watchlist scope. Indicator, change, and remaining
+    read-only tool results are rendered as concise, freshness-aware prose
+    rather than raw provider JSON; browser-local scenario results continue to
+    use the aggregate privacy formatter. Semantic market routes run before the
+    broad calculation hint, so valid questions containing "return" or "change"
+    are not misclassified as arithmetic requests. The focused Chat, verifier,
+    observability, private-flow, scanner, and response-block regression slice
+    passes with 158 tests, and live local smoke confirmed readable daily-change
+    and weekly-return responses with stale-data warnings.
 
 Verification: `backend/tests/ai` plus `backend/tests/api/test_chat_router.py`
 (821 passed) and the frontend ChatPanel/utils suites (72 passed) with a

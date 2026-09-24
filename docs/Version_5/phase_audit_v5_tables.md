@@ -1,6 +1,6 @@
 # Version 5 Audit Tables
 
-**Written:** 2026-09-23 · **Covers:** `development` after `11e4527` plus the current Chat browser-data/privacy hardening
+**Written:** 2026-09-23 · **Covers:** `development` after the Chat intent, benchmark-scope, and transcript-format hardening
 **Companion to:** [phase_audit_v5.md](phase_audit_v5.md), which requires these tables in its 5.1, 5.2, 5.4, and 5.7 sections.
 
 Every row was taken from the code and test files, not from earlier audit
