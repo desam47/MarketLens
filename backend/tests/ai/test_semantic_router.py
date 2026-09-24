@@ -6,7 +6,6 @@ def test_watchlist_language_maps_to_canonical_intelligence_concern() -> None:
         "Which of my names look weak?": "weak",
         "show me the laggards in my stocks": "underperforming",
         "what is deteriorating in my watchlist?": "deteriorating",
-        "which of my holdings are underperforming?": "underperforming",
         "which of my names are strongest?": "strong",
     }
 
@@ -40,6 +39,35 @@ def test_watchlist_timeframe_scope_is_preserved() -> None:
 
     assert route is not None
     assert route.arguments == {"concern": "weak", "timeframe": "1d"}
+
+
+def test_position_and_holding_language_uses_private_portfolio_scope() -> None:
+    cases = [
+        "Which of my holdings are weakest on the daily timeframe?",
+        "Which of my holdings are underperforming?",
+        "Which position has the most downside risk?",
+    ]
+
+    for question in cases:
+        route = route_semantic_intent(question)
+        assert route is not None
+        assert route.action == "get_risk_dashboard"
+        assert route.arguments == {}
+
+
+def test_holding_weakness_is_not_reported_as_aggregate_portfolio_risk() -> None:
+    route = route_semantic_intent("Which of my holdings are weakest on the daily timeframe?")
+
+    assert route is not None
+    assert route.action_query == "portfolio_weakness"
+
+
+def test_portfolio_change_does_not_fall_back_to_ticker_clarification() -> None:
+    route = route_semantic_intent("What changed in my portfolio since yesterday?")
+
+    assert route is not None
+    assert route.action == "get_risk_dashboard"
+    assert route.action_query == "portfolio_change"
 
 
 def test_watchlist_timeframe_followup_reuses_named_scope() -> None:

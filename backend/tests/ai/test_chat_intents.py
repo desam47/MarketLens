@@ -365,6 +365,81 @@ def test_watchlist_semantics_route_without_model_guessing(monkeypatch) -> None:
     complete.assert_not_called()
 
 
+def test_private_holdings_weakness_does_not_broaden_to_watchlists(monkeypatch) -> None:
+    complete = Mock()
+    monkeypatch.setattr("backend.ai.chat.ai_manager.complete", complete)
+    requests = []
+
+    def execute(request):
+        requests.append(request)
+        return ToolResult(
+            tool_name=request.tool_name,
+            ok=True,
+            data={
+                "available": False,
+                "reason": "No server-side positions are configured.",
+            },
+            provider="MarketLens local dashboard",
+        )
+
+    monkeypatch.setattr("backend.ai.chat.default_registry.execute", execute)
+    text, grounded, _ = _generate_reply(
+        None,
+        [],
+        [],
+        None,
+        [],
+        "Which of my holdings are weakest on the daily timeframe?",
+        None,
+        False,
+        [],
+        {},
+    )
+
+    assert grounded is True
+    assert "Portfolio weakness ranking is unavailable" in text
+    assert requests[0].tool_name == "get_risk_dashboard"
+    complete.assert_not_called()
+
+
+def test_portfolio_change_uses_private_scope_and_explains_missing_snapshot(monkeypatch) -> None:
+    complete = Mock()
+    monkeypatch.setattr("backend.ai.chat.ai_manager.complete", complete)
+    requests = []
+
+    def execute(request):
+        requests.append(request)
+        return ToolResult(
+            tool_name=request.tool_name,
+            ok=True,
+            data={
+                "available": False,
+                "reason": "No browser-local positions were shared for this turn.",
+            },
+            provider="MarketLens local dashboard",
+        )
+
+    monkeypatch.setattr("backend.ai.chat.default_registry.execute", execute)
+    text, grounded, _ = _generate_reply(
+        None,
+        [],
+        [],
+        None,
+        [],
+        "What changed in my portfolio since yesterday?",
+        None,
+        False,
+        [],
+        {},
+    )
+
+    assert grounded is True
+    assert "Portfolio changes are unavailable" in text
+    assert "Which ticker" not in text
+    assert requests[0].tool_name == "get_risk_dashboard"
+    complete.assert_not_called()
+
+
 def test_watchlist_weakness_reports_relative_fallback_when_no_clear_bearish_name(monkeypatch) -> None:
     complete = Mock()
     monkeypatch.setattr("backend.ai.chat.ai_manager.complete", complete)

@@ -171,6 +171,19 @@ measurements were `5,539.949 ms` cold-process, `1,035.558 ms` first-warm, and
 checks must warm the process and SQLite/cache layer before evaluating this
 target; the cold and first-warm values are accepted startup outliers.
 
+## Final Chat scope follow-up
+
+The final browser review found one ordering edge: watchlist weakness matching
+ran before private portfolio ownership matching. The router now resolves
+`my holdings`, `my positions`, and portfolio-change language to the private
+`get_risk_dashboard` path before considering generic watchlist or change
+routes. Missing server-side positions produce an explicit private-data
+unavailable response rather than a watchlist result. Query-specific stale
+messages also cover relative-to-QQQ, pre-market review, and today-versus-last-
+month questions. The focused semantic-router/Chat/verifier regression slice
+passes with 76 tests; a fresh browser submission persisted the corrected
+holdings route and evidence tool.
+
 ## Final release gate
 
 The Phase 5.8 release gate passed on 2026-09-23: no order-execution route is

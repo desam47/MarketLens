@@ -1266,6 +1266,16 @@ several "complete" claims. Fixed, each with a regression test:
 8. **Local notebooks kept on server merge.** Notebooks created while the
    server was unreachable, and items whose server save failed, used to be
    overwritten by the next server load. They are now kept.
+9. **Private portfolio scope precedence and stale-data explanations.** Holding
+   and position ownership is resolved before generic watchlist/change routes,
+   so questions such as "which of my holdings are weakest" and "what changed
+   in my portfolio" stay on `get_risk_dashboard` and cannot broaden to all
+   active watchlists. The resulting unavailable states identify the missing
+   browser-local/server snapshot, while stale relative-strength, pre-market,
+   and multi-timeframe questions receive query-specific explanations instead
+   of an unsupported generic answer. The focused semantic-router/Chat/
+   verifier regression slice passes with 76 tests, and a fresh browser
+   submission confirmed the holdings query persisted the private-scope route.
 
 Verification: `backend/tests/ai` plus `backend/tests/api/test_chat_router.py`
 (821 passed) and the frontend ChatPanel/utils suites (72 passed) with a

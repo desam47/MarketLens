@@ -133,6 +133,34 @@ def test_source_timestamp_alone_does_not_prove_live_freshness() -> None:
     assert result.issues == ["live_claim_without_freshness"]
 
 
+@pytest.mark.parametrize(
+    ("question", "expected"),
+    [
+        (
+            "What's weak today but strong over the last month?",
+            "today's weakness with last month's strength",
+        ),
+        (
+            "Which names are weak relative to QQQ?",
+            "weak relative to QQQ",
+        ),
+        (
+            "What should I review before the open?",
+            "trustworthy pre-open review",
+        ),
+    ],
+)
+def test_stale_market_answers_explain_the_requested_context(question: str, expected: str) -> None:
+    result = verify_answer(
+        "The latest market conditions are weak.",
+        [{"tool": "get_market_context", "ok": True, "freshness_seconds": 3600}],
+        user_content=question,
+    )
+
+    assert result.status == "blocked"
+    assert expected in result.safe_content
+
+
 _AAPL_QUOTE = {"tool": "get_quote", "ok": True, "symbol": "AAPL", "freshness_seconds": 5, "data": {"price": 230.5, "change_percent": -1.2}}
 
 

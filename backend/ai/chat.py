@@ -1355,7 +1355,7 @@ def _browser_safe_reply_data(action: str, data: dict) -> dict:
     return {}
 
 
-def _format_browser_local_reply(action: str, data: dict, provider: str) -> str:
+def _format_browser_local_reply(action: str, data: dict, provider: str, *, query: str | None = None) -> str:
     """Turn aggregate browser-local tool data into user-facing prose.
 
     Browser-local rows are intentionally excluded from the durable transcript.
@@ -1366,7 +1366,22 @@ def _format_browser_local_reply(action: str, data: dict, provider: str) -> str:
     if action in {"get_risk_dashboard", "assess_portfolio_risk", "scenario_analysis"}:
         if data.get("available") is False:
             reason = str(data.get("reason") or "No browser-local positions were shared for this turn.")
+            if query == "portfolio_change":
+                return f"Portfolio changes are unavailable from {source}: {reason}"
+            if query == "portfolio_weakness":
+                return f"Portfolio weakness ranking is unavailable from {source}: {reason}"
             return f"Portfolio risk is unavailable from {source}: {reason}"
+        if query == "portfolio_change":
+            return (
+                "I can summarize the current shared portfolio, but I cannot verify what "
+                "changed since yesterday because no prior portfolio snapshot is available."
+            )
+        if query == "portfolio_weakness":
+            return (
+                "I can summarize current shared portfolio risk, but I cannot rank those "
+                "private holdings by scanner weakness until scanner data is joined to the "
+                "shared position snapshot."
+            )
         position_count = data.get("position_count")
         if not isinstance(position_count, int):
             positions = data.get("positions")
@@ -4217,6 +4232,9 @@ def _run_market_tool(
                 f"{result.error}",
                 False,
             )
+        if parsed.action == "get_risk_dashboard" and parsed.action_query in {"portfolio_change", "portfolio_weakness"}:
+            label = "changes" if parsed.action_query == "portfolio_change" else "weakness ranking"
+            return f"Portfolio {label} is unavailable from {result.provider or 'MarketLens'}: {result.error}", False
         return f"I couldn't retrieve that safely: {result.error}", False
     freshness = (
         f"{result.freshness_seconds:.1f}s old"
@@ -4345,6 +4363,7 @@ def _run_market_tool(
             parsed.action,
             _browser_safe_reply_data(parsed.action, result.data),
             result.provider,
+            query=parsed.action_query,
         ), True
     reply_data = (
         _browser_safe_reply_data(parsed.action, result.data)

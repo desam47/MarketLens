@@ -186,10 +186,29 @@ def _evidence_unit_families(numbers: dict[str, float]) -> set[str]:
     return families
 
 
-def _safe_uncertainty(issues: list[str]) -> str:
+def _safe_uncertainty(issues: list[str], user_content: str = "") -> str:
     if "unknown_ticker" in issues:
         return "I couldn't verify that answer because it referenced unsupported market data. Please provide a supported ticker and retry."
     if "live_claim_without_freshness" in issues or "stale_live_claim" in issues:
+        lowered = user_content.lower()
+        if "relative" in lowered and "qqq" in lowered:
+            return (
+                "I couldn't determine which names are weak relative to QQQ because the "
+                "available market data is stale or lacks a trustworthy freshness timestamp. "
+                "Refresh market data and retry."
+            )
+        if "before the open" in lowered or "pre-open" in lowered or "pre open" in lowered:
+            return (
+                "I couldn't prepare a trustworthy pre-open review because the available "
+                "market data is stale or lacks a trustworthy freshness timestamp. "
+                "Refresh market data and retry."
+            )
+        if "last month" in lowered and ("today" in lowered or "weak" in lowered or "strong" in lowered):
+            return (
+                "I couldn't compare today's weakness with last month's strength because the "
+                "available market data is stale or lacks a trustworthy freshness timestamp. "
+                "Refresh market data and retry."
+            )
         return "I couldn't verify that as current because the available market data is missing a trustworthy freshness timestamp."
     if "unsupported_numeric_claim" in issues or "unit_mismatch" in issues:
         return "I couldn't verify one or more numbers in that answer against the available source data."
@@ -315,7 +334,7 @@ def verify_answer(
             claim_count=0,
             numeric_claim_count=0,
             unsupported_claim_count=len(calculation_issues),
-            safe_content=_safe_uncertainty(calculation_issues),
+            safe_content=_safe_uncertainty(calculation_issues, user_content),
         )
     action_steps = [item for item in trace if item.get("kind") == "step"]
     trusted_server_reply = any(item.get("kind") == "server_reply" and item.get("trusted") is True for item in trace)
@@ -493,7 +512,7 @@ def verify_answer(
             claim_count=claim_count,
             numeric_claim_count=len(numeric_claims),
             unsupported_claim_count=unsupported,
-            safe_content=_safe_uncertainty(issues),
+            safe_content=_safe_uncertainty(issues, user_content),
         )
 
     status: Literal["verified", "degraded"] = "verified" if successful else "degraded"

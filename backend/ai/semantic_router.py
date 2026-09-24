@@ -33,7 +33,7 @@ class SemanticRoute:
 
 
 _WATCHLIST_SCOPE = re.compile(
-    r"\b(?:my|our|the)\s+(?:watchlist|names?|stocks?|tickers?|holdings?|positions?)\b"
+    r"\b(?:my|our|the)\s+(?:watchlist|names?|stocks?|tickers?)\b"
     r"|\b(?:laggards?|leaders?)\s+(?:in|from|on)\s+(?:my|our)\b",
     re.I,
 )
@@ -65,7 +65,13 @@ _CHANGE = re.compile(r"\b(?:what changed|what has changed|changed since|since ye
 _OPTIONS = re.compile(r"\b(?:options?|calls?|puts?|option chain|implied volatility|open interest|put[/-]?call)\b", re.I)
 _RISK = re.compile(
     r"\b(?:portfolio risk|position risk|exposure|drawdown|risk dashboard|concentration|"
-    r"my positions|my portfolio|my book|portfolio health)\b",
+    r"my positions|my holdings|my portfolio|my book|portfolio health|"
+    r"(?:which|what)\s+(?:position|positions|holding|holdings)\b[^?\.]*\b"
+    r"(?:risk|downside|exposure|drawdown|loss|weak(?:est|er)?|underperform(?:ing|er)?)\b)",
+    re.I,
+)
+_PORTFOLIO_SCOPE = re.compile(
+    r"\b(?:my|our)\s+(?:portfolio|book|positions?|holdings?)\b",
     re.I,
 )
 _JOURNAL = re.compile(r"\b(?:trade journal|journal entries?|trading journal|mistakes? review)\b", re.I)
@@ -179,6 +185,9 @@ def route_semantic_intent(
 ) -> SemanticRoute | None:
     """Return a high-confidence canonical route, or ``None``.
 
+    Portfolio ownership is intentionally resolved before generic change or
+    watchlist language so private positions cannot broaden into watchlists.
+
     ``focus_symbols`` and ``planner_state`` are accepted now so future route
     families can resolve conversational scope without changing this API.
     They are intentionally not used to guess a watchlist today.
@@ -186,6 +195,14 @@ def route_semantic_intent(
     text = user_content.strip()
     symbols = [str(symbol).upper() for symbol in (focus_symbols or [])]
 
+    if not symbols and _MARKET_OVERVIEW.search(text):
+        return SemanticRoute(action="get_market_context")
+    if _RISK.search(text):
+        if _WEAKNESS.search(text) and _PORTFOLIO_SCOPE.search(text):
+            return SemanticRoute(action="get_risk_dashboard", action_query="portfolio_weakness")
+        if _CHANGE.search(text) and _PORTFOLIO_SCOPE.search(text) and not symbols:
+            return SemanticRoute(action="get_risk_dashboard", action_query="portfolio_change")
+        return SemanticRoute(action="get_risk_dashboard")
     route = _watchlist_route(text)
     if route is not None:
         return route
@@ -193,8 +210,6 @@ def route_semantic_intent(
         route = _watchlist_scope_followup(text, planner_state)
         if route is not None:
             return route
-    if not symbols and _MARKET_OVERVIEW.search(text):
-        return SemanticRoute(action="get_market_context")
     if _CHANGE.search(text):
         if len(symbols) == 1:
             reference = "last_visit" if "last visit" in text.lower() else "yesterday" if "yesterday" in text.lower() else "previous_close"
@@ -204,8 +219,6 @@ def route_semantic_intent(
         return _single_symbol_route("why_did_it_move", symbols)
     if _OPTIONS.search(text):
         return _single_symbol_route("get_options_snapshot", symbols)
-    if _RISK.search(text):
-        return SemanticRoute(action="get_risk_dashboard")
     if _JOURNAL.search(text):
         return SemanticRoute(
             action="get_trade_journal",
