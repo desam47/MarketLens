@@ -2,8 +2,8 @@
 
 **Created:** 2026-09-24
 **Last updated:** 2026-09-24 (batch 1c: MD-03)
-**Status:** Review complete. MD-03 is fixed: stored 1m bars are settled from Alpaca's consolidated (SIP) feed, so every timeframe carries full-market volume. MD-01 is fixed: 1h bars are placed on the clock hour, and the stored 1h/4h history and its signals were repaired on the live database. MD-02: log records are redacted, confirmed on live Webull errors, and the old log files holding credentials are deleted; only token rotation remains. Nine findings: one Critical, two High, two Medium, four Low. The Critical finding affects every 1h and 4h chart, signal, and AI answer built on stored bars before 2026-09-23.
-**Scorecard:** 2 ✅ COMPLETE, 1 ⚠️ PARTIAL, 6 ❌ NOT STARTED, 0 🟡 DEFERRED.
+**Status:** Review complete. MD-03 is fixed: stored 1m bars are settled from Alpaca's consolidated (SIP) feed, so every timeframe carries full-market volume. MD-01 is fixed: 1h bars are placed on the clock hour, and the stored 1h/4h history and its signals were repaired on the live database. MD-02 is fixed: log records are redacted, confirmed on live Webull errors, the old log files holding credentials are deleted, and the Webull token was rotated. Nine findings: one Critical, two High, two Medium, four Low. The Critical finding affects every 1h and 4h chart, signal, and AI answer built on stored bars before 2026-09-23.
+**Scorecard:** 3 ✅ COMPLETE, 0 ⚠️ PARTIAL, 6 ❌ NOT STARTED, 0 🟡 DEFERRED.
 **Source:** 2026-09-24 review of market-data ingestion, bar storage, retention, and the logs they produce. It covered `backend/market_data/services/ingestion_service.py`, `backend/market_data/providers/*`, `backend/repositories/bar_repository.py`, `backend/services/purge_service.py`, `backend/api/watchlist/router.py`, and `scripts/restart_dev.sh`, at `b41530c`, and checked each finding against the live database and logs.
 **Related:** [Historical Signals fixes](v5_historical_signal_bug_fixes.md), [AI Analysis fixes](v5_ai_analysis.md), [Chat bug fixes](v5_bug_fixes.md), [Phase audit](phase_audit_v5.md)
 
@@ -23,7 +23,7 @@ Line numbers refer to the code at `b41530c`.
 | ID | Severity | Area | Title | Evidence | Status |
 |---|---|---|---|---|---|
 | MD-01 | Critical | Bars | Provider 1h bars are stored 30 minutes earlier than the data they hold | Verified | ✅ COMPLETE |
-| MD-02 | High | Security | Webull credentials are written to the log files in plain text | Verified | ⚠️ PARTIAL |
+| MD-02 | High | Security | Webull credentials are written to the log files in plain text | Verified | ✅ COMPLETE |
 | MD-03 | High | Bars | One series mixes providers whose volume differs by up to 2,800 times | Verified | ✅ COMPLETE |
 | MD-04 | Medium | Storage | Data for symbols in no watchlist is never removed | Verified | ❌ NOT STARTED |
 | MD-05 | Medium | Operations | `logs/backend.log` grows without limit | Verified | ❌ NOT STARTED |
@@ -119,7 +119,7 @@ A dry run does all of this and rolls it back. The data is fetched before anythin
 
 ### MD-02 — Webull credentials are written to the log files in plain text
 
-**Status:** ⚠️ PARTIAL (2026-09-24, batch 1a). Records are redacted, confirmed on live Webull errors, and the log files written before the fix are deleted. Only token rotation remains; see Remaining.
+**Status:** ✅ COMPLETE (2026-09-24, batch 1a). Records are redacted, confirmed on live Webull errors, the log files written before the fix are deleted, and the Webull app key/secret rotated.
 **Where:** the Webull SDK logger `webull.core.client`. The patches in `backend/market_data/providers/webull_provider.py:100`–`:152` only lower log levels and redirect files.
 
 When a Webull request fails, the SDK logs an ERROR containing the full request, headers included. These include `x-app-key`, `x-access-token`, and `x-signature`. The existing patches lower the SDK's DEBUG noise but still pass ERROR records through unchanged.
@@ -156,7 +156,7 @@ With the factory not installed, 4 of them fail. The full backend suite passes: 3
 
 **Remaining:**
 
-- **Token rotation:** rotate the Webull token. The deleted logs held it, and during this review two access-token values from them were printed into the review session's output by a check that should have hidden them.
+- ~~**Token rotation:**~~ done 2026-09-24 18:36. New `WEBULL_APP_KEY`/`WEBULL_APP_SECRET` from the Webull developer portal, `conf/token.txt` and `conf/token_stream/token.txt` deleted so the SDK could not reuse the old token, then a restart. The handshake cycled `PENDING` for about 20s (normal) and settled to `status: NORMAL`; a few `INVALID_TOKEN`/`TOO_MANY_REQUESTS` errors during that window were transient, none since. The old app key/secret held two access-token values that had been printed into this review's session output by a check that should have hidden them — the reason rotation was needed here rather than left for routine rotation.
 - ~~**Worker restart:**~~ done 2026-09-24 17:35 with `scripts/restart_dev.sh`, after commit `63a11a8`. The RQ workers run `SimpleWorker`, which does not fork, so until then they ran the code loaded at 00:31, before the fix. After the restart, no errors and no credential values in `logs/`.
 - ~~**Live confirmation:**~~ done 2026-09-24. The dev-server reloads during MD-01 drew Webull 429s on `/openapi/config`, and the SDK logged them in full: 230 `ServerException` records across `backend.log`, `marketlens.log`, and the SDK's own `webull_trade_sdk.log`. The logs hold 673 redacted credential values and none in the clear.
 
@@ -392,7 +392,7 @@ The fresh schema for MD-08 was built under `.pytest_tmp/` and deleted afterwards
 | 2026-09-24 | MD-01 to MD-09 | ❌ NOT STARTED | `e4c1d69` | `docs/Version_5/v5_market_data_bug_fixes.md` | 10 probes | Review logged nine findings. |
 | 2026-09-24 | MD-03 | ✅ COMPLETE | batch 1c | `sip_settle.py`, `scripts/settle_1m_from_sip.py`, `ingestion_service.py`, `bar_repository.py`, `alpaca_provider.py`, `settings.py`, `chat_replies.py` | 11 new | 1m settled from Alpaca SIP, live and one-off; IEX labelled. |
 | 2026-09-24 | MD-01 | ✅ COMPLETE | `65ce005` | `hourly_bars.py`, `hourly_repair.py`, `scripts/repair_hourly_bars.py`, `ingestion_service.py`, `backfill_service.py`, `bar_repository.py`, `alpaca_provider.py`, `settings.py`, `.env.example` | 24 new, 1 rewritten | 1h on the clock hour; Alpaca SIP; live 1h/4h history repaired and signals re-recorded. |
-| 2026-09-24 | MD-02 | ⚠️ PARTIAL | `63a11a8` | `backend/observability/redaction.py`, `webull_provider.py`, `structured_logging.py`, `test_secret_redaction.py` | 8 tests | New records redacted; 114 old log files holding credentials deleted or emptied; workers restarted; redaction confirmed on 230 live Webull errors. Token rotation remains. |
+| 2026-09-24 | MD-02 | ✅ COMPLETE | `63a11a8` | `backend/observability/redaction.py`, `webull_provider.py`, `structured_logging.py`, `test_secret_redaction.py` | 8 tests | New records redacted; 114 old log files holding credentials deleted or emptied; workers restarted; redaction confirmed on 230 live Webull errors; Webull app key/secret rotated 18:36. |
 
 ---
 
