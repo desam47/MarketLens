@@ -304,6 +304,9 @@ class AnalysisResponse(BaseModel):
     timeframe_scores: dict[str, Any] = Field(default_factory=dict)
     track_record: dict[str, Any] = Field(default_factory=dict)
     correlation_context: dict[str, Any] = Field(default_factory=dict)
+    # Deterministic validation result for an actionable trade plan. Populated
+    # after parsing from quote + support/resistance context, never by the AI.
+    trade_plan_validation: dict[str, Any] = Field(default_factory=dict)
     # Market-data provenance, stamped from AnalysisContext after parsing.
     # These fields are deliberately absent from ANALYSIS_JSON_SCHEMA: the
     # model never supplies them and cannot make a stale result look current.
@@ -421,6 +424,7 @@ class UncertaintyResponse(BaseModel):
     market_data_provider: str | None = None
     market_session: str = "unknown"
     cache_status: Literal["fresh", "cached"] = "fresh"
+    trade_plan_validation: dict[str, Any] = Field(default_factory=dict)
 
 
 # --- Parsing --------------------------------------------------------
@@ -1555,9 +1559,12 @@ def build_chat_prompt(
     # Tell the AI whether the market is currently open or closed so it can
     # proactively mention it when answering "today's profit / current price" queries.
     try:
-        from datetime import datetime, timezone as _tz
-        from backend.engines.market_calendar import SessionType, us_market_calendar as _cal
-        _session = _cal.get_session_type(datetime.now(_tz.utc))
+        from datetime import UTC, datetime
+
+        from backend.engines.market_calendar import SessionType
+        from backend.engines.market_calendar import us_market_calendar as _cal
+
+        _session = _cal.get_session_type(datetime.now(UTC))
         if _session == SessionType.CLOSED:
             _session_note = (
                 "Market session status: CLOSED. When answering questions about "

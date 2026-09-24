@@ -5875,6 +5875,26 @@ div.td-trend {
   color: var(--text-secondary);
 }
 
+.tp-validation,
+.ai-plan-unavailable {
+  margin: 0.45rem 0;
+  border-radius: 0.3rem;
+  font-size: 0.76rem;
+  line-height: 1.45;
+  padding: 0.35rem 0.45rem;
+}
+
+.tp-validation {
+  background: rgba(16, 185, 129, 0.08);
+  color: var(--success);
+}
+
+.ai-plan-unavailable {
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.24);
+  color: var(--warning);
+}
+
 .tp-disclaimer {
   margin: 0;
   font-size: 0.7rem;

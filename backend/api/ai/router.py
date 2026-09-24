@@ -157,6 +157,7 @@ class AnalyzeResponse(BaseModel):
     market_data_provider: str | None = None
     market_session: str = "unknown"
     cache_status: str = "fresh"
+    trade_plan_validation: dict[str, Any] = Field(default_factory=dict)
 
 
 # --- Endpoints -----------------------------------------------------
@@ -317,6 +318,7 @@ async def analyze(
         market_data_provider=getattr(result, "market_data_provider", None),
         market_session=getattr(result, "market_session", "unknown"),
         cache_status=getattr(result, "cache_status", "fresh"),
+        trade_plan_validation=getattr(result, "trade_plan_validation", {}) or {},
     )
 
 

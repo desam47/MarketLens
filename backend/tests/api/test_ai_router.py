@@ -48,6 +48,7 @@ class TestAnalyzeEndpoint(unittest.TestCase):
             market_data_provider="webull",
             market_session="regular",
             cache_status="fresh",
+            trade_plan_validation={"status": "verified", "quote_price": 201.25},
         )
 
         resp = client.post("/api/ai/analyze?symbol=AAPL&timeframe=1d")
@@ -70,6 +71,7 @@ class TestAnalyzeEndpoint(unittest.TestCase):
         self.assertEqual(data["market_data_provider"], "webull")
         self.assertEqual(data["market_session"], "regular")
         self.assertEqual(data["cache_status"], "fresh")
+        self.assertEqual(data["trade_plan_validation"]["status"], "verified")
         self.assertFalse(data["is_uncertain"])
 
     @patch("backend.api.ai.router.analyze_symbol")

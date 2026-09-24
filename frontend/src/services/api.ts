@@ -897,6 +897,14 @@ export interface AIAnalysisResult {
   market_data_provider?: string | null;
   market_session?: MarketSessionType | 'unknown';
   cache_status?: 'fresh' | 'cached';
+  trade_plan_validation?: {
+    status?: 'verified' | 'unavailable' | 'not_applicable';
+    reason?: string;
+    quote_price?: number;
+    supports?: number[];
+    resistances?: number[];
+    data_status?: string;
+  };
 }
 
 export interface AIConfig {

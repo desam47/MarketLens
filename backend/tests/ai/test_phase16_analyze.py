@@ -32,6 +32,7 @@ from backend.ai.analyze import (
     _calibrate_confidence,
     _clear_analysis_cache,
     _data_quality,
+    _plan_validation,
     analyze_symbol,
 )
 from backend.ai.context import (
@@ -42,6 +43,7 @@ from backend.ai.context import (
 from backend.ai.prompt import (
     SYSTEM_PROMPT,
     AnalysisResponse,
+    TradePlan,
     UncertaintyResponse,
     build_user_prompt,
     make_analysis_response_format,
@@ -740,6 +742,10 @@ class TestAnalysisCache(unittest.TestCase):
             price=100.0,
             timestamp="t",
             data_status="live",
+            support_resistance={
+                "supports": [{"price": 99.0}],
+                "resistances": [{"price": 105.0}],
+            },
         )
         mock_ai.complete = AsyncMock()
         mock_ai.complete.return_value = AIResponse(
@@ -1521,6 +1527,54 @@ class TestBareKeyLevelsLabeling(unittest.TestCase):
         self.assertEqual(result.key_levels, ["756.64"])
 
 
+class TestTradePlanEvidenceValidation(unittest.TestCase):
+    def _plan(self, *, entry: float = 100.0) -> TradePlan:
+        return TradePlan(
+            recommendation="buy",
+            conviction="medium",
+            time_horizon="swing",
+            entry_zone_low=entry,
+            entry_zone_high=entry,
+            stop_loss=entry - 4.0,
+            targets=[entry + 8.0],
+            thesis="A test plan anchored to the current market structure.",
+            invalidation="A close below support invalidates the setup.",
+        )
+
+    def test_requires_both_support_and_resistance_evidence(self):
+        ctx = AnalysisContext(
+            symbol="AAPL",
+            timeframe="1d",
+            price=100.0,
+            timestamp="t",
+            data_status="LIVE",
+            support_resistance={"supports": [{"price": 99.0}]},
+        )
+
+        validation = _plan_validation(ctx, self._plan())
+
+        self.assertEqual(validation["status"], "unavailable")
+        self.assertIn("support and resistance", validation["reason"])
+
+    def test_rejects_entry_far_from_the_current_quote(self):
+        ctx = AnalysisContext(
+            symbol="AAPL",
+            timeframe="1d",
+            price=100.0,
+            timestamp="t",
+            data_status="LIVE",
+            support_resistance={
+                "supports": [{"price": 99.0}],
+                "resistances": [{"price": 145.0}],
+            },
+        )
+
+        validation = _plan_validation(ctx, self._plan(entry=140.0))
+
+        self.assertEqual(validation["status"], "unavailable")
+        self.assertIn("too far from the current quote", validation["reason"])
+
+
 class TestTradePlanCapture(unittest.TestCase):
     """analyze_symbol()'s single choke point for trade-plan outcome
     tracking (2026-09-11) — see backend.ai.trade_plan_tracker."""
@@ -1592,6 +1646,10 @@ class TestTradePlanCapture(unittest.TestCase):
             price=100.0,
             timestamp="t",
             data_status="live",
+            support_resistance={
+                "supports": [{"price": 99.0}],
+                "resistances": [{"price": 105.0}],
+            },
         )
         mock_ai.complete = AsyncMock()
         mock_ai.complete.return_value = self._buy_reply()
@@ -1600,14 +1658,14 @@ class TestTradePlanCapture(unittest.TestCase):
         args, _ = mock_record.call_args
         self.assertEqual(args[0], "AAPL")
         self.assertIs(args[1], result)
+        self.assertEqual(result.trade_plan_validation["status"], "verified")
 
     @patch("backend.ai.trade_plan_tracker.record_trade_plan")
     @patch("backend.ai.analyze.ai_manager")
     @patch("backend.ai.analyze.build_context")
     def test_hold_plan_is_not_specially_skipped_here(self, mock_ctx, mock_ai, mock_record):
-        # analyze_symbol always calls record_trade_plan when there's a
-        # trade_plan at all — record_trade_plan itself is what filters
-        # hold/avoid (see TestRecordTradePlan in test_trade_plan_tracker.py).
+        # Hold/avoid is analysis, not an actionable setup, so it must not
+        # enter the outcome tracker.
         mock_ctx.return_value = AnalysisContext(
             symbol="AAPL",
             timeframe="1d",
@@ -1618,7 +1676,7 @@ class TestTradePlanCapture(unittest.TestCase):
         mock_ai.complete = AsyncMock()
         mock_ai.complete.return_value = self._hold_reply()
         asyncio.run(analyze_symbol("AAPL", "1d"))
-        mock_record.assert_called_once()
+        mock_record.assert_not_called()
 
     @patch("backend.ai.trade_plan_tracker.record_trade_plan")
     @patch("backend.ai.analyze.ai_manager")
@@ -1635,6 +1693,10 @@ class TestTradePlanCapture(unittest.TestCase):
             price=100.0,
             timestamp="t",
             data_status="live",
+            support_resistance={
+                "supports": [{"price": 99.0}],
+                "resistances": [{"price": 105.0}],
+            },
         )
         mock_ai.complete = AsyncMock()
         mock_ai.complete.return_value = self._buy_reply()
@@ -1642,6 +1704,35 @@ class TestTradePlanCapture(unittest.TestCase):
         result = asyncio.run(analyze_symbol("AAPL", "1d"))  # must not raise
         self.assertEqual(result.trend, "bullish")
         self.assertIsNotNone(result.trade_plan)
+
+    @patch("backend.ai.trade_plan_tracker.record_trade_plan")
+    @patch("backend.ai.analyze.ai_manager")
+    @patch("backend.ai.analyze.build_context")
+    def test_stale_actionable_plan_is_withheld_and_not_tracked(
+        self,
+        mock_ctx,
+        mock_ai,
+        mock_record,
+    ):
+        mock_ctx.return_value = AnalysisContext(
+            symbol="AAPL",
+            timeframe="1d",
+            price=100.0,
+            timestamp="t",
+            data_status="STALE",
+            support_resistance={
+                "supports": [{"price": 99.0}],
+                "resistances": [{"price": 105.0}],
+            },
+        )
+        mock_ai.complete = AsyncMock(return_value=self._buy_reply())
+
+        result = asyncio.run(analyze_symbol("AAPL", "1d"))
+
+        self.assertIsNone(result.trade_plan)
+        self.assertEqual(result.trade_plan_validation["status"], "unavailable")
+        self.assertIn("stale", result.trade_plan_validation["reason"])
+        mock_record.assert_not_called()
 
 
 # --- Spec compliance: no AI-side indicator calc ----------------------

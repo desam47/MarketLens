@@ -54,6 +54,7 @@ interface AIAnalysisResult {
     cache_status?: 'fresh' | 'cached';
     market_regime?: Record<string, unknown>;
     timeframe_scores?: Record<string, { direction?: string; strength?: string; confidence?: number }>;
+    trade_plan_validation?: { status?: 'verified' | 'unavailable' | 'not_applicable'; reason?: string };
 }
 
 function makeResult(overrides: Partial<AIAnalysisResult> = {}): AIAnalysisResult {
@@ -159,5 +160,20 @@ describe('AIAnalysisPanel', () => {
         expect(screen.getByText(/Price \$201.25/)).toBeInTheDocument();
         expect(screen.getByText(/Market regime:/)).toHaveTextContent('risk on');
         expect(screen.getByText('1d').parentElement).toHaveTextContent('1d · bullish · strong · 82%');
+    });
+
+    it('withholds an unvalidated trade setup with its server-authored reason', async () => {
+        setConfig(true);
+        mockApi.analyzeSymbol.mockResolvedValue(makeResult({
+            trade_plan_validation: {
+                status: 'unavailable',
+                reason: 'Market data is stale, so no actionable setup was validated.',
+            },
+        }));
+        await act(async () => {
+            render(<AIAnalysisPanel symbol="AAPL" />);
+        });
+        expect(await screen.findByText('No validated trade setup.')).toBeInTheDocument();
+        expect(screen.getByText(/Market data is stale/)).toBeInTheDocument();
     });
 });

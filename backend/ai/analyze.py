@@ -459,13 +459,23 @@ def _finalize_analysis(
     # Defense in depth: label any bare key levels relative to live price.
     parsed.key_levels = _label_bare_key_levels(parsed.key_levels, ctx.price)
 
-    # Single choke point: capture actionable trade plans (best-effort).
-    try:
-        from backend.ai.trade_plan_tracker import record_trade_plan
+    # A structured model reply is not sufficient evidence for an actionable
+    # setup. Keep the narrative, but suppress a buy/sell plan unless its
+    # levels are compatible with the current quote and engine structure.
+    parsed.trade_plan_validation = _plan_validation(ctx, parsed.trade_plan)
+    if parsed.trade_plan_validation.get("status") == "unavailable":
+        parsed.trade_plan = None
 
-        record_trade_plan(symbol, parsed)
-    except Exception as e:  # noqa: BLE001
-        logger.warning("trade plan capture failed for %s: %s", symbol, e)
+    # Single choke point: only a structurally validated actionable plan may
+    # enter the outcome tracker. Hold/avoid and withheld plans are analysis,
+    # not trade setups, and must not bias future calibration.
+    if parsed.trade_plan is not None and parsed.trade_plan.recommendation in {"buy", "sell"}:
+        try:
+            from backend.ai.trade_plan_tracker import record_trade_plan
+
+            record_trade_plan(symbol, parsed)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("trade plan capture failed for %s: %s", symbol, e)
 
     parsed = _with_context_metadata(parsed, ctx)
     _cache_result(cache_key, parsed)
@@ -656,6 +666,14 @@ _CONFIDENCE_DAMPING_FACTOR = 0.5
 # to draw statistical conclusions.
 _CONFIDENCE_MIN_SAMPLE = 5
 
+# A plan is a research aid, not an order. These are deliberately broad sanity
+# bounds: the plan must be near the observed market and visible structure, but
+# the validator never invents an alternative entry/stop/target.
+_MAX_ENTRY_DISTANCE_FROM_QUOTE = 0.15
+_MAX_STOP_DISTANCE_FROM_ENTRY = 0.20
+_MAX_TARGET_DISTANCE_PAST_STRUCTURE = 0.15
+_PLAN_BLOCKING_DATA_STATUSES = {"STALE", "ERROR", "UNKNOWN", "GAP", "INCOMPLETE", "DUPLICATE"}
+
 
 def _calibrate_confidence(
     confidence: float,
@@ -708,6 +726,103 @@ def _label_bare_key_levels(levels: list[str], price: float | None) -> list[str]:
         label = "support" if float(stripped) <= price else "resistance"
         out.append(f"{stripped} {label}")
     return out
+
+
+def _structural_prices(context: dict[str, Any], side: str) -> list[float]:
+    """Read bounded, numeric support/resistance prices from analysis context."""
+    levels = context.get(side, []) if isinstance(context, dict) else []
+    out: list[float] = []
+    if not isinstance(levels, list):
+        return out
+    for level in levels:
+        value = level.get("price") if isinstance(level, dict) else level
+        if isinstance(value, (int, float)) and value > 0:
+            out.append(float(value))
+    return out[:3]
+
+
+def _plan_validation(
+    ctx: AnalysisContext,
+    plan: Any,
+) -> dict[str, Any]:
+    """Verify an actionable model plan against quoted price and structure.
+
+    This intentionally returns evidence or a reason, never replacement prices.
+    Callers remove plans whose status is ``unavailable`` so only a validated
+    setup can reach the trader-facing card or outcome tracker.
+    """
+    if plan is None or plan.recommendation not in {"buy", "sell"}:
+        return {"status": "not_applicable"}
+
+    data_status = (ctx.data_status or "UNKNOWN").upper()
+    if data_status in _PLAN_BLOCKING_DATA_STATUSES:
+        return {
+            "status": "unavailable",
+            "reason": f"Market data is {data_status.lower()}, so no actionable setup was validated.",
+        }
+
+    price = ctx.price
+    lo, hi = plan.entry_zone_low, plan.entry_zone_high
+    entry = (lo + hi) / 2 if lo is not None and hi is not None else lo if lo is not None else hi
+    if price is None or entry is None or plan.stop_loss is None or not plan.targets:
+        return {
+            "status": "unavailable",
+            "reason": "Entry, stop, target, and current quote are required to validate an actionable setup.",
+        }
+    if abs(entry - price) / price > _MAX_ENTRY_DISTANCE_FROM_QUOTE:
+        return {
+            "status": "unavailable",
+            "reason": "The proposed entry is too far from the current quote to validate safely.",
+        }
+    if abs(entry - plan.stop_loss) / entry > _MAX_STOP_DISTANCE_FROM_ENTRY:
+        return {
+            "status": "unavailable",
+            "reason": "The proposed stop is too far from entry to validate against current structure.",
+        }
+
+    supports = _structural_prices(ctx.support_resistance, "supports")
+    resistances = _structural_prices(ctx.support_resistance, "resistances")
+    if not supports or not resistances:
+        return {
+            "status": "unavailable",
+            "reason": "Current support and resistance evidence is insufficient to validate an actionable setup.",
+        }
+
+    first_target = plan.targets[0]
+    if plan.recommendation == "buy":
+        nearest_support = max(supports)
+        furthest_resistance = max(resistances)
+        if plan.stop_loss > nearest_support * 1.03:
+            return {
+                "status": "unavailable",
+                "reason": "The buy stop is not anchored at or below nearby support.",
+            }
+        if first_target > furthest_resistance * (1 + _MAX_TARGET_DISTANCE_PAST_STRUCTURE):
+            return {
+                "status": "unavailable",
+                "reason": "The buy target extends too far beyond visible resistance.",
+            }
+    else:
+        nearest_resistance = min(resistances)
+        furthest_support = min(supports)
+        if plan.stop_loss < nearest_resistance * 0.97:
+            return {
+                "status": "unavailable",
+                "reason": "The sell stop is not anchored at or above nearby resistance.",
+            }
+        if first_target < furthest_support * (1 - _MAX_TARGET_DISTANCE_PAST_STRUCTURE):
+            return {
+                "status": "unavailable",
+                "reason": "The sell target extends too far beyond visible support.",
+            }
+
+    return {
+        "status": "verified",
+        "quote_price": round(price, 2),
+        "supports": [round(level, 2) for level in supports],
+        "resistances": [round(level, 2) for level in resistances],
+        "data_status": data_status,
+    }
 
 
 def _uncertainty(

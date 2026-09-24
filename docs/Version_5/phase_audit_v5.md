@@ -1535,3 +1535,24 @@ until the line is removed. The end-to-end evaluation pins these defaults
   cache, regime, and timeframe-score rendering. The focused backend suite
   passed with 133 tests and 17 subtests, the panel suite passed with 4 tests,
   and the production frontend build compiled successfully.
+
+## AI Analysis trade-plan safety gate (2026-09-24)
+
+- **Deterministic validation.** Model-proposed Buy/Sell levels are now
+  checked after parsing against the current quote and engine-derived support /
+  resistance. The gate requires quote, entry, stop, target, and both sides of
+  structural evidence; it rejects stale/error/unknown data, entries too far
+  from the quote, oversized stops, and targets materially beyond visible
+  structure. It never invents replacement prices.
+- **Safe neutral outcome.** A rejected actionable plan is removed from the
+  response while the analysis narrative remains available. The response
+  carries a server-authored validation status and reason, and the panel shows
+  `No validated trade setup` instead of presenting unsupported levels.
+- **Tracker integrity.** Only a verified Buy/Sell plan reaches the trade-plan
+  outcome tracker. Hold/Avoid plans and withheld plans do not enter future
+  performance calibration.
+- **Regression coverage.** Tests cover verified structural anchoring, missing
+  support/resistance, distant entries, stale-data suppression, API
+  serialization, tracker exclusion, and panel rendering. The focused backend
+  suite passed with 136 tests and 17 subtests, the panel suite passed with 5
+  tests, the production frontend build compiled, and Ruff/diff checks passed.

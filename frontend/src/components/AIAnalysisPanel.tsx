@@ -446,9 +446,25 @@ export function AIAnalysisPanel({ symbol, timeframe = DEFAULT_TIMEFRAME }: AIAna
               <p className="tp-invalidation">
                 <b>Invalidation:</b> {highlightMessage(analysis.trade_plan.invalidation, [symbol])}
               </p>
+              {analysis.trade_plan_validation?.status === 'verified' && (
+                <p className="tp-validation">
+                  ✓ Validated against quote {analysis.trade_plan_validation.quote_price != null
+                    ? money(analysis.trade_plan_validation.quote_price) : '—'}
+                  {analysis.trade_plan_validation.supports?.length
+                    ? ` · support ${analysis.trade_plan_validation.supports.map(money).join(', ')}` : ''}
+                  {analysis.trade_plan_validation.resistances?.length
+                    ? ` · resistance ${analysis.trade_plan_validation.resistances.map(money).join(', ')}` : ''}
+                </p>
+              )}
               <p className="tp-disclaimer">
                 Research to inform your own decision — not personalized financial advice.
               </p>
+            </div>
+          )}
+
+          {analysis.trade_plan_validation?.status === 'unavailable' && (
+            <div className="ai-plan-unavailable" role="status">
+              <b>No validated trade setup.</b> {analysis.trade_plan_validation.reason}
             </div>
           )}
 
