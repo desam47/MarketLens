@@ -42,7 +42,6 @@
 *::-webkit-scrollbar-thumb:hover {
   background: #4b5563;
 }
-
 * {
   box-sizing: border-box;
   margin: 0;
@@ -8804,4 +8803,619 @@ a.news-headline:hover {
   .watchlist-intelligence-grid.signals { grid-template-columns: 1fr; }
   .watchlist-intelligence-header { display: grid; }
   .watchlist-intelligence-status { align-items: flex-start; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   PREMIUM SYSTEM HEALTH — Full Design System
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* ── Page Shell ──────────────────────────────────────────────────── */
+.system-health {
+  padding: 2rem 2.5rem;
+  max-width: 1600px;
+  margin: 0 auto;
+}
+
+.health-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 2rem;
+}
+
+.health-header h1 {
+  font-size: 1.75rem;
+  font-weight: 800;
+  background: linear-gradient(135deg, #f1f5f9 0%, #94a3b8 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  letter-spacing: -0.02em;
+}
+
+.health-header-actions {
+  display: flex;
+  gap: 0.75rem;
+}
+
+/* ── Status Banner ───────────────────────────────────────────────── */
+.health-banner {
+  background: linear-gradient(135deg, rgba(15, 23, 42, 0.9) 0%, rgba(30, 41, 59, 0.6) 100%);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 1rem;
+  padding: 1.5rem 2.5rem;
+  margin-bottom: 2rem;
+  display: flex;
+  align-items: center;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255,255,255,0.05);
+  backdrop-filter: blur(12px);
+  gap: 0;
+}
+
+.health-banner-metrics {
+  display: flex;
+  gap: 0;
+  flex: 1;
+}
+
+.health-banner-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0 2.5rem;
+  border-right: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.health-banner-metric:first-child { padding-left: 0; }
+.health-banner-metric:last-child { border-right: none; }
+
+.health-banner-metric .label {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+}
+
+.health-banner-metric .value {
+  font-size: 1.4rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  color: #f1f5f9;
+}
+
+/* ── Pulse Animations ────────────────────────────────────────────── */
+.status-pulse {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.status-pulse.pulse-ok {
+  background-color: #10b981;
+  box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.6);
+  animation: pulse-green 2.5s ease-in-out infinite;
+}
+
+.status-pulse.pulse-warning {
+  background-color: #f59e0b;
+  box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.6);
+  animation: pulse-yellow 2.5s ease-in-out infinite;
+}
+
+.status-pulse.pulse-error {
+  background-color: #ef4444;
+  box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.6);
+  animation: pulse-red 2.5s ease-in-out infinite;
+}
+
+@keyframes pulse-green {
+  0%   { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.6); }
+  60%  { box-shadow: 0 0 0 8px rgba(16, 185, 129, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+}
+
+@keyframes pulse-yellow {
+  0%   { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.6); }
+  60%  { box-shadow: 0 0 0 8px rgba(245, 158, 11, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0); }
+}
+
+@keyframes pulse-red {
+  0%   { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.6); }
+  60%  { box-shadow: 0 0 0 8px rgba(239, 68, 68, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+}
+
+/* ── Health Grid & Cards ─────────────────────────────────────────── */
+.health-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1.25rem;
+}
+
+.health-card {
+  background: linear-gradient(145deg, rgba(15, 23, 42, 0.95) 0%, rgba(30, 41, 59, 0.7) 100%);
+  border: 1px solid rgba(148, 163, 184, 0.1);
+  border-radius: 1rem;
+  padding: 1.5rem;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.2);
+  position: relative;
+  overflow: hidden;
+}
+
+.health-card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(148, 163, 184, 0.2), transparent);
+}
+
+.health-card:hover {
+  border-color: rgba(148, 163, 184, 0.22);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.3);
+  transform: translateY(-1px);
+}
+
+.health-card h2 {
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  margin: 0 0 1.25rem 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.health-card h2::before {
+  content: '';
+  width: 3px;
+  height: 14px;
+  background: linear-gradient(to bottom, #6366f1, #8b5cf6);
+  border-radius: 2px;
+  display: inline-block;
+}
+
+.health-card h3 {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: rgba(148, 163, 184, 0.7);
+  margin: 1.25rem 0 0.75rem 0;
+}
+
+.card-loading-skeleton {
+  opacity: 0.5;
+  animation: card-shimmer 1.5s ease-in-out infinite;
+}
+
+@keyframes card-shimmer {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 0.3; }
+}
+
+/* ── Health Details (key-value rows) ─────────────────────────────── */
+.health-details {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.health-details p {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+  margin: 0;
+  padding: 0.4rem 0;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.06);
+}
+
+.health-details p:last-child { border-bottom: none; }
+
+.health-details p strong {
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 0.8rem;
+  min-width: 120px;
+  flex-shrink: 0;
+}
+
+.health-value { color: #e2e8f0; font-weight: 500; }
+.health-meta  { color: var(--text-muted); font-size: 0.78rem; }
+
+/* ── Status Badges ───────────────────────────────────────────────── */
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.status-badge.status-ok {
+  background: rgba(16, 185, 129, 0.12);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.25);
+}
+
+.status-badge.status-warning {
+  background: rgba(245, 158, 11, 0.12);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.25);
+}
+
+.status-badge.status-error {
+  background: rgba(239, 68, 68, 0.12);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.25);
+}
+
+/* ── Health Status (API card) ────────────────────────────────────── */
+.health-status {
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+}
+
+/* ── Connection Test rows ────────────────────────────────────────── */
+.test-results { display: flex; flex-direction: column; gap: 0.5rem; }
+
+.test-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.5rem 0.75rem;
+  background: rgba(148, 163, 184, 0.04);
+  border-radius: 0.5rem;
+  font-size: 0.85rem;
+}
+
+.test-row:hover { background: rgba(148, 163, 184, 0.08); }
+
+/* ── Ingestion Toggle ────────────────────────────────────────────── */
+.toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 44px;
+  height: 24px;
+  cursor: pointer;
+}
+
+.toggle-switch input { opacity: 0; width: 0; height: 0; }
+
+.toggle-slider {
+  position: absolute;
+  inset: 0;
+  background: rgba(148, 163, 184, 0.2);
+  border-radius: 999px;
+  transition: background 0.3s;
+}
+
+.toggle-slider::before {
+  content: '';
+  position: absolute;
+  width: 18px; height: 18px;
+  left: 3px; top: 3px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform 0.3s;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+}
+
+.toggle-switch input:checked + .toggle-slider { background: #10b981; }
+.toggle-switch input:checked + .toggle-slider::before { transform: translateX(20px); }
+.toggle-switch input:disabled + .toggle-slider { opacity: 0.4; cursor: not-allowed; }
+
+/* ── Circular Progress ───────────────────────────────────────────── */
+.circular-progress-container {
+  display: flex;
+  gap: 1.5rem;
+  margin-top: 1rem;
+}
+
+.circular-progress-wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.circular-progress-wrapper span {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+}
+
+.circular-progress {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.circular-progress::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: conic-gradient(#10b981 var(--progress), rgba(148, 163, 184, 0.1) 0deg);
+  mask: radial-gradient(transparent 55%, black 56%);
+  -webkit-mask: radial-gradient(transparent 55%, black 56%);
+}
+
+.circular-progress-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  z-index: 1;
+}
+
+.circular-progress-inner .pct {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #f1f5f9;
+}
+
+/* ── Provider Rows ───────────────────────────────────────────────── */
+.health-provider-card .info-text {
+  font-size: 0.9rem;
+  margin-bottom: 0.5rem;
+  color: #e2e8f0;
+}
+
+.health-provider-row {
+  background: rgba(148, 163, 184, 0.04);
+  border: 1px solid rgba(148, 163, 184, 0.08);
+  border-radius: 0.75rem;
+  padding: 0.85rem 1rem;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.health-provider-row:hover {
+  background: rgba(148, 163, 184, 0.08);
+  border-color: rgba(148, 163, 184, 0.16);
+}
+
+.provider-name { color: #e2e8f0; font-weight: 600; font-size: 0.9rem; }
+
+.provider-category {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  background: rgba(148, 163, 184, 0.1);
+  padding: 0.15rem 0.4rem;
+  border-radius: 0.3rem;
+}
+
+/* ── Advanced Diagnostics Toggle ─────────────────────────────────── */
+.health-provider-advanced-toggle {
+  background: none;
+  border: 1px solid rgba(99, 102, 241, 0.3);
+  color: #818cf8;
+  cursor: pointer;
+  padding: 0.45rem 1rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  border-radius: 0.5rem;
+  margin-top: 0.75rem;
+  letter-spacing: 0.03em;
+  transition: background 0.2s, color 0.2s, border-color 0.2s;
+}
+
+.health-provider-advanced-toggle:hover {
+  background: rgba(99, 102, 241, 0.12);
+  color: #a5b4fc;
+  border-color: rgba(99, 102, 241, 0.5);
+}
+
+/* ── Provider Observability (expanded) ───────────────────────────── */
+.provider-observability {
+  border-top: 1px solid rgba(148, 163, 184, 0.1);
+  padding-top: 1.25rem;
+  animation: fade-in-down 0.25s ease;
+}
+
+@keyframes fade-in-down {
+  from { opacity: 0; transform: translateY(-8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Entitlement Grid ────────────────────────────────────────────── */
+.provider-entitlement-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.provider-entitlement {
+  background: rgba(148, 163, 184, 0.04);
+  border: 1px solid rgba(148, 163, 184, 0.1);
+  border-radius: 0.75rem;
+  padding: 0.85rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.provider-entitlement strong {
+  font-size: 0.82rem;
+  text-transform: capitalize;
+  color: #e2e8f0;
+}
+
+.provider-entitlement small {
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.provider-timeframe-sources {
+  font-size: 0.7rem !important;
+  color: rgba(148, 163, 184, 0.6) !important;
+  font-family: monospace;
+}
+
+/* ── Provider Event List ─────────────────────────────────────────── */
+.provider-event-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.provider-event-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.5rem 0.75rem;
+  background: rgba(148, 163, 184, 0.04);
+  border-radius: 0.5rem;
+  font-size: 0.8rem;
+  color: #cbd5e1;
+}
+
+.provider-event-row small {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
+/* ── Last Update Feed ────────────────────────────────────────────── */
+.last-update-list-container {
+  max-height: 260px;
+  overflow-y: auto;
+  border-radius: 0.75rem;
+  border: 1px solid rgba(148, 163, 184, 0.1);
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148,163,184,0.2) transparent;
+}
+
+.last-update-list { padding: 0.75rem; }
+
+.last-update-row {
+  display: grid;
+  grid-template-columns: 80px 1fr 1fr 1fr 90px;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0.5rem;
+  border-radius: 0.4rem;
+  font-size: 0.8rem;
+}
+
+.last-update-header {
+  font-size: 0.7rem !important;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted) !important;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+  margin-bottom: 0.4rem;
+  background: none !important;
+}
+
+.last-update-row:not(.last-update-header):hover {
+  background: rgba(148, 163, 184, 0.05);
+}
+
+/* ── Modal Overlay ───────────────────────────────────────────────── */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(10px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+}
+
+.modal-content {
+  background: linear-gradient(145deg, rgba(15, 23, 42, 0.98) 0%, rgba(30, 41, 59, 0.95) 100%);
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  padding: 2.5rem;
+  border-radius: 1.25rem;
+  width: 90%;
+  max-width: 440px;
+  text-align: center;
+  box-shadow: 0 30px 60px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255,255,255,0.06);
+  animation: modal-pop 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+@keyframes modal-pop {
+  from { transform: scale(0.85); opacity: 0; }
+  to   { transform: scale(1); opacity: 1; }
+}
+
+.modal-content h2 { margin-top: 0; margin-bottom: 0.75rem; font-size: 1.25rem; }
+.modal-content p  { color: var(--text-muted); margin-bottom: 2rem; line-height: 1.6; }
+.modal-actions    { display: flex; justify-content: center; gap: 0.75rem; }
+
+/* ── Restarting Spinner ──────────────────────────────────────────── */
+.restarting-spinner {
+  width: 48px;
+  height: 48px;
+  border: 3px solid rgba(148, 163, 184, 0.15);
+  border-top-color: #10b981;
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+  margin: 0 auto 1.5rem;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Misc text helpers ───────────────────────────────────────────── */
+.info-text  { color: var(--text-muted); font-size: 0.85rem; margin: 0; }
+.error-text { color: #f87171; font-size: 0.85rem; margin: 0; }
+
+/* ── Quick Tips section ──────────────────────────────────────────── */
+.health-info { border-top: 1px solid rgba(148, 163, 184, 0.08); margin-top: 3rem; padding-top: 1.5rem; }
+.health-info h3 { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.07em; color: var(--text-muted); margin-bottom: 0.75rem; }
+.health-info ul { color: var(--text-muted); font-size: 0.82rem; padding-left: 1.25rem; display: flex; flex-direction: column; gap: 0.4rem; }
+
+/* ── Config source badge ─────────────────────────────────────────── */
+.config-source-badge {
+  font-size: 0.65rem !important;
+  background: rgba(16, 185, 129, 0.15) !important;
+  color: #34d399 !important;
+  border: 1px solid rgba(16, 185, 129, 0.25) !important;
+  padding: 0.15rem 0.4rem !important;
+  border-radius: 0.3rem !important;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+/* ── Responsive ──────────────────────────────────────────────────── */
+@media (max-width: 1100px) {
+  .health-grid { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 680px) {
+  .health-grid { grid-template-columns: 1fr; }
+  .health-banner { flex-direction: column; padding: 1.25rem; }
+  .health-banner-metrics { flex-direction: column; gap: 1rem; }
+  .health-banner-metric { padding: 0; border-right: none; border-bottom: 1px solid rgba(148, 163, 184, 0.12); padding-bottom: 1rem; }
+  .system-health { padding: 1rem; }
 }

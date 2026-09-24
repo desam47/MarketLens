@@ -136,13 +136,13 @@ A finished background (template) job had none of the following:
 - `uncertainty_reason` and the confidence-calibration fields.
 
 In the panel:
-- **Evidence card:** it reads "Source timestamp unavailable" with an unknown
+- **Evidence card:** it read "Source timestamp unavailable" with an unknown
   data status.
-- **Verified plans:** they show without the "✓ Validated against quote" line
-  and without **Track this setup**.
-- **Withheld plans:** they vanish with no "No validated trade setup" note.
+- **Verified plans:** they showed without the "✓ Validated against quote"
+  line and without **Track this setup**.
+- **Withheld plans:** they vanished with no "No validated trade setup" note.
 
-The plan itself is still safe: an unvalidated plan is removed before this
+The plan itself was still safe: an unvalidated plan is removed before this
 point.
 
 **Reproduced:** running the task on a complete result produced a payload
