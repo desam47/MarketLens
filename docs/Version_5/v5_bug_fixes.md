@@ -1,8 +1,8 @@
 # Version 5 Chat Bug Fixes
 
 **Created:** 2026-09-24
-**Last updated:** 2026-09-24 (batch 11: natural reply wording)
-**Status:** All items and gaps complete. Batches 1 to 7 are committed (batch 3's migration is applied to the live DB); batch 8 (the four gaps) is committed too. Batch 9 (follow-ups, live checks, isolated e2e) is committed too; batch 10 (daily-close freshness) is committed too; batch 11 (natural reply wording) is committed too. Nothing is pushed.
+**Last updated:** 2026-09-24 (batch 12: `chat.py` split into six modules)
+**Status:** All items and gaps complete. Batches 1 to 7 are committed (batch 3's migration is applied to the live DB); batch 8 (the four gaps) is committed too. Batch 9 (follow-ups, live checks, isolated e2e) is committed too; batch 10 (daily-close freshness) is committed too; batch 11 (natural reply wording) is committed too; batch 12 (the `chat.py` split) is committed too. Nothing is pushed.
 **Scorecard:** 20 ✅ COMPLETE, 0 ⚠️ PARTIAL, 0 ❌ NOT STARTED, 0 🟡 DEFERRED.
 **Source:** 2026-09-24 Chat review of `backend/ai/chat.py`, `backend/api/ai/chat_router.py`, `backend/repositories/chat_repository.py`, `frontend/src/components/ChatPanel.tsx`, and `frontend/src/services/api.ts`.
 **Related:** [Phase audit](phase_audit_v5.md), [Version 5 plan](v5_plan.md)
@@ -22,6 +22,9 @@ Line numbers refer to the code as of batch 6. Each batch shifts
 `chat.py` (batch 1 added about 40 lines near the top, batch 2 about 120
 more, batch 4 about 30, batch 5 about 110; batch 6 moved the generation
 code), so line numbers quoted in older notes or commits will not match.
+Since batch 12, most functions named here live in sibling modules
+(`chat_actions`, `chat_routing`, `chat_model`, `chat_intents`,
+`chat_replies`); see "Splitting `chat.py`" under Enhancements.
 
 ## Scorecard
 
@@ -49,16 +52,22 @@ code), so line numbers quoted in older notes or commits will not match.
 | BF-20 | Low | Tests | Two context tests expect an inferred "live" quote status | Verified | ✅ COMPLETE |
 
 **Next:** nothing left in the tracker; the gaps (batch 8), the
-follow-ups (batch 9) and daily-close freshness (batch 10) are fixed. What
-remains:
+follow-ups (batch 9), daily-close freshness (batch 10), reply wording
+(batch 11) and the `chat.py` split (batch 12) are done. The full e2e
+suite passed after batches 11 and 12 (31 of 31). What remains:
 - **Push:** push `development` when you want it on `origin`.
-- **Split `chat.py`:** the one open enhancement (see Enhancements). It is
-  a large refactor with no behaviour change. It needs a decision first:
-  tests patch names on `backend.ai.chat` (`ai_manager`, `build_context`
-  and others), and code moved to another module stops seeing those
-  patches.
-- **Full e2e run:** only group A (4 of 34 tests) was run on the isolated
-  servers.
+- **Time-dependent test network use (new, open):** during market hours,
+  `test_news_question_pulls_news` and `test_add_to_watchlist_end_to_end`
+  run the real `why_did_it_move` / bars path. Provider availability
+  checks and the live daily bar then try Finnhub, Alpaca and Yahoo. The
+  guard blocks every attempt and both tests pass, but their results
+  depend on the time of day. The same attempts happen on the pre-split
+  code (checked on a clean checkout of `8f2d5c5` with the same `.env`),
+  and the early-morning full-suite runs showed none. It also depends on
+  test order: the full suite at 11:20 ET, in session, showed none, while
+  runs of `backend/tests/ai` and `backend/tests/api` alone did. The fix is to patch
+  the tool in those tests, or to make the provider availability checks
+  offline under the guard.
 
 Done in batch 9:
 - **Checked in the running app** (headless Chromium via Playwright,
@@ -1133,10 +1142,74 @@ question gave the replies above, both with Answer verification VERIFIED.
 4. ~~**Verification-gated streaming**~~: action turns are held (batch 6)
    and other streamed text is labeled as a draft (already in `f24b4cf`),
    BF-08.
-5. **Split `chat.py`:** the module is ~5,700 lines. Split it into intent
-   routing, actions, turn orchestration and formatting.
+5. ~~**Split `chat.py`**~~: done in batch 12. See "Splitting `chat.py`"
+   below.
+
+### Splitting `chat.py` (batch 12)
+
+`chat.py` was 5,937 lines. It is now six modules, split by what each
+does. Each imports only from the ones listed after it, so there are no
+import cycles:
+
+| Module | Lines | Holds |
+|---|---|---|
+| `chat.py` | ~1,350 | Turn orchestration: context assembly (`_prepare_turn`), the one generation path (`_reply_events`), persistence (`_finish_turn`, `answer_chat_message`, `stream_chat_message`) |
+| `chat_routing.py` | ~580 | Replies without the model: `_build_deterministic_chat_reply`, `_run_deterministic_shortcircuit`, `_confirm_pending_action` |
+| `chat_actions.py` | ~2,320 | Action handlers (alerts, watchlists, backtest, screen), market tools (`_run_market_tool`), multi-step turns (`_run_turn_actions`, `_finalize_parsed`) |
+| `chat_model.py` | ~360 | Model calls: routing, `_complete_and_parse`, `_stream_and_parse`, retries, turn budgets; the only module holding `ai_manager` |
+| `chat_intents.py` | ~560 | Regex intents and text parsing (calculator inputs, dates, watchlist names); no I/O |
+| `chat_replies.py` | ~1,020 | Plain-sentence replies from verified results |
+
+**How it was done:** the move was mechanical, by a script; apart from the
+one pre-edit below, no function body changed:
+- **Boundaries:** chosen from a reference graph of the 221 top-level
+  names, and checked for import cycles before any code moved.
+- **Each item moved with its leading comments** and kept its order; each
+  module got `chat.py`'s imports and its own `logger`, and `ruff`
+  pruned the unused imports.
+- **One pre-edit:** so that a test patching `ai_manager` covers every
+  caller, `chat.py` and the backtest handler now read it through
+  `_ai_enabled()` and `_ai_setting()` in `chat_model`.
+
+**Tests and harness retargeted:** a patch replaces a name where it is
+looked up, so patch strings now name the module that uses each name:
+- `ai_manager` goes to `chat_model` (61 patches).
+- `default_registry`, `analyze_symbol`, `_run_action`,
+  `_kickoff_backfill`, `_ACTION_HANDLERS` and `_is_regular_market_closed`
+  go to `chat_actions`.
+- `now_ny` for the routing test goes to `chat_routing`; it still
+  resolves on `chat`, so this one was changed by hand.
+- Imports of moved names were rewritten to their new modules.
+- The Phase 5.8 evaluation harness (`evaluations/chat_runner.py`) got the
+  same changes.
+- Four comments that named `backend.ai.chat.<function>` now name the new
+  module.
+
+**Checks:**
+- **Suites:** `backend/tests/ai` and `backend/tests/api`, 1,551 passed
+  (the only test directories that use these modules).
+- **Lint:** `ruff` is clean on all six modules.
+- **Dev server:** it reloaded cleanly.
+- **Browser:** the full e2e suite passed, 31 of 31, on the isolated
+  servers.
+- **Network attempts:** the guard's report showed attempts in two tests;
+  see the time-dependent network item in "Next". They are not from the
+  split.
 
 ## Verification
+
+### Batch 12 (2026-09-24): `chat.py` split
+
+| Suite | Result |
+|---|---|
+| `backend/tests/ai`, `backend/tests/api` | 1,551 passed, 30 subtests passed |
+| `backend/tests/ai`, `backend/tests/api`, `backend/tests/engines` (before the docstring edit) | 1,630 passed |
+| `ruff` on the six Chat modules and every rewritten file | clean |
+| Full e2e suite on the isolated servers | 31 passed in 2.4 min; live chat unchanged |
+| Dev server | reloaded with the new modules, health 200 |
+
+**Full backend suite (run before the batch 12 commit):** 3,380 passed, 49
+subtests passed, 0 failed, in 45 s; no blocked outbound network attempts.
 
 ### Batch 11 (2026-09-24): natural reply wording
 
@@ -1179,6 +1252,7 @@ Neither full suite was run.
 | `frontend/src/components/ChatPanel.test.tsx` | 61 passed (1 new) |
 | `tsc --noEmit` | 0 errors |
 | e2e group A on the isolated servers | 4 passed; live chat unchanged |
+| Full e2e suite on the isolated servers (run after batch 11) | 31 passed in 2.1 min; live chat unchanged |
 
 **Mutation check:** removing each fix fails its tests:
 - suffix scaling fails 1;
@@ -1340,7 +1414,8 @@ The full backend suite was not run.
 - **Batch 8 (gaps):** commit `58abaf1`, `fix(chat): confirm Clear, refuse bare history wipes, keep notebook save off the event loop`, on `development`.
 - **Batch 9 (follow-ups):** commit `8ce8fa9`, `fix(chat): read $10k account sizes, ask Yahoo for BRK-B, label question steps, isolate e2e`, on `development`.
 - **Batch 10 (daily-close freshness):** commit `be6ba00`, `fix(chat): judge daily data by session date, not a 15-minute age limit`, on `development`.
-- **Batch 11 (reply wording):** commit `fix(chat): write server replies as plain sentences`, on `development`.
+- **Batch 11 (reply wording):** commit `8f2d5c5`, `fix(chat): write server replies as plain sentences`, on `development`.
+- **Batch 12 (`chat.py` split):** commit `refactor(chat): split chat.py into six modules by role`, on `development`.
 
 | Date | ID | Status | Commit | Files | Tests | Notes |
 |---|---|---|---|---|---|---|
@@ -1371,3 +1446,4 @@ The full backend suite was not run.
 | 2026-09-24 | Follow-ups | ✅ FIXED | batch 9 | `backend/ai/chat.py`, `backend/market_data/providers/yfinance_provider.py`, `frontend/src/components/ChatPanel.tsx`, `frontend/src/services/api.ts`, `frontend/src/styles/App.css`, `e2e/playwright.config.ts`, `e2e/tests/chat.spec.ts`, plus tests | 6 new, 3 updated | `$10k` account sizes; `BRK.B` at Yahoo; `needs_input` step status; isolated e2e servers; live checks in the running app. |
 | 2026-09-24 | Daily freshness | ✅ FIXED | batch 10 | `backend/engines/market_calendar.py`, `backend/ai/response_blocks.py`, `backend/ai/tool_registry.py`, `backend/ai/market_tools.py`, `backend/ai/chat.py`, `frontend/src/components/ChatPanel.tsx`, plus tests | 13 new, 1 updated | Daily evidence judged by session date; age from the close; price statistics end at the last completed session; daily comparisons usable in session; ages shown as "19 h". |
 | 2026-09-24 | Reply wording | ✅ FIXED | batch 11 | `backend/ai/chat.py`, `backend/ai/evaluations/phase_5_8_chat_cases.json`, 6 test files | 23 assertions updated, 1 added | Server replies in plain sentences; mid-session comparisons no longer claim the market is closed. |
+| 2026-09-24 | Split `chat.py` | ✅ DONE | batch 12 | `backend/ai/chat.py` plus 5 new `chat_*.py` modules, `evaluations/chat_runner.py`, 12 test files, 3 comment-only files | 0 behaviour changes | 5,937-line module split into six by role; no cycles; tests patch where names are used. |

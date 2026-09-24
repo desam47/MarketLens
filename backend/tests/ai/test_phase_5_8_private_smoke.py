@@ -8,13 +8,12 @@ the private journal prose.
 
 import json
 
-from backend.ai.chat import _run_market_tool
+from backend.ai.chat_actions import _run_market_tool
 from backend.ai.chat_observability import build_turn_observability
 from backend.ai.market_tools import (
     JournalCoachRequest,
-    PositionInput,
     PortfolioRiskRequest,
-    TradeJournalRequest,
+    PositionInput,
     _Payload,
     assess_portfolio_risk_tool,
     get_risk_dashboard_tool,

@@ -82,7 +82,7 @@ def _model(monkeypatch, *, raw_replies: list[str | None | Exception], streaming:
 
     mock_ai.complete = AsyncMock(side_effect=complete)
     mock_ai.stream = MagicMock(side_effect=stream)
-    monkeypatch.setattr("backend.ai.chat.ai_manager", mock_ai)
+    monkeypatch.setattr("backend.ai.chat_model.ai_manager", mock_ai)
     return mock_ai
 
 
@@ -124,7 +124,7 @@ class TestLegacyNoDataTurnWatchlistAdd(unittest.TestCase):
         for target, kwargs in (
             ("backend.repositories.chat_repository.SessionLocal", {"new": self.Session}),
             ("backend.ai.chat.build_market_baseline", {"return_value": {}}),
-            ("backend.ai.chat._kickoff_backfill", {}),
+            ("backend.ai.chat_actions._kickoff_backfill", {}),
             ("backend.ai.chat.extract_unresolved_explicit_symbols", {"return_value": []}),
             ("backend.ai.chat.resolve_turn_symbols", {"return_value": (["RIVN"], False)}),
             ("backend.ai.chat.build_context", {"side_effect": InsufficientDataError("no data")}),
@@ -139,7 +139,7 @@ class TestLegacyNoDataTurnWatchlistAdd(unittest.TestCase):
         self.session_id = session.id
         db.close()
 
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_model.ai_manager")
     def test_stream_adds_the_no_data_ticker_to_a_watchlist(self, mock_ai):
         mock_ai.enabled = False
 
@@ -167,7 +167,7 @@ class TestStreamedTextGate(_Base):
         return list(chat.stream_chat_message(self.session.id, content))
 
     @patch("backend.ai.chat.build_context")
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_model.ai_manager")
     def test_an_action_request_streams_no_model_text(self, mock_ai, mock_ctx):
         """The model's placeholder ("Done — alert set…") is replaced by the
         app's own result; streaming it first showed a completion the app
@@ -186,7 +186,7 @@ class TestStreamedTextGate(_Base):
         self.assertIn("set for AAPL", final.content)
         self.assertNotIn("Done — alert set for AAPL above 200.", final.content)
 
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_model.ai_manager")
     def test_an_action_seen_early_in_the_json_stops_the_stream(self, mock_ai):
         self.mock_resolve.return_value = ([], False)
         mock_ai.is_available = AsyncMock(return_value=True)
@@ -203,7 +203,7 @@ class TestStreamedTextGate(_Base):
         self.assertEqual([payload for kind, payload in events if kind == "delta"], [])
 
     @patch("backend.ai.chat.build_context")
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_model.ai_manager")
     def test_non_streaming_provider_emits_no_delta_for_an_action(self, mock_ai, mock_ctx):
         self.mock_resolve.return_value = (["AAPL"], False)
         mock_ctx.return_value.compact.return_value = WARM_CTX
@@ -236,7 +236,7 @@ class TestTurnStartAndDisconnect(_Base):
 
         self.assertEqual(self._stored(), [])
 
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_model.ai_manager")
     def test_the_user_row_exists_by_meta_and_the_transcript_stays_in_order(self, mock_ai):
         mock_ai.enabled = False
         chat.answer_chat_message(self.session.id, "first question")

@@ -285,9 +285,9 @@ def test_parser_asks_instead_of_guessing(text, symbols, fragment) -> None:
 
 
 def _route(text, symbols, planner_state=None):
-    from backend.ai.chat import _build_deterministic_chat_reply
+    from backend.ai.chat_routing import _build_deterministic_chat_reply
 
-    with patch("backend.ai.chat.now_ny", lambda: datetime(2026, 9, 24, 12, 0)):
+    with patch("backend.ai.chat_routing.now_ny", lambda: datetime(2026, 9, 24, 12, 0)):
         return _build_deterministic_chat_reply(text, focus_symbols=symbols, planner_state=planner_state or {})
 
 
@@ -330,7 +330,7 @@ def test_a_bare_it_no_longer_reruns_the_last_calculation() -> None:
 
 
 class TestPriceStatisticsTurn(_Base):
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_model.ai_manager")
     @patch("backend.ai.chat.build_context")
     def test_drawdown_question_is_answered_and_verified(self, mock_ctx, mock_ai):
         self.mock_resolve.return_value = (["TSLA"], False)

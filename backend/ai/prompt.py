@@ -880,7 +880,7 @@ class ChatReplyResponse(BaseModel):
     # often than it mangles an extra top-level key (see the null-list
     # and dict-repr fixes this session). "none" (the default) means no
     # action this turn. The *_delete_* / remove_* / delete_* / save_to_journal actions are
-    # destructive: backend.ai.chat._finalize_parsed refuses to execute
+    # destructive: backend.ai.chat_actions._finalize_parsed refuses to execute
     # them without a server-authored confirmation regardless of what the prompt
     # says — see CHAT_SYSTEM_PROMPT rule 10 for when the model may set
     # them.

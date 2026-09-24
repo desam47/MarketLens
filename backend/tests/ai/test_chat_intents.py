@@ -2,12 +2,8 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 from backend.ai.answer_verifier import assign_evidence_ids, verify_answer
-from backend.ai.chat import (
-    _append_context_evidence,
-    _generate_reply,
-    _generate_reply_streaming,
-    _run_market_tool,
-)
+from backend.ai.chat import _append_context_evidence, _generate_reply, _generate_reply_streaming
+from backend.ai.chat_actions import _run_market_tool
 from backend.ai.prompt import ChatReplyResponse
 from backend.ai.tool_registry import ToolResult
 
@@ -18,9 +14,9 @@ def _symbol_block(symbol: str) -> dict:
 
 def test_options_question_routes_to_typed_tool_without_ai(monkeypatch) -> None:
     complete = Mock()
-    monkeypatch.setattr("backend.ai.chat.ai_manager.complete", complete)
+    monkeypatch.setattr("backend.ai.chat_model.ai_manager.complete", complete)
     monkeypatch.setattr(
-        "backend.ai.chat.default_registry.execute",
+        "backend.ai.chat_actions.default_registry.execute",
         lambda request: ToolResult(
             tool_name=request.tool_name,
             ok=True,
@@ -50,7 +46,7 @@ def test_options_question_routes_to_typed_tool_without_ai(monkeypatch) -> None:
 
 def test_market_overview_routes_to_verified_context_without_ai(monkeypatch) -> None:
     complete = Mock()
-    monkeypatch.setattr("backend.ai.chat.ai_manager.complete", complete)
+    monkeypatch.setattr("backend.ai.chat_model.ai_manager.complete", complete)
     requests = []
 
     def execute(request):
@@ -71,7 +67,7 @@ def test_market_overview_routes_to_verified_context_without_ai(monkeypatch) -> N
             freshness_seconds=60.0,
         )
 
-    monkeypatch.setattr("backend.ai.chat.default_registry.execute", execute)
+    monkeypatch.setattr("backend.ai.chat_actions.default_registry.execute", execute)
     text, grounded, _ = _generate_reply(
         None,
         [],
@@ -94,7 +90,7 @@ def test_market_overview_routes_to_verified_context_without_ai(monkeypatch) -> N
 
 def test_symbol_overview_routes_to_verified_trend_without_ai(monkeypatch) -> None:
     complete = Mock()
-    monkeypatch.setattr("backend.ai.chat.ai_manager.complete", complete)
+    monkeypatch.setattr("backend.ai.chat_model.ai_manager.complete", complete)
     requests = []
 
     def execute(request):
@@ -114,7 +110,7 @@ def test_symbol_overview_routes_to_verified_trend_without_ai(monkeypatch) -> Non
             freshness_seconds=60.0,
         )
 
-    monkeypatch.setattr("backend.ai.chat.default_registry.execute", execute)
+    monkeypatch.setattr("backend.ai.chat_actions.default_registry.execute", execute)
     text, grounded, _ = _generate_reply(
         None,
         [_symbol_block("NVDA")],
@@ -138,9 +134,9 @@ def test_symbol_overview_routes_to_verified_trend_without_ai(monkeypatch) -> Non
 
 def test_indicator_result_formats_value_without_raw_historical_bars(monkeypatch) -> None:
     complete = Mock()
-    monkeypatch.setattr("backend.ai.chat.ai_manager.complete", complete)
+    monkeypatch.setattr("backend.ai.chat_model.ai_manager.complete", complete)
     monkeypatch.setattr(
-        "backend.ai.chat.default_registry.execute",
+        "backend.ai.chat_actions.default_registry.execute",
         lambda request: ToolResult(
             tool_name=request.tool_name,
             ok=True,
@@ -180,7 +176,7 @@ def test_indicator_result_formats_value_without_raw_historical_bars(monkeypatch)
 
 def test_daily_change_formats_previous_close_comparison(monkeypatch) -> None:
     monkeypatch.setattr(
-        "backend.ai.chat.default_registry.execute",
+        "backend.ai.chat_actions.default_registry.execute",
         lambda request: ToolResult(
             tool_name=request.tool_name,
             ok=True,
@@ -215,7 +211,7 @@ def test_daily_change_formats_previous_close_comparison(monkeypatch) -> None:
 
 def test_generic_market_tool_response_is_readable_without_raw_json(monkeypatch) -> None:
     monkeypatch.setattr(
-        "backend.ai.chat.default_registry.execute",
+        "backend.ai.chat_actions.default_registry.execute",
         lambda request: ToolResult(
             tool_name=request.tool_name,
             ok=True,
@@ -255,7 +251,7 @@ def test_streaming_symbol_overview_uses_the_same_typed_route(monkeypatch) -> Non
             freshness_seconds=60.0,
         )
 
-    monkeypatch.setattr("backend.ai.chat.default_registry.execute", execute)
+    monkeypatch.setattr("backend.ai.chat_actions.default_registry.execute", execute)
     turn = SimpleNamespace(
         symbol_blocks=[_symbol_block("NVDA")],
         unavailable=[],
@@ -303,7 +299,7 @@ def test_prompt_context_is_available_to_the_answer_verifier() -> None:
 
 def test_options_question_requires_symbol_scope(monkeypatch) -> None:
     complete = Mock()
-    monkeypatch.setattr("backend.ai.chat.ai_manager.complete", complete)
+    monkeypatch.setattr("backend.ai.chat_model.ai_manager.complete", complete)
 
     text, grounded, _ = _generate_reply(
         None,
@@ -325,7 +321,7 @@ def test_options_question_requires_symbol_scope(monkeypatch) -> None:
 
 def test_historical_question_uses_remembered_timeframe(monkeypatch) -> None:
     complete = Mock()
-    monkeypatch.setattr("backend.ai.chat.ai_manager.complete", complete)
+    monkeypatch.setattr("backend.ai.chat_model.ai_manager.complete", complete)
     requests = []
 
     def execute(request):
@@ -338,7 +334,7 @@ def test_historical_question_uses_remembered_timeframe(monkeypatch) -> None:
             timeframe="1h",
         )
 
-    monkeypatch.setattr("backend.ai.chat.default_registry.execute", execute)
+    monkeypatch.setattr("backend.ai.chat_actions.default_registry.execute", execute)
     text, grounded, _ = _generate_reply(
         None,
         [_symbol_block("MSFT")],
@@ -360,7 +356,7 @@ def test_historical_question_uses_remembered_timeframe(monkeypatch) -> None:
 
 def test_why_move_routes_to_evidence_tool(monkeypatch) -> None:
     complete = Mock()
-    monkeypatch.setattr("backend.ai.chat.ai_manager.complete", complete)
+    monkeypatch.setattr("backend.ai.chat_model.ai_manager.complete", complete)
     requests = []
 
     def execute(request):
@@ -372,7 +368,7 @@ def test_why_move_routes_to_evidence_tool(monkeypatch) -> None:
             provider="MarketLens composite",
         )
 
-    monkeypatch.setattr("backend.ai.chat.default_registry.execute", execute)
+    monkeypatch.setattr("backend.ai.chat_actions.default_registry.execute", execute)
     text, grounded, _ = _generate_reply(
         None,
         [_symbol_block("AAPL")],
@@ -394,7 +390,7 @@ def test_why_move_routes_to_evidence_tool(monkeypatch) -> None:
 
 def test_what_changed_routes_to_comparison_tool(monkeypatch) -> None:
     complete = Mock()
-    monkeypatch.setattr("backend.ai.chat.ai_manager.complete", complete)
+    monkeypatch.setattr("backend.ai.chat_model.ai_manager.complete", complete)
     requests = []
 
     def execute(request):
@@ -406,7 +402,7 @@ def test_what_changed_routes_to_comparison_tool(monkeypatch) -> None:
             provider="MarketLens comparison",
         )
 
-    monkeypatch.setattr("backend.ai.chat.default_registry.execute", execute)
+    monkeypatch.setattr("backend.ai.chat_actions.default_registry.execute", execute)
     text, grounded, _ = _generate_reply(
         None,
         [_symbol_block("AAPL")],
@@ -429,7 +425,7 @@ def test_what_changed_routes_to_comparison_tool(monkeypatch) -> None:
 
 def test_watchlist_semantics_route_without_model_guessing(monkeypatch) -> None:
     complete = Mock()
-    monkeypatch.setattr("backend.ai.chat.ai_manager.complete", complete)
+    monkeypatch.setattr("backend.ai.chat_model.ai_manager.complete", complete)
     requests = []
 
     def execute(request):
@@ -451,7 +447,7 @@ def test_watchlist_semantics_route_without_model_guessing(monkeypatch) -> None:
             source_timestamp="2026-09-23T14:00:00-04:00",
         )
 
-    monkeypatch.setattr("backend.ai.chat.default_registry.execute", execute)
+    monkeypatch.setattr("backend.ai.chat_actions.default_registry.execute", execute)
     text, grounded, _ = _generate_reply(
         None,
         [],
@@ -474,7 +470,7 @@ def test_watchlist_semantics_route_without_model_guessing(monkeypatch) -> None:
 
 def test_private_holdings_weakness_does_not_broaden_to_watchlists(monkeypatch) -> None:
     complete = Mock()
-    monkeypatch.setattr("backend.ai.chat.ai_manager.complete", complete)
+    monkeypatch.setattr("backend.ai.chat_model.ai_manager.complete", complete)
     requests = []
 
     def execute(request):
@@ -489,7 +485,7 @@ def test_private_holdings_weakness_does_not_broaden_to_watchlists(monkeypatch) -
             provider="MarketLens local dashboard",
         )
 
-    monkeypatch.setattr("backend.ai.chat.default_registry.execute", execute)
+    monkeypatch.setattr("backend.ai.chat_actions.default_registry.execute", execute)
     text, grounded, _ = _generate_reply(
         None,
         [],
@@ -511,7 +507,7 @@ def test_private_holdings_weakness_does_not_broaden_to_watchlists(monkeypatch) -
 
 def test_portfolio_change_uses_private_scope_and_explains_missing_snapshot(monkeypatch) -> None:
     complete = Mock()
-    monkeypatch.setattr("backend.ai.chat.ai_manager.complete", complete)
+    monkeypatch.setattr("backend.ai.chat_model.ai_manager.complete", complete)
     requests = []
 
     def execute(request):
@@ -526,7 +522,7 @@ def test_portfolio_change_uses_private_scope_and_explains_missing_snapshot(monke
             provider="MarketLens local dashboard",
         )
 
-    monkeypatch.setattr("backend.ai.chat.default_registry.execute", execute)
+    monkeypatch.setattr("backend.ai.chat_actions.default_registry.execute", execute)
     text, grounded, _ = _generate_reply(
         None,
         [],
@@ -549,7 +545,7 @@ def test_portfolio_change_uses_private_scope_and_explains_missing_snapshot(monke
 
 def test_watchlist_weakness_reports_relative_fallback_when_no_clear_bearish_name(monkeypatch) -> None:
     complete = Mock()
-    monkeypatch.setattr("backend.ai.chat.ai_manager.complete", complete)
+    monkeypatch.setattr("backend.ai.chat_model.ai_manager.complete", complete)
 
     def execute(request):
         return ToolResult(
@@ -574,7 +570,7 @@ def test_watchlist_weakness_reports_relative_fallback_when_no_clear_bearish_name
             provider="MarketLens scanner cache",
         )
 
-    monkeypatch.setattr("backend.ai.chat.default_registry.execute", execute)
+    monkeypatch.setattr("backend.ai.chat_actions.default_registry.execute", execute)
     text, grounded, _ = _generate_reply(
         None,
         [],
@@ -613,7 +609,7 @@ def test_watchlist_tool_persists_server_resolved_scope_for_followups(monkeypatch
             provider="MarketLens scanner cache",
         )
 
-    monkeypatch.setattr("backend.ai.chat.default_registry.execute", execute)
+    monkeypatch.setattr("backend.ai.chat_actions.default_registry.execute", execute)
     parsed = ChatReplyResponse(
         reply="Verified semantic route",
         grounded=True,
@@ -632,7 +628,7 @@ def test_watchlist_tool_persists_server_resolved_scope_for_followups(monkeypatch
 
 def test_watchlist_scope_error_names_the_preserved_scope(monkeypatch) -> None:
     monkeypatch.setattr(
-        "backend.ai.chat.default_registry.execute",
+        "backend.ai.chat_actions.default_registry.execute",
         lambda request: ToolResult(
             tool_name=request.tool_name,
             ok=False,
@@ -665,7 +661,7 @@ def test_watchlist_scope_error_names_the_preserved_scope(monkeypatch) -> None:
 
 def test_named_watchlist_semantics_preserves_scope(monkeypatch) -> None:
     complete = Mock()
-    monkeypatch.setattr("backend.ai.chat.ai_manager.complete", complete)
+    monkeypatch.setattr("backend.ai.chat_model.ai_manager.complete", complete)
     requests = []
 
     def execute(request):
@@ -686,7 +682,7 @@ def test_named_watchlist_semantics_preserves_scope(monkeypatch) -> None:
             source_timestamp="2026-09-23T14:00:00-04:00",
         )
 
-    monkeypatch.setattr("backend.ai.chat.default_registry.execute", execute)
+    monkeypatch.setattr("backend.ai.chat_actions.default_registry.execute", execute)
     text, grounded, _ = _generate_reply(
         None,
         [],
@@ -709,7 +705,7 @@ def test_named_watchlist_semantics_preserves_scope(monkeypatch) -> None:
 
 def test_named_strong_watchlist_semantics_preserves_scope(monkeypatch) -> None:
     complete = Mock()
-    monkeypatch.setattr("backend.ai.chat.ai_manager.complete", complete)
+    monkeypatch.setattr("backend.ai.chat_model.ai_manager.complete", complete)
     requests = []
 
     def execute(request):
@@ -730,7 +726,7 @@ def test_named_strong_watchlist_semantics_preserves_scope(monkeypatch) -> None:
             source_timestamp="2026-09-23T14:00:00-04:00",
         )
 
-    monkeypatch.setattr("backend.ai.chat.default_registry.execute", execute)
+    monkeypatch.setattr("backend.ai.chat_actions.default_registry.execute", execute)
     text, grounded, _ = _generate_reply(
         None,
         [],
@@ -754,7 +750,7 @@ def test_named_strong_watchlist_semantics_preserves_scope(monkeypatch) -> None:
 
 def test_comparison_routes_to_ranking_tool(monkeypatch) -> None:
     complete = Mock()
-    monkeypatch.setattr("backend.ai.chat.ai_manager.complete", complete)
+    monkeypatch.setattr("backend.ai.chat_model.ai_manager.complete", complete)
     requests = []
 
     def execute(request):
@@ -772,7 +768,7 @@ def test_comparison_routes_to_ranking_tool(monkeypatch) -> None:
             provider="MarketLens comparison",
         )
 
-    monkeypatch.setattr("backend.ai.chat.default_registry.execute", execute)
+    monkeypatch.setattr("backend.ai.chat_actions.default_registry.execute", execute)
     trace = []
     text, grounded, _ = _generate_reply(
         None,
@@ -803,9 +799,9 @@ def test_comparison_routes_to_ranking_tool(monkeypatch) -> None:
 
 
 def test_daily_comparison_remains_usable_after_market_close(monkeypatch) -> None:
-    monkeypatch.setattr("backend.ai.chat._is_regular_market_closed", lambda: True)
+    monkeypatch.setattr("backend.ai.chat_actions._is_regular_market_closed", lambda: True)
     monkeypatch.setattr(
-        "backend.ai.chat.default_registry.execute",
+        "backend.ai.chat_actions.default_registry.execute",
         lambda request: ToolResult(
             tool_name=request.tool_name,
             ok=True,
@@ -840,7 +836,7 @@ def test_daily_comparison_remains_usable_after_market_close(monkeypatch) -> None
 
 
 def test_comparison_uses_resolved_daily_timeframe_for_after_close_freshness(monkeypatch) -> None:
-    monkeypatch.setattr("backend.ai.chat._is_regular_market_closed", lambda: True)
+    monkeypatch.setattr("backend.ai.chat_actions._is_regular_market_closed", lambda: True)
 
     def execute(request):
         assert request.timeframe == "1d"
@@ -856,7 +852,7 @@ def test_comparison_uses_resolved_daily_timeframe_for_after_close_freshness(monk
             timeframe=request.timeframe,
         )
 
-    monkeypatch.setattr("backend.ai.chat.default_registry.execute", execute)
+    monkeypatch.setattr("backend.ai.chat_actions.default_registry.execute", execute)
     parsed = ChatReplyResponse(
         reply="Verified semantic route",
         grounded=True,
@@ -873,9 +869,9 @@ def test_comparison_uses_resolved_daily_timeframe_for_after_close_freshness(monk
 
 
 def test_intraday_comparison_still_rejects_stale_bars_after_market_close(monkeypatch) -> None:
-    monkeypatch.setattr("backend.ai.chat._is_regular_market_closed", lambda: True)
+    monkeypatch.setattr("backend.ai.chat_actions._is_regular_market_closed", lambda: True)
     monkeypatch.setattr(
-        "backend.ai.chat.default_registry.execute",
+        "backend.ai.chat_actions.default_registry.execute",
         lambda request: ToolResult(
             tool_name=request.tool_name,
             ok=True,
@@ -906,7 +902,7 @@ def test_intraday_comparison_still_rejects_stale_bars_after_market_close(monkeyp
 
 def test_scenario_question_routes_to_scenario_tool(monkeypatch) -> None:
     complete = Mock()
-    monkeypatch.setattr("backend.ai.chat.ai_manager.complete", complete)
+    monkeypatch.setattr("backend.ai.chat_model.ai_manager.complete", complete)
     requests = []
 
     def execute(request):
@@ -918,7 +914,7 @@ def test_scenario_question_routes_to_scenario_tool(monkeypatch) -> None:
             provider="MarketLens calculator",
         )
 
-    monkeypatch.setattr("backend.ai.chat.default_registry.execute", execute)
+    monkeypatch.setattr("backend.ai.chat_actions.default_registry.execute", execute)
     text, grounded, _ = _generate_reply(
         None,
         [_symbol_block("AAPL")],
@@ -940,7 +936,7 @@ def test_scenario_question_routes_to_scenario_tool(monkeypatch) -> None:
 
 def test_historical_similarity_routes_to_typed_tool(monkeypatch) -> None:
     complete = Mock()
-    monkeypatch.setattr("backend.ai.chat.ai_manager.complete", complete)
+    monkeypatch.setattr("backend.ai.chat_model.ai_manager.complete", complete)
     requests = []
 
     def execute(request):
@@ -952,7 +948,7 @@ def test_historical_similarity_routes_to_typed_tool(monkeypatch) -> None:
             provider="MarketLens similarity",
         )
 
-    monkeypatch.setattr("backend.ai.chat.default_registry.execute", execute)
+    monkeypatch.setattr("backend.ai.chat_actions.default_registry.execute", execute)
     text, grounded, _ = _generate_reply(
         None,
         [_symbol_block("AAPL")],
@@ -974,7 +970,7 @@ def test_historical_similarity_routes_to_typed_tool(monkeypatch) -> None:
 
 def test_signal_explanation_routes_to_typed_tool(monkeypatch) -> None:
     complete = Mock()
-    monkeypatch.setattr("backend.ai.chat.ai_manager.complete", complete)
+    monkeypatch.setattr("backend.ai.chat_model.ai_manager.complete", complete)
     requests = []
 
     def execute(request):
@@ -986,7 +982,7 @@ def test_signal_explanation_routes_to_typed_tool(monkeypatch) -> None:
             provider="MarketLens signal explanation",
         )
 
-    monkeypatch.setattr("backend.ai.chat.default_registry.execute", execute)
+    monkeypatch.setattr("backend.ai.chat_actions.default_registry.execute", execute)
     text, grounded, _ = _generate_reply(
         None,
         [_symbol_block("AAPL")],
@@ -1008,14 +1004,14 @@ def test_signal_explanation_routes_to_typed_tool(monkeypatch) -> None:
 
 def test_counterargument_and_sensitivity_route_to_typed_tools(monkeypatch) -> None:
     complete = Mock()
-    monkeypatch.setattr("backend.ai.chat.ai_manager.complete", complete)
+    monkeypatch.setattr("backend.ai.chat_model.ai_manager.complete", complete)
     requests = []
 
     def execute(request):
         requests.append(request)
         return ToolResult(tool_name=request.tool_name, ok=True, data={"status": "verified"}, provider="MarketLens")
 
-    monkeypatch.setattr("backend.ai.chat.default_registry.execute", execute)
+    monkeypatch.setattr("backend.ai.chat_actions.default_registry.execute", execute)
     text, grounded, _ = _generate_reply(
         None,
         [_symbol_block("AAPL")],
@@ -1052,10 +1048,10 @@ def test_counterargument_and_sensitivity_route_to_typed_tools(monkeypatch) -> No
 
 def test_event_timeline_routes_to_typed_tool(monkeypatch) -> None:
     complete = Mock()
-    monkeypatch.setattr("backend.ai.chat.ai_manager.complete", complete)
+    monkeypatch.setattr("backend.ai.chat_model.ai_manager.complete", complete)
     requests = []
     monkeypatch.setattr(
-        "backend.ai.chat.default_registry.execute",
+        "backend.ai.chat_actions.default_registry.execute",
         lambda request: (requests.append(request) or ToolResult(tool_name=request.tool_name, ok=True, data={"events": []}, provider="MarketLens timeline")),
     )
 
@@ -1080,10 +1076,10 @@ def test_event_timeline_routes_to_typed_tool(monkeypatch) -> None:
 
 def test_anomaly_question_routes_to_typed_tool(monkeypatch) -> None:
     complete = Mock()
-    monkeypatch.setattr("backend.ai.chat.ai_manager.complete", complete)
+    monkeypatch.setattr("backend.ai.chat_model.ai_manager.complete", complete)
     requests = []
     monkeypatch.setattr(
-        "backend.ai.chat.default_registry.execute",
+        "backend.ai.chat_actions.default_registry.execute",
         lambda request: (requests.append(request) or ToolResult(tool_name=request.tool_name, ok=True, data={"anomalies": []}, provider="MarketLens anomaly analysis")),
     )
 
@@ -1108,10 +1104,10 @@ def test_anomaly_question_routes_to_typed_tool(monkeypatch) -> None:
 
 def test_assumption_save_routes_to_typed_tool_and_requires_explicit_save(monkeypatch) -> None:
     complete = Mock()
-    monkeypatch.setattr("backend.ai.chat.ai_manager.complete", complete)
+    monkeypatch.setattr("backend.ai.chat_model.ai_manager.complete", complete)
     requests = []
     monkeypatch.setattr(
-        "backend.ai.chat.default_registry.execute",
+        "backend.ai.chat_actions.default_registry.execute",
         lambda request: (requests.append(request) or ToolResult(
             tool_name=request.tool_name,
             ok=True,
@@ -1144,10 +1140,10 @@ def test_assumption_save_routes_to_typed_tool_and_requires_explicit_save(monkeyp
 
 def test_assumption_review_routes_without_writing(monkeypatch) -> None:
     complete = Mock()
-    monkeypatch.setattr("backend.ai.chat.ai_manager.complete", complete)
+    monkeypatch.setattr("backend.ai.chat_model.ai_manager.complete", complete)
     requests = []
     monkeypatch.setattr(
-        "backend.ai.chat.default_registry.execute",
+        "backend.ai.chat_actions.default_registry.execute",
         lambda request: (requests.append(request) or ToolResult(
             tool_name=request.tool_name,
             ok=True,
@@ -1205,10 +1201,10 @@ def test_assumption_tool_updates_structured_planner_state() -> None:
 # ---------------------------------------------------------------------------
 
 def test_signal_explanation_routes_and_formats_reply(monkeypatch) -> None:
-    from backend.ai.chat import _run_action
+    from backend.ai.chat_actions import _run_action
 
     monkeypatch.setattr(
-        "backend.ai.chat.default_registry.execute",
+        "backend.ai.chat_actions.default_registry.execute",
         lambda request: ToolResult(
             tool_name=request.tool_name,
             ok=True,
@@ -1245,10 +1241,10 @@ def test_signal_explanation_routes_and_formats_reply(monkeypatch) -> None:
 
 
 def test_anomaly_analysis_routes_and_formats_reply(monkeypatch) -> None:
-    from backend.ai.chat import _run_action
+    from backend.ai.chat_actions import _run_action
 
     monkeypatch.setattr(
-        "backend.ai.chat.default_registry.execute",
+        "backend.ai.chat_actions.default_registry.execute",
         lambda request: ToolResult(
             tool_name=request.tool_name,
             ok=True,
@@ -1292,7 +1288,7 @@ def test_sensitivity_analysis_routes_and_formats_reply(monkeypatch) -> None:
     """Sensitivity analysis is pure arithmetic — real tool runs end-to-end
     without any external API call.  Monkeypatching the registry is skipped
     so this test also validates the tool's own calculation pipeline."""
-    from backend.ai.chat import _run_action
+    from backend.ai.chat_actions import _run_action
 
     parsed = ChatReplyResponse(
         reply="placeholder",

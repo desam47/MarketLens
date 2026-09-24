@@ -4,7 +4,8 @@ import json
 from pathlib import Path
 from unittest.mock import Mock
 
-from backend.ai.chat import CHAT_PARSE_MAX_ATTEMPTS, _complete_and_parse
+from backend.ai.chat import _complete_and_parse
+from backend.ai.chat_model import CHAT_PARSE_MAX_ATTEMPTS
 from backend.ai.chat_observability import (
     build_turn_observability,
     sanitize_arguments,
@@ -93,7 +94,7 @@ def test_complete_and_parse_records_a_bounded_retry(monkeypatch) -> None:
         awaitable.close()
         return responses.pop(0)
 
-    monkeypatch.setattr("backend.ai.chat.run_sync", fake_run_sync)
+    monkeypatch.setattr("backend.ai.chat_model.run_sync", fake_run_sync)
     parsed, failure = _complete_and_parse("short prompt", "system", 100, "primary", "fallback", trace=trace)
     assert failure is None
     assert parsed.reply == "safe"

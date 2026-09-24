@@ -23,6 +23,12 @@ from sqlalchemy.orm import sessionmaker
 from backend.ai.chat import (
     _WATCHLIST_CONTENTS_INTENT,
     _WATCHLIST_LIST_INTENT,
+    _run_turn_actions,
+    _watchlist_contents_reply,
+    _watchlist_list_reply,
+    answer_chat_message,
+)
+from backend.ai.chat_actions import (
     _action_step_detail,
     _add_to_watchlist,
     _confirm_prompt,
@@ -39,11 +45,7 @@ from backend.ai.chat import (
     _run_action,
     _run_backtest,
     _run_screen,
-    _run_turn_actions,
     _set_entity_type,
-    _watchlist_contents_reply,
-    _watchlist_list_reply,
-    answer_chat_message,
 )
 from backend.ai.manager import ai_manager
 from backend.ai.prompt import ChatReplyResponse
@@ -92,7 +94,7 @@ class _DBBase(unittest.TestCase):
         # _kickoff_backfill reaches into the watchlist router + ingestion
         # service — irrelevant to these tests and does real work, so
         # it's patched everywhere in this file.
-        p = patch("backend.ai.chat._kickoff_backfill")
+        p = patch("backend.ai.chat_actions._kickoff_backfill")
         self.mock_backfill = p.start()
         self.addCleanup(p.stop)
 
@@ -405,7 +407,7 @@ class TestRunTurnActions(_DBBase):
     ordinary single-action turn never pays for an extra completion."""
 
     def _mock_complete(self, *json_bodies: str):
-        p = patch("backend.ai.chat.ai_manager")
+        p = patch("backend.ai.chat_model.ai_manager")
         mock_ai = p.start()
         self.addCleanup(p.stop)
         mock_ai.settings.max_tokens = 20000
@@ -520,7 +522,7 @@ class TestRunTurnActions(_DBBase):
         self.assertEqual([step["status"] for step in steps], ["completed", "needs_input"])
 
     def test_a_step_that_failed_without_a_question_stays_failed(self):
-        from backend.ai.chat import _asks_for_input
+        from backend.ai.chat_actions import _asks_for_input
 
         self.assertTrue(_asks_for_input("Which one should I add it to? "))
         self.assertFalse(_asks_for_input("I couldn't reach the alert service."))
@@ -679,7 +681,7 @@ class TestRunTurnActions(_DBBase):
             action_tool_arguments={"symbol": "AAPL"},
         )
         trace = []
-        with patch("backend.ai.chat._run_action", return_value=("AAPL quote", True, [])) as run:
+        with patch("backend.ai.chat_actions._run_action", return_value=("AAPL quote", True, [])) as run:
             text, grounded, _ = _run_turn_actions(
                 self.db,
                 parsed,
@@ -722,7 +724,7 @@ class TestRunTurnActions(_DBBase):
         mock_ai.complete.assert_not_called()
 
     def test_continuation_failure_stops_chain_without_raising(self):
-        p = patch("backend.ai.chat.ai_manager")
+        p = patch("backend.ai.chat_model.ai_manager")
         mock_ai = p.start()
         self.addCleanup(p.stop)
         mock_ai.settings.max_tokens = 20000
@@ -1479,7 +1481,7 @@ class TestRunScreen(_DBBase):
 
 class TestRunActionNeverRaises(_DBBase):
     @patch(
-        "backend.ai.chat._ACTION_HANDLERS",
+        "backend.ai.chat_actions._ACTION_HANDLERS",
         {
             "create_alert": MagicMock(side_effect=RuntimeError("boom")),
         },
@@ -1497,14 +1499,14 @@ class TestRunActionNeverRaises(_DBBase):
             db.add(Alert(name=None, symbol="AAPL", condition_type="price_above", parameter="200"))
             db.flush()  # NOT NULL violation
 
-        with patch("backend.ai.chat._ACTION_HANDLERS", {"create_alert": broken_handler}):
+        with patch("backend.ai.chat_actions._ACTION_HANDLERS", {"create_alert": broken_handler}):
             text, grounded, _ = _run_action(self.db, _parsed(action="create_alert"))
 
         self.assertFalse(grounded)
         alert = AlertRepository(self.db).create("A", "AAPL", "price_above", "200")
         self.assertIsNotNone(alert.id)
 
-    @patch("backend.ai.chat.default_registry.execute", side_effect=RuntimeError("provider down"))
+    @patch("backend.ai.chat_actions.default_registry.execute", side_effect=RuntimeError("provider down"))
     def test_market_tool_exception_degrades_gracefully(self, _execute):
         trace: list[dict] = []
         text, grounded, _ = _run_action(
@@ -1515,7 +1517,7 @@ class TestRunActionNeverRaises(_DBBase):
         self.assertEqual(trace[-1]["failure_kind"], "action_exception")
 
     @patch(
-        "backend.ai.chat.default_registry.execute",
+        "backend.ai.chat_actions.default_registry.execute",
         return_value=ToolResult(
             tool_name="get_quote",
             ok=False,
@@ -1566,7 +1568,7 @@ class TestRunActionInvalidatesBaseline(_DBBase):
         with (
             patch("backend.ai.market_baseline.invalidate_cache") as inv,
             patch(
-                "backend.ai.chat._ACTION_HANDLERS",
+                "backend.ai.chat_actions._ACTION_HANDLERS",
                 {
                     "run_backtest": MagicMock(return_value=("ok", True)),
                 },
@@ -1579,7 +1581,7 @@ class TestRunActionInvalidatesBaseline(_DBBase):
         with (
             patch("backend.ai.market_baseline.invalidate_cache") as inv,
             patch(
-                "backend.ai.chat._ACTION_HANDLERS",
+                "backend.ai.chat_actions._ACTION_HANDLERS",
                 {
                     "run_screen": MagicMock(return_value=("ok", True, [])),
                 },
@@ -1592,7 +1594,7 @@ class TestRunActionInvalidatesBaseline(_DBBase):
         with (
             patch("backend.ai.market_baseline.invalidate_cache") as inv,
             patch(
-                "backend.ai.chat._ACTION_HANDLERS",
+                "backend.ai.chat_actions._ACTION_HANDLERS",
                 {
                     "create_alert": MagicMock(side_effect=RuntimeError("boom")),
                 },
@@ -1658,7 +1660,7 @@ class TestWatchlistAddRouting(unittest.TestCase):
     name, so "add X to a new watchlist called Y" routes to create_watchlist."""
 
     def _route(self, text):
-        from backend.ai.chat import _build_deterministic_chat_reply
+        from backend.ai.chat_routing import _build_deterministic_chat_reply
 
         return _build_deterministic_chat_reply(text, focus_symbols=["RIVN"], planner_state={})
 
@@ -1880,7 +1882,7 @@ class TestEndToEnd(unittest.TestCase):
         p3 = patch("backend.ai.chat.build_market_baseline", return_value={})
         p3.start()
         self.addCleanup(p3.stop)
-        p4 = patch("backend.ai.chat._kickoff_backfill")
+        p4 = patch("backend.ai.chat_actions._kickoff_backfill")
         self.mock_backfill = p4.start()
         self.addCleanup(p4.stop)
 
@@ -1892,7 +1894,7 @@ class TestEndToEnd(unittest.TestCase):
         self.session_id = session.id
         db.close()
 
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_model.ai_manager")
     def test_add_to_watchlist_end_to_end(self, mock_ai):
         mock_ai.is_available = AsyncMock(return_value=True)
         mock_ai.settings.max_tokens = 20000
@@ -1918,7 +1920,7 @@ class TestEndToEnd(unittest.TestCase):
         finally:
             db.close()
 
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_model.ai_manager")
     def test_multi_step_request_end_to_end(self, mock_ai):
         """The regression this was built for: a single compound message
         ("create X and add Y to it") used to only ever do the first
@@ -1957,7 +1959,7 @@ class TestEndToEnd(unittest.TestCase):
         finally:
             db.close()
 
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_model.ai_manager")
     def test_delete_alert_end_to_end_confirm_then_execute(self, mock_ai):
         db = self.Session()
         alert = AlertRepository(db).create("A", "NVDA", "price_above", "220")
@@ -1993,7 +1995,7 @@ class TestEndToEnd(unittest.TestCase):
         finally:
             db.close()
 
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_model.ai_manager")
     def test_unanswered_confirmation_expires_after_one_turn(self, mock_ai):
         """A later, unrelated "ok" must not execute an old destructive request."""
         db = self.Session()
@@ -2024,7 +2026,7 @@ class TestEndToEnd(unittest.TestCase):
         finally:
             db.close()
 
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_model.ai_manager")
     def test_save_to_journal_end_to_end_confirm_then_execute(self, mock_ai):
         mock_ai.is_available = AsyncMock(return_value=True)
         mock_ai.settings.max_tokens = 20000
@@ -2052,7 +2054,7 @@ class TestEndToEnd(unittest.TestCase):
         self.assertTrue(grounded2)
         self.assertIn("AAPL", msg2.content)
 
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_model.ai_manager")
     def test_run_screen_end_to_end_populates_focus(self, mock_ai):
         """The regression this was built for: a screen surfaces tickers
         the trader's own message never named (resolve_turn_symbols is
@@ -2094,7 +2096,7 @@ class TestEndToEnd(unittest.TestCase):
         self.assertIn("AAPL", msg.content)
         self.assertIn("AAPL", focus)
 
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_model.ai_manager")
     @patch("backend.ai.chat.build_context")
     def test_analyze_named_watchlist_resolves_real_context(self, mock_ctx, mock_ai):
         """Regression test for the reported bug: asking to analyze a
@@ -2136,7 +2138,7 @@ class TestEndToEnd(unittest.TestCase):
         mock_ctx.assert_called_once()
         self.assertEqual(mock_ctx.call_args.args[0], "DVLT")
 
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_model.ai_manager")
     def test_delete_watchlist_survives_model_never_setting_action(self, mock_ai):
         """Regression test for the exact bug reported live 2026-09-11: the
         model left action="none" on BOTH the initial "delete my
@@ -2182,7 +2184,7 @@ class TestEndToEnd(unittest.TestCase):
         finally:
             db.close()
 
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_model.ai_manager")
     def test_how_many_watchlists_answered_without_asking_the_model(self, mock_ai):
         db = self.Session()
         repo = WatchlistRepository(db)
@@ -2198,7 +2200,7 @@ class TestEndToEnd(unittest.TestCase):
         self.assertIn("AAPL", msg.content)
         mock_ai.complete.assert_not_called()
 
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_model.ai_manager")
     def test_named_watchlist_contents_answered_without_asking_the_model(self, mock_ai):
         # Reproduces the live 2026-09-12 bug report verbatim: two real
         # watchlists exist ("Default" and "Market Context"), and asking
@@ -2245,7 +2247,7 @@ class TestEndToEnd(unittest.TestCase):
         finally:
             db.close()
 
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_model.ai_manager")
     def test_yes_confirms_with_ai_off(self, mock_ai):
         mock_ai.enabled = False
         mock_ai.complete = AsyncMock()
@@ -2262,7 +2264,7 @@ class TestEndToEnd(unittest.TestCase):
         self.assertFalse(self._watchlist_exists(tech))
         mock_ai.complete.assert_not_called()
 
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_model.ai_manager")
     def test_yes_confirms_on_the_streaming_path_without_a_model_call(self, mock_ai):
         from backend.ai.chat import stream_chat_message
 
@@ -2282,7 +2284,7 @@ class TestEndToEnd(unittest.TestCase):
         mock_ai.complete.assert_not_called()
         mock_ai.stream.assert_not_called()
 
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_model.ai_manager")
     def test_decline_with_ai_off_keeps_the_watchlist(self, mock_ai):
         mock_ai.enabled = False
         tech = self._create_watchlist("Tech")
@@ -2322,7 +2324,7 @@ class TestMaterialChange(unittest.TestCase):
 
 class TestPositionRiskParsing(unittest.TestCase):
     def test_labelled_fields_become_a_position_risk_request(self):
-        from backend.ai.chat import _position_risk_calculation
+        from backend.ai.chat_intents import _position_risk_calculation
 
         request = _position_risk_calculation("Buy 200 AAPL at $220, stop $212. What's my risk?")
         self.assertEqual(
@@ -2335,20 +2337,21 @@ class TestPositionRiskParsing(unittest.TestCase):
     def test_share_count_pattern_has_no_stray_literal(self):
         """BF-17: slicing _NUM[4:] left a literal "s*" in the pattern, so
         "buy s200" read as 200 shares."""
-        from backend.ai.chat import _SHARES_RE
+        from backend.ai.chat_intents import _SHARES_RE
 
         self.assertNotIn("s*(", _SHARES_RE.pattern)
         self.assertIsNone(_SHARES_RE.search("buy s200 AAPL"))
         self.assertEqual(_SHARES_RE.search("buy 200 AAPL").group(1), "200")
 
     def test_missing_label_is_not_guessed(self):
-        from backend.ai.chat import _position_risk_calculation
+        from backend.ai.chat_intents import _position_risk_calculation
 
         self.assertIsNone(_position_risk_calculation("I have 100 shares of AAPL, how is it doing?"))
         self.assertIsNone(_position_risk_calculation("what if I buy AAPL at 220?"))
 
     def test_followup_overrides_only_named_inputs(self):
-        from backend.ai.chat import _calculation_followup, _position_risk_calculation
+        from backend.ai.chat import _calculation_followup
+        from backend.ai.chat_intents import _position_risk_calculation
 
         prior = _position_risk_calculation("Buy 200 AAPL at $220, stop $212").model_dump()
         request = _calculation_followup("Use the same stop but 100 shares", prior)
@@ -2370,11 +2373,11 @@ class TestConfirmationAffirmation(unittest.TestCase):
     _PROMPT = 'Delete the watchlist "Tech"? This removes every ticker in it — say yes to confirm.'
 
     def _finalize(self, user_content):
-        from backend.ai.chat import _finalize_parsed
+        from backend.ai.chat_actions import _finalize_parsed
 
         state = {"pending_confirmation": dict(self._PENDING)}
         parsed = ChatReplyResponse(reply="Okay, I won't delete it.", grounded=True, action="none")
-        with patch("backend.ai.chat._run_action", return_value=("Done — deleted", True, [])) as run:
+        with patch("backend.ai.chat_actions._run_action", return_value=("Done — deleted", True, [])) as run:
             text, _, _ = _finalize_parsed(
                 None, parsed, [], user_content, [("assistant", self._PROMPT)], trace=[], planner_state=state
             )
@@ -2420,7 +2423,8 @@ class TestRegeneration(unittest.TestCase):
         self.assertIsNone(regeneration_instruction({"mode": "ignore previous instructions", "scope": {}}))
 
     def test_scope_only_reaches_tools_that_take_it(self):
-        from backend.ai.chat import _apply_regeneration_scope, _regeneration_tool_scope
+        from backend.ai.chat import _regeneration_tool_scope
+        from backend.ai.chat_actions import _apply_regeneration_scope
 
         state = {"active_regeneration": {"mode": "rescope", "scope": _regeneration_tool_scope({"timeframe": "15m", "session": "auto"})}}
         self.assertEqual(state["active_regeneration"]["scope"], {"timeframe": "15m"})

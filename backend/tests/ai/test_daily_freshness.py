@@ -9,7 +9,7 @@ daily bar's midnight timestamp against a flat 15-minute limit.
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from backend.ai.chat import _run_market_tool
+from backend.ai.chat_actions import _run_market_tool
 from backend.ai.prompt import ChatReplyResponse
 from backend.ai.response_blocks import _item_quality
 from backend.ai.tool_registry import ToolResult, _freshness_seconds
@@ -125,9 +125,9 @@ def test_daily_comparison_is_usable_during_the_session(monkeypatch) -> None:
     """The comparison gate withheld any daily ranking older than 15 minutes
     unless the market was closed, so it failed all through the session."""
     latest = us_market_calendar.latest_completed_session_date()
-    monkeypatch.setattr("backend.ai.chat._is_regular_market_closed", lambda: False)
+    monkeypatch.setattr("backend.ai.chat_actions._is_regular_market_closed", lambda: False)
     monkeypatch.setattr(
-        "backend.ai.chat.default_registry.execute",
+        "backend.ai.chat_actions.default_registry.execute",
         lambda request: _comparison_result(request, session_date=latest),
     )
 
@@ -141,9 +141,9 @@ def test_daily_comparison_is_usable_during_the_session(monkeypatch) -> None:
 
 def test_an_old_daily_comparison_is_still_withheld_during_the_session(monkeypatch) -> None:
     old = us_market_calendar.latest_completed_session_date() - timedelta(days=10)
-    monkeypatch.setattr("backend.ai.chat._is_regular_market_closed", lambda: False)
+    monkeypatch.setattr("backend.ai.chat_actions._is_regular_market_closed", lambda: False)
     monkeypatch.setattr(
-        "backend.ai.chat.default_registry.execute",
+        "backend.ai.chat_actions.default_registry.execute",
         lambda request: _comparison_result(request, session_date=old),
     )
 
@@ -160,7 +160,7 @@ def test_price_statistics_requests_are_scoped_to_daily_bars(monkeypatch) -> None
         requests.append(request)
         return ToolResult(tool_name=request.tool_name, ok=False, error="offline")
 
-    monkeypatch.setattr("backend.ai.chat.default_registry.execute", execute)
+    monkeypatch.setattr("backend.ai.chat_actions.default_registry.execute", execute)
     parsed = ChatReplyResponse(
         reply="Verified semantic route",
         grounded=True,

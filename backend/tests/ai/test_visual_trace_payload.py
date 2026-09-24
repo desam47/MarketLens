@@ -7,7 +7,7 @@ few pre-existing mappings that had no direct unit coverage before this.
 
 from __future__ import annotations
 
-from backend.ai.chat import _visual_trace_payload
+from backend.ai.chat_actions import _visual_trace_payload
 
 
 def test_relative_strength_ranks_by_rs_pct_descending() -> None:

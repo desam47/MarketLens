@@ -186,7 +186,9 @@ class _Harness:
             screen = self.case.get("screen") or {}
             return str(screen.get("text", "Screen matched no symbols.")), True, list(screen.get("symbols", []))
 
-        handlers = dict(chat_module._ACTION_HANDLERS)
+        from backend.ai.chat_actions import _ACTION_HANDLERS
+
+        handlers = dict(_ACTION_HANDLERS)
         handlers["run_screen"] = run_screen
         for target, value in (
             ("backend.repositories.chat_repository.SessionLocal", self.Session),
@@ -195,10 +197,10 @@ class _Harness:
             ("backend.ai.chat_symbols._ai_resolve_name", lambda text: []),
             ("backend.ai.chat.build_context", build_context),
             ("backend.ai.chat.build_market_baseline", lambda: dict(self.case.get("baseline") or {})),
-            ("backend.ai.chat.ai_manager", self.model),
-            ("backend.ai.chat.default_registry.execute", self.tools.execute),
-            ("backend.ai.chat._ACTION_HANDLERS", handlers),
-            ("backend.ai.chat._kickoff_backfill", lambda symbol: None),
+            ("backend.ai.chat_model.ai_manager", self.model),
+            ("backend.ai.chat_actions.default_registry.execute", self.tools.execute),
+            ("backend.ai.chat_actions._ACTION_HANDLERS", handlers),
+            ("backend.ai.chat_actions._kickoff_backfill", lambda symbol: None),
         ):
             self.stack.enter_context(patch(target, value))
         if self.case.get("freeze_now"):

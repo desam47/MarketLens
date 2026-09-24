@@ -1,12 +1,9 @@
 from unittest.mock import Mock
 
 from backend.ai.calculator import CalculationRequest, calculate
-from backend.ai.chat import (
-    _finalize_parsed,
-    _format_calculation_reply,
-    _generate_reply,
-    _run_action,
-)
+from backend.ai.chat import _generate_reply
+from backend.ai.chat_actions import _finalize_parsed, _run_action
+from backend.ai.chat_replies import _format_calculation_reply
 from backend.ai.prompt import ChatReplyResponse
 from backend.ai.tool_registry import ToolResult
 
@@ -96,7 +93,7 @@ def test_chat_fallback_parses_unambiguous_allocation_question() -> None:
 
 def test_chat_asks_for_missing_calculation_inputs_without_ai_call(monkeypatch) -> None:
     mock_complete = Mock()
-    monkeypatch.setattr("backend.ai.chat.ai_manager.complete", mock_complete)
+    monkeypatch.setattr("backend.ai.chat_model.ai_manager.complete", mock_complete)
 
     text, grounded, screened = _generate_reply(
         None,
@@ -119,7 +116,7 @@ def test_chat_asks_for_missing_calculation_inputs_without_ai_call(monkeypatch) -
 
 def test_chat_can_reuse_previous_calculation_inputs(monkeypatch) -> None:
     mock_complete = Mock()
-    monkeypatch.setattr("backend.ai.chat.ai_manager.complete", mock_complete)
+    monkeypatch.setattr("backend.ai.chat_model.ai_manager.complete", mock_complete)
 
     text, grounded, screened = _generate_reply(
         None,
@@ -148,7 +145,7 @@ def test_chat_can_reuse_previous_calculation_inputs(monkeypatch) -> None:
 
 def test_chat_market_tool_action_returns_provenance(monkeypatch) -> None:
     monkeypatch.setattr(
-        "backend.ai.chat.default_registry.execute",
+        "backend.ai.chat_actions.default_registry.execute",
         lambda request: ToolResult(
             tool_name=request.tool_name,
             ok=True,
@@ -230,7 +227,8 @@ def test_plain_percent_change_still_uses_the_fallback() -> None:
 
 def test_account_size_accepts_k_and_m_suffixes() -> None:
     """BF-02 follow-up: "$10k account" was read as no account value."""
-    from backend.ai.chat import _account_value, _fallback_calculation
+    from backend.ai.chat import _fallback_calculation
+    from backend.ai.chat_intents import _account_value
 
     request = _fallback_calculation("position size: risk 1% of my $10k account, entry 50 stop 48")
     assert request is not None

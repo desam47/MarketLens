@@ -5,7 +5,7 @@ from backend.ai.chat import _chat_route_model, _generate_reply
 
 def test_chat_route_model_prefers_role_override(monkeypatch) -> None:
     monkeypatch.setattr(
-        "backend.ai.chat.ai_manager",
+        "backend.ai.chat_model.ai_manager",
         SimpleNamespace(
             settings=SimpleNamespace(
                 chat_planning_model="planner-model",
@@ -22,7 +22,7 @@ def test_chat_route_model_prefers_role_override(monkeypatch) -> None:
 
 def test_ai_off_returns_context_only_snapshot(monkeypatch) -> None:
     monkeypatch.setattr(
-        "backend.ai.chat.ai_manager",
+        "backend.ai.chat_model.ai_manager",
         SimpleNamespace(enabled=False, settings=SimpleNamespace()),
     )
     text, grounded, focus = _generate_reply(

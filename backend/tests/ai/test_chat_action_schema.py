@@ -15,7 +15,7 @@ never go through ChatReplyResponse at all.
 
 import typing
 
-from backend.ai.chat import _MARKET_TOOL_ACTIONS
+from backend.ai.chat_actions import _MARKET_TOOL_ACTIONS
 from backend.ai.prompt import ChatReplyResponse
 from backend.ai.tool_registry import default_registry
 

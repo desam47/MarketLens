@@ -198,7 +198,7 @@ class ChatBrowserData(BaseModel):
     """Browser-local data the trader opted in to sharing for this turn.
 
     Used only as explicit tool snapshots (never stored, never added to the
-    prompt as raw data); see backend.ai.chat._apply_browser_data.
+    prompt as raw data); see backend.ai.chat_actions._apply_browser_data.
     """
 
     model_config = {"extra": "forbid"}

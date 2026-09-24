@@ -107,7 +107,7 @@ def _watchlist_index() -> list[dict[str, Any]]:
     to a real watchlist by name (e.g. offering the actual options when a
     request is ambiguous) instead of operating fully blind, while the
     app still authoritatively resolves any actual action/read against a
-    named watchlist itself (backend.ai.chat._resolve_watchlist,
+    named watchlist itself (backend.ai.chat_actions._resolve_watchlist,
     _resolve_named_watchlist_symbols) rather than trusting the model's
     own judgement for the real side effect or the real member list.
     """
@@ -151,7 +151,7 @@ def invalidate_cache() -> None:
     """Drop the cached snapshot so the next ``build_market_baseline()``
     call rebuilds instead of serving a stale one — call this right
     after something the baseline reports on changes (an alert/watchlist
-    CRUD action from chat; see ``backend.ai.chat._run_action``'s
+    CRUD action from chat; see ``backend.ai.chat_actions._run_action``'s
     ``_BASELINE_MUTATING_ACTIONS``).
 
     Without this, a chat action followed by a related question within

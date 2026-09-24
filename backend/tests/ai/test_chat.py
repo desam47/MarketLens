@@ -19,15 +19,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from backend.ai.chat import (
-    _TURN_BROWSER_DATA,
-    _browser_preset_for_query,
-    _browser_safe_reply_data,
-    _format_browser_local_reply,
-    _generate_reply,
-    _prune_context,
-    answer_chat_message,
-)
+from backend.ai.chat import _TURN_BROWSER_DATA, _generate_reply, _prune_context, answer_chat_message
+from backend.ai.chat_actions import _browser_preset_for_query
+from backend.ai.chat_replies import _browser_safe_reply_data, _format_browser_local_reply
 from backend.ai.context import InsufficientDataError
 from backend.ai.prompt import AnalysisResponse, TradePlan, UncertaintyResponse
 from backend.ai.provider import AIResponse
@@ -114,7 +108,7 @@ class _Base(unittest.TestCase):
 
 
 class TestUniversalTurn(_Base):
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_model.ai_manager")
     @patch("backend.ai.chat.build_context")
     def test_full_round_trip_persists_both_messages(self, mock_ctx, mock_ai):
         self.mock_resolve.return_value = (["AAPL"], False)
@@ -138,7 +132,7 @@ class TestUniversalTurn(_Base):
         self.assertEqual(state["current_symbols"], ["AAPL"])
         self.assertEqual(state["last_user_question"], "how's AAPL")
 
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_model.ai_manager")
     @patch("backend.ai.chat.build_context")
     def test_no_ticker_turn_is_market_only(self, mock_ctx, mock_ai):
         self.mock_resolve.return_value = ([], False)
@@ -160,7 +154,7 @@ class TestUniversalTurn(_Base):
         self.assertIn("No ticker resolved for this turn", prompt)
 
     @patch("backend.ai.chat.build_context")
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_model.ai_manager")
     def test_ambiguous_reference_asks_for_clarification(self, mock_ctx, mock_ai):
         mock_ai.enabled = True
         reply, grounded, screened = _generate_reply(
@@ -181,7 +175,7 @@ class TestUniversalTurn(_Base):
         self.assertEqual(screened, [])
         mock_ai.complete.assert_not_called()
 
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_model.ai_manager")
     @patch("backend.ai.chat.build_context")
     def test_chat_model_override_is_passed_to_ai_call(self, mock_ctx, mock_ai):
         """AISettings.chat_model (AI_CHAT_MODEL) routes the chat completion
@@ -201,7 +195,7 @@ class TestUniversalTurn(_Base):
             "openai_compatible:auto/best-free",
         )
 
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_model.ai_manager")
     @patch("backend.ai.chat.build_context")
     def test_no_chat_model_override_passes_none(self, mock_ctx, mock_ai):
         """Empty AI_CHAT_MODEL (the default) means no override — chat uses
@@ -216,7 +210,7 @@ class TestUniversalTurn(_Base):
 
         self.assertIsNone(mock_ai.complete.call_args.kwargs["model"])
 
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_model.ai_manager")
     @patch("backend.ai.chat.build_context")
     def test_two_tickers_two_blocks(self, mock_ctx, mock_ai):
         self.mock_resolve.return_value = (["AAPL", "MSFT"], False)
@@ -235,7 +229,7 @@ class TestUniversalTurn(_Base):
         self.assertIn('<context symbol="AAPL"', prompt)
         self.assertIn('<context symbol="MSFT"', prompt)
 
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_model.ai_manager")
     @patch("backend.ai.chat.build_context")
     def test_cold_ticker_goes_unavailable_not_abort(self, mock_ctx, mock_ai):
         self.mock_resolve.return_value = (["RIVN"], False)
@@ -258,7 +252,7 @@ class TestUniversalTurn(_Base):
             mock_ai.complete.call_args.kwargs["prompt"],
         )
 
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_model.ai_manager")
     @patch("backend.ai.chat.build_context")
     def test_unavailable_comparison_returns_clear_data_message(self, mock_ctx, mock_ai):
         self.mock_resolve.return_value = (["AAPL", "MSFT"], False)
@@ -279,7 +273,7 @@ class TestUniversalTurn(_Base):
         self.assertEqual(unavailable, ["AAPL", "MSFT"])
         mock_ai.complete.assert_not_called()
 
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_model.ai_manager")
     @patch("backend.ai.chat.build_context")
     def test_cold_engine_block_marked_and_pruned(self, mock_ctx, mock_ai):
         self.mock_resolve.return_value = (["RIVN"], False)
@@ -296,7 +290,7 @@ class TestUniversalTurn(_Base):
         self.assertNotIn("trend_transition", prompt)
         self.assertIn('"price":12.0', prompt)  # raw price still there
 
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_model.ai_manager")
     @patch("backend.ai.chat.build_context")
     def test_mixed_available_and_unavailable(self, mock_ctx, mock_ai):
         self.mock_resolve.return_value = (["AAPL", "RIVN"], False)
@@ -318,7 +312,7 @@ class TestUniversalTurn(_Base):
         prompt = mock_ai.complete.call_args.kwargs["prompt"]
         self.assertIn('<context symbol="AAPL"', prompt)
 
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_model.ai_manager")
     @patch("backend.ai.chat.build_context")
     def test_capped_note_added(self, mock_ctx, mock_ai):
         self.mock_resolve.return_value = (["AAPL", "MSFT", "NVDA"], True)
@@ -335,7 +329,7 @@ class TestUniversalTurn(_Base):
 
 
 class TestDegradeContract(_Base):
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_model.ai_manager")
     def test_ai_disabled_stores_message(self, mock_ai):
         self.mock_resolve.return_value = ([], False)
         mock_ai.enabled = False
@@ -344,7 +338,7 @@ class TestDegradeContract(_Base):
         self.assertTrue(grounded)
         self.assertIn("unavailable", msg.content.lower())
 
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_model.ai_manager")
     @patch("backend.ai.chat.build_context")
     def test_malformed_reply_degrades(self, mock_ctx, mock_ai):
         self.mock_resolve.return_value = (["AAPL"], False)
@@ -357,7 +351,7 @@ class TestDegradeContract(_Base):
         msg, grounded, *_ = answer_chat_message(self.session.id, "hi")
         self.assertFalse(grounded)
 
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_model.ai_manager")
     @patch("backend.ai.chat.build_context")
     def test_ai_exception_degrades(self, mock_ctx, mock_ai):
         self.mock_resolve.return_value = (["AAPL"], False)
@@ -368,7 +362,7 @@ class TestDegradeContract(_Base):
         msg, grounded, *_ = answer_chat_message(self.session.id, "hi")
         self.assertFalse(grounded)
 
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_model.ai_manager")
     @patch("backend.ai.chat.build_context")
     def test_malformed_reply_retries_once_then_succeeds(self, mock_ctx, mock_ai):
         # 2026-09-16: this local model has shown intermittent malformed
@@ -390,7 +384,7 @@ class TestDegradeContract(_Base):
         self.assertEqual(msg.content, "AAPL looks fine.")
         self.assertEqual(mock_ai.complete.call_count, 2)
 
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_model.ai_manager")
     @patch("backend.ai.chat.build_context")
     def test_malformed_reply_gives_up_after_retry_exhausted(self, mock_ctx, mock_ai):
         self.mock_resolve.return_value = (["AAPL"], False)
@@ -409,7 +403,7 @@ class TestDegradeContract(_Base):
         with self.assertRaises(ValueError):
             answer_chat_message(999999, "hi")
 
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_model.ai_manager")
     @patch("backend.ai.chat.build_context")
     def test_legacy_symbol_session_friendly_degrade(self, mock_ctx, mock_ai):
         """scope='symbol' session whose only ticker has no data keeps the
@@ -443,7 +437,7 @@ class TestTurnFailureStillPersistsOneReply(_Base):
         self.assertEqual(self._roles(), ["user", "assistant"])
 
     @patch("backend.ai.chat.verify_answer", side_effect=RuntimeError("verifier crashed"))
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_model.ai_manager")
     def test_blocking_finalization_exception(self, mock_ai, _verify):
         mock_ai.enabled = False
 
@@ -467,7 +461,7 @@ class TestTurnFailureStillPersistsOneReply(_Base):
 
 
 class TestAlertContext(_Base):
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_model.ai_manager")
     @patch("backend.ai.chat.build_context")
     def test_alert_facts_reach_prompt(self, mock_ctx, mock_ai):
         alert = Alert(name="T", symbol="AAPL", condition_type="price_above", parameter="100")
@@ -497,8 +491,8 @@ class TestAlertContext(_Base):
 
 
 class TestReanalysisTool(_Base):
-    @patch("backend.ai.chat.analyze_symbol")
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_actions.analyze_symbol")
+    @patch("backend.ai.chat_model.ai_manager")
     @patch("backend.ai.chat.build_context")
     def test_single_symbol_reanalysis_runs(self, mock_ctx, mock_ai, mock_analyze):
         self.mock_resolve.return_value = (["AAPL"], False)
@@ -521,8 +515,8 @@ class TestReanalysisTool(_Base):
         self.assertIn("bullish", msg.content)
         self.assertIn("82%", msg.content)
 
-    @patch("backend.ai.chat.analyze_symbol")
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_actions.analyze_symbol")
+    @patch("backend.ai.chat_model.ai_manager")
     @patch("backend.ai.chat.build_context")
     def test_reanalysis_surfaces_trade_plan(self, mock_ctx, mock_ai, mock_analyze):
         # A fresh analyze_symbol() run (advisory=True by default) normally
@@ -562,8 +556,8 @@ class TestReanalysisTool(_Base):
         self.assertIn("228", msg.content)
         self.assertIn("Reclaimed the 20d SMA", msg.content)
 
-    @patch("backend.ai.chat.analyze_symbol")
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_actions.analyze_symbol")
+    @patch("backend.ai.chat_model.ai_manager")
     @patch("backend.ai.chat.build_context")
     def test_multi_symbol_reanalysis_without_target_is_rejected(
         self, mock_ctx, mock_ai, mock_analyze
@@ -581,8 +575,8 @@ class TestReanalysisTool(_Base):
         mock_analyze.assert_not_called()
         self.assertIn("Which ticker", msg.content)
 
-    @patch("backend.ai.chat.analyze_symbol")
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_actions.analyze_symbol")
+    @patch("backend.ai.chat_model.ai_manager")
     @patch("backend.ai.chat.build_context")
     def test_multi_symbol_reanalysis_with_target_runs(self, mock_ctx, mock_ai, mock_analyze):
         self.mock_resolve.return_value = (["AAPL", "MSFT"], False)
@@ -602,8 +596,8 @@ class TestReanalysisTool(_Base):
         answer_chat_message(self.session.id, "re-run MSFT officially")
         mock_analyze.assert_called_once_with("MSFT")
 
-    @patch("backend.ai.chat.analyze_symbol")
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_actions.analyze_symbol")
+    @patch("backend.ai.chat_model.ai_manager")
     @patch("backend.ai.chat.build_context")
     def test_reanalysis_uncertainty_is_ungrounded(self, mock_ctx, mock_ai, mock_analyze):
         self.mock_resolve.return_value = (["AAPL"], False)
@@ -618,8 +612,8 @@ class TestReanalysisTool(_Base):
         msg, grounded, *_ = answer_chat_message(self.session.id, "re-run the analysis")
         self.assertFalse(grounded)
 
-    @patch("backend.ai.chat.analyze_symbol")
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_actions.analyze_symbol")
+    @patch("backend.ai.chat_model.ai_manager")
     @patch("backend.ai.chat.build_context")
     def test_ordinary_reply_does_not_invoke_tool(self, mock_ctx, mock_ai, mock_analyze):
         self.mock_resolve.return_value = (["AAPL"], False)
@@ -643,7 +637,7 @@ class TestTurnIntent(_Base):
         mock_ai.settings.max_tokens = 20000
         mock_ai.complete = AsyncMock(return_value=_reply())
 
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_model.ai_manager")
     @patch("backend.ai.chat.build_context")
     def test_plain_ticker_question_skips_news_and_fundamentals(self, mock_ctx, mock_ai):
         self._wire(mock_ctx, mock_ai)
@@ -652,21 +646,21 @@ class TestTurnIntent(_Base):
         self.assertFalse(kw["include_news"])
         self.assertFalse(kw["include_fundamentals"])
 
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_model.ai_manager")
     @patch("backend.ai.chat.build_context")
     def test_news_question_pulls_news(self, mock_ctx, mock_ai):
         self._wire(mock_ctx, mock_ai)
         answer_chat_message(self.session.id, "any news on AAPL? why is it up")
         self.assertTrue(mock_ctx.call_args.kwargs["include_news"])
 
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_model.ai_manager")
     @patch("backend.ai.chat.build_context")
     def test_valuation_question_pulls_fundamentals(self, mock_ctx, mock_ai):
         self._wire(mock_ctx, mock_ai)
         answer_chat_message(self.session.id, "what's AAPL's P/E and revenue growth")
         self.assertTrue(mock_ctx.call_args.kwargs["include_fundamentals"])
 
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_model.ai_manager")
     @patch("backend.ai.chat.build_context")
     def test_focused_ticker_turn_omits_market_baseline(self, mock_ctx, mock_ai):
         self._wire(mock_ctx, mock_ai)
@@ -674,7 +668,7 @@ class TestTurnIntent(_Base):
         self.mock_baseline.assert_not_called()
         self.assertNotIn("<market>", mock_ai.complete.call_args.kwargs["prompt"])
 
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_model.ai_manager")
     @patch("backend.ai.chat.build_context")
     def test_market_intent_attaches_baseline(self, mock_ctx, mock_ai):
         self._wire(mock_ctx, mock_ai)
@@ -684,7 +678,7 @@ class TestTurnIntent(_Base):
 
 
 class TestContextCache(_Base):
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_model.ai_manager")
     @patch("backend.ai.chat.build_context")
     def test_second_turn_same_symbol_served_from_cache(self, mock_ctx, mock_ai):
         self.mock_resolve.return_value = (["AAPL"], False)
@@ -707,7 +701,7 @@ class TestStreamChatMessage(_Base):
 
         return list(stream_chat_message(session_id, content))
 
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_model.ai_manager")
     def test_streams_deltas_then_final(self, mock_ai):
         self.mock_resolve.return_value = ([], False)
         mock_ai.is_available = AsyncMock(return_value=True)
@@ -744,7 +738,7 @@ class TestStreamChatMessage(_Base):
         self.assertEqual([r.content for r in rows][-1], "The market looks calm.")
 
     @patch("backend.ai.chat.verify_answer", side_effect=RuntimeError("verifier crashed"))
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_model.ai_manager")
     def test_finalization_failure_still_persists_one_final_message(self, mock_ai, _verify):
         self.mock_resolve.return_value = ([], False)
         mock_ai.is_available = AsyncMock(return_value=True)
@@ -767,7 +761,7 @@ class TestStreamChatMessage(_Base):
             repo.close()
         self.assertEqual([r.role for r in rows], ["user", "assistant"])
 
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_model.ai_manager")
     def test_non_streaming_mode_emits_one_delta(self, mock_ai):
         self.mock_resolve.return_value = ([], False)
         mock_ai.is_available = AsyncMock(return_value=True)
@@ -780,7 +774,7 @@ class TestStreamChatMessage(_Base):
         self.assertEqual([p for k, p in events if k == "delta"], ["one shot"])
         self.assertEqual(events[-1][1][0].content, "one shot")
 
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_model.ai_manager")
     def test_non_streaming_mode_retries_malformed_reply(self, mock_ai):
         self.mock_resolve.return_value = ([], False)
         mock_ai.is_available = AsyncMock(return_value=True)
@@ -799,7 +793,7 @@ class TestStreamChatMessage(_Base):
         self.assertTrue(grounded)
         self.assertEqual(msg.content, "one shot")
 
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_model.ai_manager")
     def test_streaming_mode_retries_malformed_reply(self, mock_ai):
         self.mock_resolve.return_value = ([], False)
         mock_ai.is_available = AsyncMock(return_value=True)
@@ -816,7 +810,7 @@ class TestStreamChatMessage(_Base):
         self.assertTrue(grounded)
         self.assertEqual(msg.content, "recovered")
 
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_model.ai_manager")
     def test_ai_off_still_produces_final(self, mock_ai):
         self.mock_resolve.return_value = ([], False)
         mock_ai.enabled = False
@@ -830,9 +824,9 @@ class TestStreamChatMessage(_Base):
         self.assertTrue(grounded)
         self.assertIn("unavailable", msg.content.lower())
 
-    @patch("backend.ai.chat.analyze_symbol")
+    @patch("backend.ai.chat_actions.analyze_symbol")
     @patch("backend.ai.chat.build_context")
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_model.ai_manager")
     def test_reanalysis_final_overrides_streamed_text(self, mock_ai, mock_ctx, mock_analyze):
         self.mock_resolve.return_value = (["AAPL"], False)
         mock_ctx.return_value.compact.return_value = WARM_CTX
@@ -859,7 +853,7 @@ class TestStreamChatMessage(_Base):
 
 
 class TestTranscriptClip(_Base):
-    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat_model.ai_manager")
     @patch("backend.ai.chat.build_context")
     def test_long_prior_message_is_clipped(self, mock_ctx, mock_ai):
         self.mock_resolve.return_value = ([], False)
