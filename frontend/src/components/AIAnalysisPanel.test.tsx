@@ -43,6 +43,17 @@ interface AIAnalysisResult {
     model: string;
     is_uncertain: boolean;
     template_id?: number | null;
+    symbol?: string;
+    timeframe?: string;
+    price?: number | null;
+    source_timestamp?: string | null;
+    data_age_seconds?: number | null;
+    data_status?: string;
+    market_data_provider?: string | null;
+    market_session?: 'premarket' | 'regular' | 'after_hours' | 'closed' | 'unknown';
+    cache_status?: 'fresh' | 'cached';
+    market_regime?: Record<string, unknown>;
+    timeframe_scores?: Record<string, { direction?: string; strength?: string; confidence?: number }>;
 }
 
 function makeResult(overrides: Partial<AIAnalysisResult> = {}): AIAnalysisResult {
@@ -58,6 +69,15 @@ function makeResult(overrides: Partial<AIAnalysisResult> = {}): AIAnalysisResult
         provider: 'ollama',
         model: 'llama3.2',
         is_uncertain: false,
+        symbol: 'AAPL',
+        timeframe: '1d',
+        price: 201.25,
+        source_timestamp: '2026-09-24T15:30:00-04:00',
+        data_age_seconds: 12,
+        data_status: 'LIVE',
+        market_data_provider: 'webull',
+        market_session: 'regular',
+        cache_status: 'fresh',
         ...overrides,
     };
 }
@@ -106,7 +126,7 @@ describe('AIAnalysisPanel', () => {
         });
         expect(screen.getByText('bullish')).toHaveClass('chat-num-pos');
         expect(screen.getByText('breakout')).toHaveClass('chat-num-pos');
-        expect(screen.getAllByText('AAPL')[0]).toHaveClass('chat-ticker-ok');
+        expect(screen.getAllByText('AAPL').find(node => node.classList.contains('chat-ticker-ok'))).toBeDefined();
         expect(screen.getByText('RSI')).toHaveClass('chat-metric');
         // 26.6 has no sign of its own — inherits "oversold" (bullish),
         // the last metric/sentiment word before it in the same sentence.
@@ -122,5 +142,22 @@ describe('AIAnalysisPanel', () => {
         await waitFor(() => {
             expect(screen.getByText(/gpt-4o-mini/i)).toBeInTheDocument();
         });
+    });
+
+    it('shows server-authored market-data evidence and cached status', async () => {
+        setConfig(true);
+        mockApi.analyzeSymbol.mockResolvedValue(makeResult({
+            cache_status: 'cached',
+            market_regime: { regime: 'risk_on' },
+            timeframe_scores: { '1d': { direction: 'bullish', strength: 'strong', confidence: 0.82 } },
+        }));
+        await act(async () => {
+            render(<AIAnalysisPanel symbol="AAPL" />);
+        });
+        expect(await screen.findByText('Market-data evidence')).toBeInTheDocument();
+        expect(screen.getByText('Cached analysis')).toBeInTheDocument();
+        expect(screen.getByText(/Price \$201.25/)).toBeInTheDocument();
+        expect(screen.getByText(/Market regime:/)).toHaveTextContent('risk on');
+        expect(screen.getByText('1d').parentElement).toHaveTextContent('1d · bullish · strong · 82%');
     });
 });

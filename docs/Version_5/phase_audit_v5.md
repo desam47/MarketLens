@@ -1510,3 +1510,28 @@ until the line is removed. The end-to-end evaluation pins these defaults
   `DEBUG=false python -m pytest -q backend/tests/ai/test_phase16_analyze.py
   backend/tests/api/test_ai_router.py` passed with 132 tests and 17 subtests;
   Ruff passed for the changed files.
+
+## AI Analysis market-data evidence (2026-09-24)
+
+- **Server-authored provenance.** Every successful AI Analysis now carries
+  the requested symbol/timeframe, quoted price, source timestamp, quote age,
+  provider, actual provider `data_status`, and the current exchange session.
+  These values are copied from `AnalysisContext` after model parsing; they are
+  never accepted from the model response. Context-build uncertainty still
+  identifies the requested symbol/timeframe and explicitly leaves unavailable
+  market-data fields empty.
+- **Truthful status and cache state.** AI context no longer labels every
+  available quote as `live`; it preserves the source's real `LIVE`,
+  `DELAYED`, `HISTORICAL`, `STALE`, or `ERROR` state. The 45-second analysis
+  cache marks a returned response as `cached` without mutating the stored
+  fresh response.
+- **Trader-facing evidence.** AI Analysis renders a compact evidence card
+  with target, price, provider/status freshness badge, age, as-of time,
+  session, and a visible cached-analysis label. It also renders the returned
+  market regime and canonical multi-timeframe direction/strength/confidence
+  inputs alongside the model narrative.
+- **Regression coverage.** Focused backend tests cover source preservation,
+  API serialization, and cache labels; the panel test covers the evidence,
+  cache, regime, and timeframe-score rendering. The focused backend suite
+  passed with 133 tests and 17 subtests, the panel suite passed with 4 tests,
+  and the production frontend build compiled successfully.

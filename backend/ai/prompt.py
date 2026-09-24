@@ -304,6 +304,18 @@ class AnalysisResponse(BaseModel):
     timeframe_scores: dict[str, Any] = Field(default_factory=dict)
     track_record: dict[str, Any] = Field(default_factory=dict)
     correlation_context: dict[str, Any] = Field(default_factory=dict)
+    # Market-data provenance, stamped from AnalysisContext after parsing.
+    # These fields are deliberately absent from ANALYSIS_JSON_SCHEMA: the
+    # model never supplies them and cannot make a stale result look current.
+    symbol: str = ""
+    timeframe: str = ""
+    price: float | None = None
+    source_timestamp: str | None = None
+    data_age_seconds: float | None = None
+    data_status: str = "UNKNOWN"
+    market_data_provider: str | None = None
+    market_session: str = "unknown"
+    cache_status: Literal["fresh", "cached"] = "fresh"
 
     @model_validator(mode="before")
     @classmethod
@@ -398,6 +410,17 @@ class UncertaintyResponse(BaseModel):
     # of parsing the free-text summary. Always "none" for AnalysisResponse
     # (success) and never set by the AI on UncertaintyResponse.
     uncertainty_reason: UncertaintyReason = "none"
+    # Request/evidence metadata is server-authored. A context-build failure
+    # has no source quote, but still carries the requested symbol/timeframe.
+    symbol: str = ""
+    timeframe: str = ""
+    price: float | None = None
+    source_timestamp: str | None = None
+    data_age_seconds: float | None = None
+    data_status: str = "UNKNOWN"
+    market_data_provider: str | None = None
+    market_session: str = "unknown"
+    cache_status: Literal["fresh", "cached"] = "fresh"
 
 
 # --- Parsing --------------------------------------------------------

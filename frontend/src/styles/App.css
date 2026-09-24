@@ -5712,6 +5712,75 @@ div.td-trend {
   color: var(--text-primary);
 }
 
+.ai-evidence {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  padding: 0.55rem 0.7rem;
+  font-size: 0.78rem;
+}
+
+.ai-evidence-heading,
+.ai-evidence-primary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.ai-evidence-heading {
+  justify-content: space-between;
+  margin-bottom: 0.35rem;
+  color: var(--text-secondary);
+}
+
+.ai-evidence-primary {
+  color: var(--text-primary);
+}
+
+.ai-evidence-meta {
+  margin-top: 0.3rem;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+
+.ai-cache-tag {
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  border-radius: 999px;
+  color: var(--warning);
+  font-size: 0.68rem;
+  font-weight: 600;
+  padding: 0.1rem 0.4rem;
+}
+
+.ai-quant-context {
+  background: rgba(59, 130, 246, 0.05);
+  border: 1px solid rgba(59, 130, 246, 0.18);
+  border-radius: 0.375rem;
+  padding: 0.6rem 0.7rem;
+}
+
+.ai-context-regime {
+  margin: 0 0 0.45rem;
+  font-size: 0.82rem;
+  text-transform: capitalize;
+}
+
+.ai-timeframe-scores {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.ai-timeframe-score {
+  border: 1px solid var(--border);
+  border-radius: 0.25rem;
+  color: var(--text-secondary);
+  font-size: 0.74rem;
+  padding: 0.22rem 0.38rem;
+}
+
 .ai-section h3 {
   margin: 0 0 0.4rem;
   font-size: 0.8rem;

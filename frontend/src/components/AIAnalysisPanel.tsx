@@ -15,6 +15,8 @@ import React, { useEffect, useState, useCallback, useRef } from 'react';
 import api, { AIAnalysisResult, AIConfig, AIJobStatusResponse } from '../services/api';
 import { DEFAULT_TIMEFRAME } from '../utils/timeframeUtils';
 import { highlightMessage } from '../utils/textHighlight';
+import { MarketDataFreshnessBadge } from './MarketDataFreshnessBadge';
+import { formatETDateTime } from './chartMath';
 
 interface AIAnalysisPanelProps {
   symbol: string;
@@ -61,6 +63,10 @@ function providerLabel(provider: string): string {
     unknown: 'AI',
   };
   return map[provider] || provider;
+}
+
+function labelValue(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.replace(/_/g, ' ') : null;
 }
 
 export function AIAnalysisPanel({ symbol, timeframe = DEFAULT_TIMEFRAME }: AIAnalysisPanelProps) {
@@ -213,6 +219,8 @@ export function AIAnalysisPanel({ symbol, timeframe = DEFAULT_TIMEFRAME }: AIAna
     analysis.provider !== 'disabled' &&
     analysis.provider !== 'none'
   );
+  const scoreEntries = analysis ? Object.entries(analysis.timeframe_scores || {}) : [];
+  const regimeLabel = analysis ? labelValue(analysis.market_regime?.regime) : null;
 
   return (
     <div id="ai-analysis-panel" className="card ai-analysis-card">
@@ -339,9 +347,52 @@ export function AIAnalysisPanel({ symbol, timeframe = DEFAULT_TIMEFRAME }: AIAna
             )}
           </div>
 
+          <section className="ai-evidence" aria-label="Analysis market-data evidence">
+            <div className="ai-evidence-heading">
+              <strong>Market-data evidence</strong>
+              {analysis.cache_status === 'cached' && <span className="ai-cache-tag">Cached analysis</span>}
+            </div>
+            <div className="ai-evidence-primary">
+              <span><b>{analysis.symbol || symbol}</b> · {analysis.timeframe || timeframe}</span>
+              {analysis.price != null && <span>Price {money(analysis.price)}</span>}
+              <MarketDataFreshnessBadge
+                dataStatus={analysis.data_status}
+                timestamp={analysis.source_timestamp}
+                ageSeconds={analysis.data_age_seconds}
+                provider={analysis.market_data_provider}
+                marketSession={analysis.market_session === 'unknown' ? null : analysis.market_session}
+                staleAfterSeconds={60}
+                showAge
+              />
+            </div>
+            <div className="ai-evidence-meta">
+              {analysis.source_timestamp
+                ? <>As of {formatETDateTime(analysis.source_timestamp)} ET · {analysis.market_session?.replace('_', ' ') || 'session unavailable'}</>
+                : <>Source timestamp unavailable · {analysis.market_session?.replace('_', ' ') || 'session unavailable'}</>}
+            </div>
+          </section>
+
           <div className="ai-summary">
             <p>{highlightMessage(analysis.summary, [symbol])}</p>
           </div>
+
+          {(regimeLabel || scoreEntries.length > 0) && (
+            <section className="ai-section ai-quant-context" aria-label="Quantitative context">
+              <h3>📊 Quantitative Context</h3>
+              {regimeLabel && <p className="ai-context-regime">Market regime: <b>{regimeLabel}</b></p>}
+              {scoreEntries.length > 0 && (
+                <div className="ai-timeframe-scores">
+                  {scoreEntries.map(([scoreTimeframe, score]) => (
+                    <span className="ai-timeframe-score" key={scoreTimeframe}>
+                      <b>{scoreTimeframe}</b> · {score.direction || 'unknown'}
+                      {score.strength ? ` · ${score.strength}` : ''}
+                      {typeof score.confidence === 'number' ? ` · ${Math.round(score.confidence * 100)}%` : ''}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </section>
+          )}
 
           {analysis.trade_plan && (
             <div className="ai-section ai-trade-plan">

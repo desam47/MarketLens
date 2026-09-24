@@ -146,6 +146,17 @@ class AnalyzeResponse(BaseModel):
     uncertainty_reason: str = "none"
     confidence_declared: float | None = None
     confidence_sample_size: int | None = None
+    # Server-authored market-data provenance. These values are copied from the
+    # quantitative context, never from the model's natural-language reply.
+    symbol: str = ""
+    timeframe: str = ""
+    price: float | None = None
+    source_timestamp: str | None = None
+    data_age_seconds: float | None = None
+    data_status: str = "UNKNOWN"
+    market_data_provider: str | None = None
+    market_session: str = "unknown"
+    cache_status: str = "fresh"
 
 
 # --- Endpoints -----------------------------------------------------
@@ -297,6 +308,15 @@ async def analyze(
         uncertainty_reason=getattr(result, "uncertainty_reason", "none"),
         confidence_declared=getattr(result, "confidence_declared", None),
         confidence_sample_size=getattr(result, "confidence_sample_size", None),
+        symbol=getattr(result, "symbol", symbol.upper()),
+        timeframe=getattr(result, "timeframe", timeframe),
+        price=getattr(result, "price", None),
+        source_timestamp=getattr(result, "source_timestamp", None),
+        data_age_seconds=getattr(result, "data_age_seconds", None),
+        data_status=getattr(result, "data_status", "UNKNOWN"),
+        market_data_provider=getattr(result, "market_data_provider", None),
+        market_session=getattr(result, "market_session", "unknown"),
+        cache_status=getattr(result, "cache_status", "fresh"),
     )
 
 

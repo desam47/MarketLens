@@ -876,6 +876,27 @@ export interface AIAnalysisResult {
   is_uncertain: boolean;
   template_id?: number | null;
   template_name?: string | null;
+  market_regime?: Record<string, unknown>;
+  timeframe_scores?: Record<string, {
+    direction?: string;
+    strength?: string;
+    confidence?: number;
+  }>;
+  track_record?: Record<string, unknown>;
+  correlation_context?: Record<string, unknown>;
+  uncertainty_reason?: string;
+  confidence_declared?: number | null;
+  confidence_sample_size?: number | null;
+  /** Server-authored market-data evidence used for this analysis. */
+  symbol?: string;
+  timeframe?: string;
+  price?: number | null;
+  source_timestamp?: string | null;
+  data_age_seconds?: number | null;
+  data_status?: string;
+  market_data_provider?: string | null;
+  market_session?: MarketSessionType | 'unknown';
+  cache_status?: 'fresh' | 'cached';
 }
 
 export interface AIConfig {

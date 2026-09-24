@@ -492,6 +492,20 @@ class TestBuildContext(unittest.TestCase):
         ]:
             self.assertIn(k, d)
 
+    def test_context_preserves_quote_provenance(self):
+        scan = _fake_scan_result()
+        scan.quote.provider = "webull"
+        scan.quote.data_status = "DELAYED"
+        self.scanner.scan_symbol.return_value = scan
+
+        ctx = build_context("AAPL", "1d")
+
+        self.assertEqual(ctx.market_data_provider, "webull")
+        self.assertEqual(ctx.data_status, "DELAYED")
+        self.assertIsNotNone(ctx.timestamp)
+        self.assertIsNotNone(ctx.data_age_seconds)
+        self.assertIn(ctx.market_session, {"premarket", "regular", "after_hours", "closed"})
+
     def test_context_uses_the_requested_scanner_timeframe(self):
         """Scanner enum-name keys must not make AI Analysis fall back to 1m."""
         scan = _fake_scan_result()
@@ -583,7 +597,7 @@ class TestBuildContext(unittest.TestCase):
             track_record={"total_signals": 5},
         )
         compact = ctx.compact()
-        self.assertEqual(len(compact), 21)
+        self.assertEqual(len(compact), 22)
 
 
 # --- O9: scan cache reuse in build_context -----------------------------
@@ -738,6 +752,8 @@ class TestAnalysisCache(unittest.TestCase):
         r1 = asyncio.run(analyze_symbol("AAPL", "1d"))
         r2 = asyncio.run(analyze_symbol("AAPL", "1d"))
         self.assertIs(r1.trend, r2.trend)
+        self.assertEqual(r1.cache_status, "fresh")
+        self.assertEqual(r2.cache_status, "cached")
         # Second call should NOT re-invoke the AI or build_context
         self.assertEqual(mock_ai.complete.call_count, 1)
         self.assertEqual(mock_ctx.call_count, 1)

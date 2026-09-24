@@ -39,6 +39,15 @@ class TestAnalyzeEndpoint(unittest.TestCase):
             model="llama3.2",
             confidence_declared=0.9,
             confidence_sample_size=12,
+            symbol="AAPL",
+            timeframe="1d",
+            price=201.25,
+            source_timestamp="2026-09-24T15:30:00-04:00",
+            data_age_seconds=12.5,
+            data_status="LIVE",
+            market_data_provider="webull",
+            market_session="regular",
+            cache_status="fresh",
         )
 
         resp = client.post("/api/ai/analyze?symbol=AAPL&timeframe=1d")
@@ -54,6 +63,13 @@ class TestAnalyzeEndpoint(unittest.TestCase):
         self.assertEqual(data["model"], "llama3.2")
         self.assertEqual(data["confidence_declared"], 0.9)
         self.assertEqual(data["confidence_sample_size"], 12)
+        self.assertEqual(data["symbol"], "AAPL")
+        self.assertEqual(data["timeframe"], "1d")
+        self.assertEqual(data["price"], 201.25)
+        self.assertEqual(data["data_status"], "LIVE")
+        self.assertEqual(data["market_data_provider"], "webull")
+        self.assertEqual(data["market_session"], "regular")
+        self.assertEqual(data["cache_status"], "fresh")
         self.assertFalse(data["is_uncertain"])
 
     @patch("backend.api.ai.router.analyze_symbol")

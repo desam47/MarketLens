@@ -48,6 +48,7 @@ from typing import Any
 
 from backend.engines.timeframe import Timeframe
 from backend.scanner.scanner import ScanResult, market_scanner
+from backend.utils.timezone import NY, format_edt_iso, now_ny
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +70,31 @@ def _canonical_timeframe_key(value: Any) -> str:
     if member is not None:
         return member.value
     return key.lower()
+
+
+def _quote_data_status(quote: Any) -> str:
+    """Return the provider's actual quote-status label, never an inferred one."""
+    status = getattr(quote, "data_status", None)
+    if isinstance(status, str):
+        return status.upper()
+    value = getattr(status, "value", None)
+    return value.upper() if isinstance(value, str) else "UNKNOWN"
+
+
+def _quote_age_seconds(timestamp: datetime | None) -> float | None:
+    """Age a quote using the project's naive-New-York timestamp convention."""
+    if timestamp is None or not isinstance(timestamp, datetime):
+        return None
+    if timestamp.tzinfo is not None:
+        timestamp = timestamp.astimezone(NY).replace(tzinfo=None)
+    return max(0.0, (now_ny() - timestamp).total_seconds())
+
+
+def _current_market_session() -> str:
+    """Return the exchange session now, independent of the quote's age."""
+    from backend.engines.market_calendar import us_market_calendar
+
+    return us_market_calendar.get_session_type(datetime.now(UTC)).value
 
 # Sized for TWO things sharing this one pool (2026-09-16, be59abd made
 # it process-wide instead of per-call — see _CONTEXT_EXECUTOR below):
@@ -154,6 +180,9 @@ class AnalysisContext:
     price: float | None
     timestamp: str | None
     data_status: str  # "live" | "stale" | "unknown"
+    market_data_provider: str | None = None
+    data_age_seconds: float | None = None
+    market_session: str = "unknown"
     timeframe_scores: dict[str, Any] = field(default_factory=dict)
     trend_state: dict[str, Any] = field(default_factory=dict)
     market_structure: dict[str, Any] = field(default_factory=dict)
@@ -179,6 +208,9 @@ class AnalysisContext:
             "price": self.price,
             "timestamp": self.timestamp,
             "data_status": self.data_status,
+            "market_data_provider": self.market_data_provider,
+            "data_age_seconds": self.data_age_seconds,
+            "market_session": self.market_session,
             "timeframe_scores": self.timeframe_scores,
             "trend_state": self.trend_state,
             "market_structure": self.market_structure,
@@ -876,9 +908,15 @@ def build_context(
     if quote is not None:
         price = quote.price
         ts = quote.timestamp
+        market_data_provider = getattr(quote, "provider", None)
+        if not isinstance(market_data_provider, str):
+            market_data_provider = None
+        data_status = _quote_data_status(quote)
     else:
         price = None
         ts = scan.timestamp
+        market_data_provider = None
+        data_status = "UNKNOWN"
 
     if price is None:
         raise InsufficientDataError(f"no price available for {sym}")
@@ -998,10 +1036,13 @@ def build_context(
 
     return AnalysisContext(
         symbol=sym,
-        timeframe=timeframe,
+        timeframe=tf,
         price=price,
-        timestamp=str(ts) if ts else None,
-        data_status="live" if quote else "stale",
+        timestamp=format_edt_iso(ts) if isinstance(ts, datetime) else None,
+        data_status=data_status,
+        market_data_provider=market_data_provider,
+        data_age_seconds=_quote_age_seconds(ts),
+        market_session=_current_market_session(),
         timeframe_scores=timeframe_scores,
         trend_state=trend_state,
         market_structure={

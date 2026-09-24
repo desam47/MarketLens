@@ -159,6 +159,39 @@ def _cache_result(
             _analysis_cache.popitem(last=False)
 
 
+def _with_request_metadata(
+    result: AnalysisResponse | UncertaintyResponse,
+    symbol: str,
+    timeframe: str,
+    *,
+    cache_status: str = "fresh",
+) -> AnalysisResponse | UncertaintyResponse:
+    """Attach server-authored target metadata when no market context exists."""
+    result.symbol = symbol.upper()
+    result.timeframe = timeframe
+    result.cache_status = cache_status
+    return result
+
+
+def _with_context_metadata(
+    result: AnalysisResponse | UncertaintyResponse,
+    ctx: AnalysisContext,
+    *,
+    cache_status: str = "fresh",
+) -> AnalysisResponse | UncertaintyResponse:
+    """Attach immutable market-data provenance from the quantitative context."""
+    result.symbol = ctx.symbol
+    result.timeframe = ctx.timeframe
+    result.price = ctx.price
+    result.source_timestamp = ctx.timestamp
+    result.data_age_seconds = ctx.data_age_seconds
+    result.data_status = ctx.data_status
+    result.market_data_provider = ctx.market_data_provider
+    result.market_session = ctx.market_session
+    result.cache_status = cache_status
+    return result
+
+
 async def analyze_symbol(
     symbol: str,
     timeframe: str = "1d",
@@ -236,7 +269,7 @@ async def analyze_symbol(
             hit = _analysis_cache.get(cache_key)
             if hit is not None and now - hit[0] < _ANALYSIS_TTL:
                 _analysis_cache.move_to_end(cache_key)
-                return hit[1]
+                return hit[1].model_copy(update={"cache_status": "cached"})
     else:
         cache_key = None
 
@@ -250,6 +283,7 @@ async def analyze_symbol(
             f"Quantitative data not available: {e}",
             reason_enum="insufficient_data",
         )
+        result = _with_request_metadata(result, symbol, timeframe)
         _cache_result(cache_key, result)
         return result
     except Exception as e:
@@ -352,6 +386,7 @@ def _finalize_analysis(
         result = _uncertainty(
             msg, reason_enum=reason, provider=ai_resp.provider, model=ai_resp.model
         )
+        result = _with_context_metadata(result, ctx)
         _cache_result(cache_key, result)
         return result
 
@@ -372,6 +407,7 @@ def _finalize_analysis(
             provider=ai_resp.provider,
             model=ai_resp.model,
         )
+        result = _with_context_metadata(result, ctx)
         _cache_result(cache_key, result)
         return result
 
@@ -431,6 +467,7 @@ def _finalize_analysis(
     except Exception as e:  # noqa: BLE001
         logger.warning("trade plan capture failed for %s: %s", symbol, e)
 
+    parsed = _with_context_metadata(parsed, ctx)
     _cache_result(cache_key, parsed)
     return parsed
 
@@ -495,7 +532,7 @@ async def analyze_symbol_stream(
             hit = _analysis_cache.get(cache_key)
             if hit is not None and now - hit[0] < _ANALYSIS_TTL:
                 _analysis_cache.move_to_end(cache_key)
-                cached = hit[1]
+                cached = hit[1].model_copy(update={"cache_status": "cached"})
                 yield (
                     "meta",
                     {
@@ -520,6 +557,7 @@ async def analyze_symbol_stream(
             f"Quantitative data not available: {e}",
             reason_enum="insufficient_data",
         )
+        result = _with_request_metadata(result, symbol, timeframe)
         _cache_result(cache_key, result)
         yield (
             "meta",
