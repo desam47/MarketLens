@@ -134,7 +134,9 @@ def test_daily_comparison_is_usable_during_the_session(monkeypatch) -> None:
     text, grounded = _run_market_tool(None, _comparison())
 
     assert grounded is True
-    assert "AAPL 2.50% (rank 1)" in text
+    assert "AAPL's return is 2.50%" in text
+    assert "session in progress isn't included" in text
+    assert "market close" not in text
 
 
 def test_an_old_daily_comparison_is_still_withheld_during_the_session(monkeypatch) -> None:

@@ -1169,7 +1169,7 @@
               }
             },
             "reply_contains": [
-              "session premarket"
+              "premarket session"
             ],
             "memory": {
               "session": "premarket"

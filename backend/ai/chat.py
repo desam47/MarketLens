@@ -1623,6 +1623,102 @@ def _browser_safe_reply_data(action: str, data: dict) -> dict:
     return {}
 
 
+# Wording helpers for the server's own replies. They read as plain sentences,
+# and each keeps the answer verifier's rules: every number still comes from
+# the evidence, dates are written as "Sep 23, 2026" (not number claims),
+# data older than 15 minutes never uses "current"/"today"/"now", and an
+# intraday timeframe stays a token like "5m" rather than "5-minute".
+_MONTH_ABBR = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+_CHART_NAMES = {"1d": "daily", "1wk": "weekly", "1w": "weekly", "1h": "hourly", "daily": "daily", "weekly": "weekly"}
+_SOURCE_NAMES = {
+    "webull": "Webull",
+    "yahoo_finance": "Yahoo Finance",
+    "alpaca": "Alpaca",
+    "finnhub": "Finnhub",
+    "live_from_1m": "live intraday bars",
+}
+
+
+def _nice_date(value: object, *, with_year: bool = True) -> str:
+    """"2026-09-23" (or a timestamp) as "Sep 23, 2026"; other text unchanged."""
+    text = str(value or "")
+    try:
+        day = date.fromisoformat(text[:10])
+    except ValueError:
+        return text
+    base = f"{_MONTH_ABBR[day.month - 1]} {day.day}"
+    return f"{base}, {day.year}" if with_year else base
+
+
+def _date_span(start: object, end: object) -> str:
+    try:
+        same_year = date.fromisoformat(str(start)[:10]).year == date.fromisoformat(str(end)[:10]).year
+    except ValueError:
+        return f"{start} to {end}"
+    return f"{_nice_date(start, with_year=not same_year)} to {_nice_date(end)}"
+
+
+def _chart_name(timeframe: object) -> str:
+    """"daily"/"weekly"/"hourly", or the timeframe token itself ("5m")."""
+    text = str(timeframe or "").strip()
+    return _CHART_NAMES.get(text.lower(), text)
+
+
+def _source_name(provider: object) -> str:
+    text = str(provider or "").strip()
+    if text in _SOURCE_NAMES:
+        return _SOURCE_NAMES[text]
+    if re.search(r"\d", text):
+        return "MarketLens"
+    return text.replace("_", " ") if " " in text or text[:1].isupper() else text.replace("_", " ").title()
+
+
+def _age_words(seconds: float) -> str:
+    """A rough age with no digits, so it is never read as a market number."""
+    if seconds < 3600:
+        return "less than an hour"
+    if seconds < 2 * 3600:
+        return "about an hour"
+    if seconds < 24 * 3600:
+        return "several hours"
+    if seconds < 48 * 3600:
+        return "about a day"
+    return "several days"
+
+
+def _join_and(items: list[str]) -> str:
+    items = [item for item in items if item]
+    if len(items) <= 1:
+        return "".join(items)
+    return ", ".join(items[:-1]) + " and " + items[-1]
+
+
+def _count(n: int, singular: str, plural: str | None = None) -> str:
+    """"no news items" / "1 news item" / "3 news items"."""
+    plural = plural or f"{singular}s"
+    if n == 0:
+        return f"no {plural}"
+    return f"{n} {singular if n == 1 else plural}"
+
+
+def _as_sentence(text: object) -> str:
+    """Tool-provided prose as a sentence: field names spelled out
+    ("entry_price" -> "entry price"), ISO dates written out, capitalised,
+    ending in a full stop."""
+    value = re.sub(r"(?<=[a-z])_(?=[a-z])", " ", str(text or "").strip())
+    value = re.sub(r"\b\d{4}-\d{2}-\d{2}\b", lambda match: _nice_date(match.group()), value)
+    if not value:
+        return ""
+    value = value[:1].upper() + value[1:]
+    return value if value.endswith((".", "!", "?")) else value + "."
+
+
+def _stale_note(freshness_seconds: float | None) -> str:
+    if isinstance(freshness_seconds, (int, float)) and freshness_seconds > 900:
+        return f" Keep in mind this data is {_age_words(freshness_seconds)} old, so refresh it before relying on it."
+    return ""
+
+
 def _format_browser_local_reply(action: str, data: dict, provider: str, *, query: str | None = None) -> str:
     """Turn aggregate browser-local tool data into user-facing prose.
 
@@ -1630,17 +1726,16 @@ def _format_browser_local_reply(action: str, data: dict, provider: str, *, query
     This formatter keeps that privacy boundary while avoiding a raw JSON
     payload in the Chat panel.
     """
-    source = provider or "MarketLens"
     if action in {"get_risk_dashboard", "assess_portfolio_risk", "scenario_analysis"}:
         if data.get("available") is False:
             reason = str(data.get("reason") or "No browser-local positions were shared for this turn.")
             if action == "scenario_analysis":
-                return f"scenario_analysis (portfolio scenario) is unavailable from {source}: {reason}"
+                return f"I can't run a portfolio scenario yet. {_as_sentence(reason)}"
             if query == "portfolio_change":
-                return f"Portfolio changes are unavailable from {source}: {reason}"
+                return f"I can't show how your portfolio changed yet. {_as_sentence(reason)}"
             if query == "portfolio_weakness":
-                return f"Portfolio weakness ranking is unavailable from {source}: {reason}"
-            return f"Portfolio risk is unavailable from {source}: {reason}"
+                return f"I can't rank your portfolio's weakest holdings yet. {_as_sentence(reason)}"
+            return f"I can't assess your portfolio risk yet. {_as_sentence(reason)}"
         if query == "portfolio_change":
             return (
                 "I can summarize the current shared portfolio, but I cannot verify what "
@@ -1656,57 +1751,72 @@ def _format_browser_local_reply(action: str, data: dict, provider: str, *, query
         if not isinstance(position_count, int):
             positions = data.get("positions")
             position_count = len(positions) if isinstance(positions, list) else None
-        count_text = f"{position_count} position{'s' if position_count != 1 else ''}" if isinstance(position_count, int) else "the shared positions"
-        details = [f"{count_text}"]
-        labels = (
-            ("gross exposure", data.get("gross_exposure")),
-            ("net exposure", data.get("net_exposure")),
-            ("stop-loss risk", data.get("stop_loss_risk")),
+        count_text = (
+            "your one position"
+            if position_count == 1
+            else f"your {position_count} positions"
+            if isinstance(position_count, int)
+            else "the positions you shared"
         )
-        for label, value in labels:
-            if isinstance(value, (int, float)) and not isinstance(value, bool):
-                details.append(f"{label} ${float(value):,.2f}")
+        figures = [
+            f"{label} is ${float(value):,.2f}"
+            for label, value in (
+                ("gross exposure", data.get("gross_exposure")),
+                ("net exposure", data.get("net_exposure")),
+                ("stop-loss risk", data.get("stop_loss_risk")),
+            )
+            if isinstance(value, (int, float)) and not isinstance(value, bool)
+        ]
+        reply = (
+            f"Across {count_text}, {_join_and(figures)}."
+            if figures
+            else f"I have {count_text}, but no exposure figures to summarize."
+        )
         price_basis = data.get("price_basis")
         if price_basis:
-            details.append(str(price_basis).rstrip("."))
-        return f"Portfolio risk is verified from {source}: " + "; ".join(details) + "."
+            reply += f" {_as_sentence(price_basis)}"
+        return reply
 
     if action in {"get_trade_journal", "trade_journal_coach"}:
         if data.get("available") is False:
             reason = str(data.get("reason") or "No browser-local journal entries were shared for this turn.")
-            return f"Trade journal data is unavailable from {source}: {reason}"
+            return f"I can't review your trade journal yet. {_as_sentence(reason)}"
         total = data.get("total_entries")
         closed = data.get("closed_entries")
-        details = []
         if isinstance(total, int):
-            details.append(f"{total} total entr{'y' if total == 1 else 'ies'}")
-        if isinstance(closed, int):
-            details.append(f"{closed} closed entr{'y' if closed == 1 else 'ies'}")
+            reply = f"Your trade journal has {total} entr{'y' if total == 1 else 'ies'}"
+            if isinstance(closed, int) and closed == total:
+                reply += ", and it's closed" if total == 1 else ", all of them closed"
+            elif isinstance(closed, int):
+                reply += f", {closed} of them closed"
+        elif isinstance(closed, int):
+            reply = f"Your trade journal has {closed} closed entr{'y' if closed == 1 else 'ies'}"
+        else:
+            reply = "I have your trade journal"
+        stats = []
         win_rate = data.get("win_rate_percent")
         if isinstance(win_rate, (int, float)) and not isinstance(win_rate, bool):
-            details.append(f"{float(win_rate):.1f}% win rate")
+            stats.append(f"a {float(win_rate):.1f}% win rate")
         expectancy = data.get("expectancy_per_trade")
         if isinstance(expectancy, (int, float)) and not isinstance(expectancy, bool):
-            details.append(f"${float(expectancy):,.2f} expectancy per trade")
-        if not details:
-            details.append("no aggregate statistics available")
-        return f"Trade journal review is verified from {source}: " + "; ".join(details) + "."
+            stats.append(f"an expectancy of ${float(expectancy):,.2f} per trade")
+        if stats:
+            return f"{reply}, with {_join_and(stats)}."
+        return f"{reply}, but not enough closed trades for win-rate statistics yet."
 
     if action == "get_saved_scans":
         if data.get("available") is False:
             reason = str(data.get("reason") or "No browser-local saved Scanner presets were shared for this turn.")
-            return f"Saved scans are unavailable from {source}: {reason}"
+            return f"I can't see your saved scans yet. {_as_sentence(reason)}"
         preset_count = data.get("preset_count")
         if not isinstance(preset_count, int):
             presets = data.get("presets")
             preset_count = len(presets) if isinstance(presets, list) else None
         if isinstance(preset_count, int):
-            label = f"{preset_count} saved preset{'s' if preset_count != 1 else ''}"
-        else:
-            label = "saved Scanner presets"
-        return f"Saved scans are verified from {source}: {label} available."
+            return f"You have {preset_count} saved Scanner preset{'s' if preset_count != 1 else ''}."
+        return "You have saved Scanner presets."
 
-    return f"Verified {action} result from {source}."
+    return f"Here's the {action.replace('_', ' ')} result from {_source_name(provider) or 'MarketLens'}."
 
 
 def _format_indicator_reply(
@@ -1749,21 +1859,18 @@ def _format_indicator_reply(
     if not source_timestamp:
         source_timestamp = data.get("timestamp")
     as_of = str(source_timestamp).split("T", 1)[0] if source_timestamp else None
-    timeframe_label = timeframe or data.get("timeframe") or arguments.get("timeframe") or "specified timeframe"
-    details = [f"{symbol} {label}{period_text}: {value_text}", f"{timeframe_label} bars"]
+    chart = _chart_name(timeframe or data.get("timeframe") or arguments.get("timeframe"))
+    reply = f"{symbol}'s {label}{period_text} is {value_text}"
+    if chart:
+        reply += f" on the {chart} chart"
+    context = []
     if as_of:
-        details.append(f"as of {as_of}")
+        context.append(f"as of {_nice_date(as_of)}")
     if provider:
-        details.append(f"source {provider}")
-    reply = "Verified " + ", ".join(details) + "."
-    if isinstance(freshness_seconds, (int, float)) and freshness_seconds > 900:
-        age = (
-            f"{freshness_seconds / 3600:.1f} hours"
-            if freshness_seconds >= 3600
-            else f"{freshness_seconds / 60:.1f} minutes"
-        )
-        reply += f" Warning: this data is {age} old and historical; refresh market data before treating it as current."
-    return reply
+        context.append(f"from {_source_name(provider)}")
+    if context:
+        reply += f" ({', '.join(context)})"
+    return reply + "." + _stale_note(freshness_seconds)
 
 
 def _format_generic_market_reply(
@@ -1819,7 +1926,7 @@ def _format_generic_market_reply(
     if data.get("available") is False:
         reason = data.get("reason") or "the required verified data was not available"
         target = f" for {symbol}" if symbol else ""
-        return f"{label.capitalize()} isn't available{target}: {reason}."
+        return f"{label.capitalize()} isn't available{target}. {_as_sentence(reason)}"
 
     if action == "save_to_journal":
         saved = data.get("saved_entry") or {}
@@ -1831,104 +1938,145 @@ def _format_generic_market_reply(
         count_note = f" You now have {total} {'entry' if total == 1 else 'entries'}." if isinstance(total, int) else ""
         return f"Done — saved {header} trade to your Journal.{count_note}" if header else f"Done — trade saved to your Journal.{count_note}"
 
-    details: list[str] = []
+    effective_timeframe = timeframe or str(data.get("timeframe") or "")
+    # Daily/weekly bars are end-of-day data; their age past 15 minutes is
+    # expected, so no stale note for them.
+    bars_eod = action == "get_bars" and effective_timeframe in ("1d", "1wk", "1w", "daily", "weekly")
+    stale = not bars_eod and isinstance(freshness_seconds, (int, float)) and freshness_seconds > 900
+    freshness_tag: str | None = None
+    if isinstance(freshness_seconds, (int, float)):
+        seconds = freshness_seconds
+        if seconds < 60:
+            freshness_tag = f"{seconds:.0f}s old"
+        elif seconds < 3600:
+            freshness_tag = f"{seconds / 60:.0f}min old"
+        else:
+            freshness_tag = f"{seconds / 3600:.1f}hr old"
+    elif source_timestamp:
+        freshness_tag = f"as of {_nice_date(source_timestamp)}"
+    provenance = [part for part in (_source_name(provider) if provider else "", freshness_tag) if part]
+    source_note = f" (source: {', '.join(provenance)})" if provenance else ""
+    whose = f"{symbol}'s " if symbol else ""
+    sentence = _generic_market_sentence(action, data, symbol=symbol, label=label, timeframe=effective_timeframe)
+    reply = sentence[:-1] + source_note + "." if sentence.endswith(".") and source_note else sentence
+    if not sentence:
+        reply = f"I have {whose}{label}, but it has no summary figures to show{source_note}."
+    if stale:
+        reply += _stale_note(freshness_seconds)
+    return reply
+
+
+def _generic_market_sentence(action: str, data: dict, *, symbol: str, label: str, timeframe: str) -> str:
+    """One or two plain sentences for a read-only tool result, or ""."""
+    whose = f"{symbol}'s " if symbol else ""
+    about = f" for {symbol}" if symbol else ""
     if action == "get_quote":
-        if isinstance(data.get("price"), (int, float)):
-            details.append(f"${float(data['price']):.2f}")
-        if isinstance(data.get("change_percent"), (int, float)):
-            details.append(f"{float(data['change_percent']):+.2f}%")
-    elif action in {"get_bars", "get_signal_history", "market_event_timeline", "get_news", "get_calendar", "get_alerts"}:
-        collection_key = {"get_bars": "bars", "get_signal_history": "signals", "market_event_timeline": "events", "get_news": "items", "get_calendar": "events", "get_alerts": "alerts"}.get(action, "")
-        if collection_key and isinstance(data.get(collection_key), list):
-            details.append(f"{len(data[collection_key])} {collection_key}")
-    elif action == "get_support_resistance":
-        for key in ("support", "resistance"):
-            if isinstance(data.get(key), (int, float)):
-                details.append(f"{key} ${float(data[key]):.2f}")
-    elif action == "get_market_regime":
-        if data.get("regime"):
-            details.append(str(data["regime"]).replace("_", " "))
+        price = data.get("price")
+        change = data.get("change_percent")
+        if not isinstance(price, (int, float)):
+            return ""
+        sentence = f"{symbol or 'It'} is trading at ${float(price):.2f}"
+        if isinstance(change, (int, float)):
+            if change > 0:
+                sentence += f", up {float(change):.2f}% on the day"
+            elif change < 0:
+                sentence += f", down {abs(float(change)):.2f}% on the day"
+            else:
+                sentence += ", unchanged on the day"
+        return sentence + "."
+    collection = {
+        "get_bars": ("bars", "price bar"),
+        "get_signal_history": ("signals", "recorded signal"),
+        "market_event_timeline": ("events", "market event"),
+        "get_news": ("items", "news item"),
+        "get_calendar": ("events", "upcoming catalyst event"),
+        "get_alerts": ("alerts", "alert"),
+    }.get(action)
+    if collection:
+        key, noun = collection
+        rows = data.get(key)
+        if not isinstance(rows, list):
+            return ""
+        chart = _chart_name(timeframe)
+        on_chart = f" on the {chart} chart" if action == "get_bars" and chart else ""
+        return f"I found {_count(len(rows), noun)}{about}{on_chart}."
+    if action == "get_support_resistance":
+        levels = [
+            f"{key} is at ${float(data[key]):.2f}"
+            for key in ("support", "resistance")
+            if isinstance(data.get(key), (int, float))
+        ]
+        return f"For {symbol or 'this symbol'}, {_join_and(levels)}." if levels else ""
+    if action == "get_market_regime":
+        regime = str(data.get("regime") or "").replace("_", " ")
+        if not regime:
+            return ""
+        sentence = f"{whose or 'The '}market regime is {regime}"
         if isinstance(data.get("confidence"), (int, float)):
-            details.append(f"confidence {float(data['confidence']):.0%}")
-    elif action == "get_relative_strength":
-        signals = [item for item in data.get("signals", []) if isinstance(item, dict)]
-        for item in signals[:3]:
-            benchmark = item.get("benchmark") or "benchmark"
-            score = item.get("rs_pct")
-            if isinstance(score, (int, float)):
-                details.append(f"vs {benchmark} {float(score):+.2f}%")
-    elif action == "get_session_stats":
-        for key in ("session", "date", "open", "high", "low", "close", "change_percent"):
-            value = data.get(key)
-            if isinstance(value, (int, float)):
-                details.append(f"{key.replace('_', ' ')} {float(value):+.2f}" if key == "change_percent" else f"{key} {float(value):.2f}")
-            elif isinstance(value, str) and key in {"session", "date"}:
-                details.append(f"{key} {value}")
-    elif action in {"get_fundamentals", "get_options_snapshot", "options_research"}:
-        for key in ("near_term_iv", "iv_rank", "pe_ratio", "eps", "revenue", "market_cap"):
-            if isinstance(data.get(key), (int, float)):
-                details.append(f"{key.replace('_', ' ')} {float(data[key]):.2f}")
-        for key in ("chains", "expirations", "legs", "spreads"):
-            if isinstance(data.get(key), list):
-                details.append(f"{len(data[key])} {key}")
-    elif action == "why_did_it_move":
+            sentence += f", with {float(data['confidence']):.0%} confidence"
+        return sentence + "."
+    if action == "get_relative_strength":
+        comparisons = [
+            f"{float(item['rs_pct']):+.2f}% versus {item.get('benchmark') or 'its benchmark'}"
+            for item in (data.get("signals") or [])[:3]
+            if isinstance(item, dict) and isinstance(item.get("rs_pct"), (int, float))
+        ]
+        return f"{whose}relative strength is {_join_and(comparisons)}." if comparisons else ""
+    if action == "get_session_stats":
+        session = str(data.get("session") or "").replace("_", " ")
+        when = _nice_date(data["date"]) if isinstance(data.get("date"), str) else ""
+        prices = {key: data.get(key) for key in ("open", "high", "low", "close")}
+        if not any(isinstance(value, (int, float)) for value in prices.values()):
+            return ""
+        lead = "In the " + (f"{session} session" if session else "session") + (f" on {when}" if when else "")
+        parts = []
+        if isinstance(prices["open"], (int, float)):
+            parts.append(f"opened at {float(prices['open']):.2f}")
+        if isinstance(prices["low"], (int, float)) and isinstance(prices["high"], (int, float)):
+            parts.append(f"traded between {float(prices['low']):.2f} and {float(prices['high']):.2f}")
+        if isinstance(prices["close"], (int, float)):
+            closed = f"closed at {float(prices['close']):.2f}"
+            change = data.get("change_percent")
+            if isinstance(change, (int, float)) and change:
+                closed += f", {'up' if change > 0 else 'down'} {abs(float(change)):.2f}%"
+            parts.append(closed)
+        return f"{lead}, {symbol or 'it'} {_join_and(parts)}."
+    if action in {"get_fundamentals", "get_options_snapshot", "options_research"}:
+        names = {
+            "near_term_iv": "near-term IV",
+            "iv_rank": "IV rank",
+            "pe_ratio": "P/E ratio",
+            "eps": "EPS",
+            "revenue": "revenue",
+            "market_cap": "market cap",
+        }
+        figures = [
+            f"{names[key]} {float(data[key]):.2f}"
+            for key in names
+            if isinstance(data.get(key), (int, float))
+        ]
+        figures += [f"{len(data[key])} {key}" for key in ("chains", "expirations", "legs", "spreads") if isinstance(data.get(key), list)]
+        return f"Here's {whose}{label}: {_join_and(figures)}." if figures else ""
+    if action == "why_did_it_move":
         facts = data.get("facts") or []
         correlations = data.get("correlations") or []
-        details.append(f"{len(facts)} verified price/volume facts")
-        details.append(f"{len(correlations)} non-causal correlations")
-        details.append("causation not established")
-    elif action == "anomaly_analysis":
+        return (
+            f"For {whose}move, I found {_count(len(facts), 'verified price or volume fact')} and "
+            f"{_count(len(correlations), 'correlation')}, but nothing that establishes a cause."
+        )
+    if action == "anomaly_analysis":
         anomalies = data.get("anomalies")
         if isinstance(anomalies, list):
-            details.append(f"{len(anomalies)} detected anomalies")
-    else:
-        for key in ("status", "conclusion", "sample_size", "total_pnl_delta", "risk_reward", "verdict"):
-            value = data.get(key)
-            if isinstance(value, (str, int, float)) and not isinstance(value, bool):
-                details.append(f"{key.replace('_', ' ')} {value}")
-        if not details:
-            scalar_keys = [key for key, value in data.items() if isinstance(value, (str, int, float)) and not isinstance(value, bool) and key not in {"source_timestamp"}]
-            if scalar_keys:
-                details.append(f"{len(scalar_keys)} verified summary fields")
-
-    timeframe_label = timeframe or data.get("timeframe")
-    if timeframe_label:
-        details.append(f"{timeframe_label} timeframe")
-
-    # Build compact freshness tag: "live, 4s" / "8min old" / "2hr old ⚠"
-    # Daily/weekly bars are inherently end-of-day data — staleness > 15min is
-    # expected and the stale warning/⚠ should not fire for those timeframes.
-    effective_timeframe = timeframe or str(data.get("timeframe") or "")
-    bars_eod = action == "get_bars" and effective_timeframe in ("1d", "1wk", "1w", "daily", "weekly")
-    freshness_tag: str | None = None
-    stale = not bars_eod and isinstance(freshness_seconds, (int, float)) and freshness_seconds > 900
-    if isinstance(freshness_seconds, (int, float)):
-        s = freshness_seconds
-        if s < 60:
-            freshness_tag = f"{s:.0f}s old"
-        elif s < 3600:
-            freshness_tag = f"{s / 60:.0f}min old"
-        else:
-            freshness_tag = f"{s / 3600:.1f}hr old"
-        if stale:
-            freshness_tag += " ⚠"
-    elif source_timestamp:
-        freshness_tag = f"as of {source_timestamp.split('T', 1)[0]}"
-
-    provenance_parts: list[str] = []
-    if provider:
-        provenance_parts.append(provider)
-    if freshness_tag:
-        provenance_parts.append(freshness_tag)
-
-    # Lead with what the trader asked for, never the internal tool name.
-    subject = f"{symbol} {label}" if symbol else label[:1].upper() + label[1:]
-    reply = f"{subject}: {', '.join(details)}." if details else f"{subject} returned no summary fields."
-    if provenance_parts:
-        reply += f" Source: {', '.join(provenance_parts)}."
-    if stale:
-        reply += " Refresh market data before relying on it as current."
-    return reply
+            return f"I found {_count(len(anomalies), 'unusual reading')}{about}."
+        return ""
+    details = [
+        f"{key.replace('_', ' ')} {value}"
+        for key in ("status", "conclusion", "sample_size", "total_pnl_delta", "risk_reward", "verdict")
+        if isinstance((value := data.get(key)), (str, int, float)) and not isinstance(value, bool)
+    ]
+    if details:
+        return f"Here's the {label}{about}: {_join_and(details)}."
+    return ""
 
 
 def _format_change_reply(
@@ -1954,9 +2102,6 @@ def _format_change_reply(
     percent = float(price_change["percent"])
     current = price_change.get("current")
     baseline = price_change.get("baseline")
-    details = [f"{symbol} change: {percent:+.2f}%"]
-    if isinstance(current, (int, float)) and isinstance(baseline, (int, float)):
-        details.append(f"from ${float(baseline):.2f} to ${float(current):.2f}")
     reference = str(data.get("reference") or arguments.get("reference") or "previous_close")
     reference_label = {
         "previous_close": "the previous close",
@@ -1964,22 +2109,21 @@ def _format_change_reply(
         "last_visit": "the last visit",
         "timestamp": "the requested baseline",
     }.get(reference, reference.replace("_", " "))
-    details.append(f"versus {reference_label}")
-    timeframe_label = timeframe or data.get("timeframe") or arguments.get("timeframe") or "1d"
-    details.append(f"on {timeframe_label}")
+    if percent > 0:
+        moved = f"is up {percent:.2f}%"
+    elif percent < 0:
+        moved = f"is down {abs(percent):.2f}%"
+    else:
+        moved = "is unchanged"
+    reply = f"{symbol} {moved} versus {reference_label}"
+    if isinstance(current, (int, float)) and isinstance(baseline, (int, float)):
+        reply += f", moving from ${float(baseline):.2f} to ${float(current):.2f}"
+    context = [f"{_chart_name(timeframe or data.get('timeframe') or arguments.get('timeframe') or '1d')} chart"]
     if source_timestamp:
-        details.append(f"as of {str(source_timestamp).split('T', 1)[0]}")
+        context.append(f"as of {_nice_date(source_timestamp)}")
     if provider:
-        details.append(f"source {provider}")
-    reply = "Verified " + ", ".join(details) + "."
-    if isinstance(freshness_seconds, (int, float)) and freshness_seconds > 900:
-        age = (
-            f"{freshness_seconds / 3600:.1f} hours"
-            if freshness_seconds >= 3600
-            else f"{freshness_seconds / 60:.1f} minutes"
-        )
-        reply += f" Warning: this data is {age} old; refresh market data before treating it as current."
-    return reply
+        context.append(f"from {_source_name(provider)}")
+    return f"{reply} ({', '.join(context)})." + _stale_note(freshness_seconds)
 
 
 def _expire_carried_confirmation(turn: _Turn) -> None:
@@ -5221,59 +5365,79 @@ def _bounded_numeric_evidence(value, prefix: str = "", *, depth: int = 0) -> dic
 
 
 def _format_price_statistics_reply(data: dict) -> str:
-    """One sentence from get_price_statistics' verified values.
+    """A plain-sentence answer from get_price_statistics' verified values.
 
-    States the window actually covered and the number of daily closes, so a
-    trader can see what "this year" or "30 days" resolved to, plus any
+    States the window actually covered and how many trading days it holds,
+    so a trader can see what "this year" or "30 days" resolved to, plus any
     coverage gap the tool reported.
     """
     symbol = str(data.get("symbol") or "").upper()
     values = data.get("values") if isinstance(data.get("values"), dict) else {}
-    window = f"{data.get('start_date')} to {data.get('end_date')}, {data.get('observations')} daily closes"
+    window = f"{_date_span(data.get('start_date'), data.get('end_date'))} ({data.get('observations')} trading days)"
     metric = data.get("metric")
     if metric == "return_percent":
         change = values.get("return_percent")
-        text = (
-            f"Verified {symbol} return ({window}): {float(change):+.2f}% "
-            f"({_money(values.get('start_close'))} → {_money(values.get('end_close'))})."
-            if isinstance(change, (int, float))
-            else f"I couldn't compute a verified return for {symbol} ({window})."
-        )
+        if not isinstance(change, (int, float)):
+            text = f"I couldn't compute {symbol}'s return from {window}."
+        else:
+            move = (
+                f"was up {float(change):.2f}%"
+                if change > 0
+                else f"was down {abs(float(change)):.2f}%"
+                if change < 0
+                else "was unchanged"
+            )
+            text = (
+                f"From {window}, {symbol} {move}, going from "
+                f"{_money(values.get('start_close'))} to {_money(values.get('end_close'))}."
+            )
     elif metric == "volatility":
         daily = values.get("daily_volatility_percent")
         annual = values.get("annualized_volatility_percent")
         text = (
-            f"Verified {symbol} volatility ({window}): "
-            f"{float(daily):.2f}% daily standard deviation of returns, "
-            f"{float(annual):.2f}% annualized (× √252)."
+            f"From {window}, {symbol}'s daily returns had a standard deviation of "
+            f"{float(daily):.2f}%, which is about {float(annual):.2f}% annualized."
             if isinstance(daily, (int, float)) and isinstance(annual, (int, float))
-            else f"I couldn't compute a verified volatility for {symbol} ({window})."
+            else f"I couldn't compute {symbol}'s volatility from {window}."
         )
     elif metric == "max_drawdown":
         depth = values.get("max_drawdown_percent")
         if isinstance(depth, (int, float)) and depth > 0:
+            one_year = str(data.get("start_date"))[:4] == str(data.get("end_date"))[:4]
             text = (
-                f"Verified {symbol} max drawdown ({window}): -{float(depth):.2f}%, "
-                f"from {_money(values.get('peak_close'))} on {values.get('peak_date')} "
-                f"to {_money(values.get('trough_close'))} on {values.get('trough_date')}."
+                f"From {window}, {symbol}'s largest drawdown was {float(depth):.2f}%: it dropped from "
+                f"{_money(values.get('peak_close'))} on {_nice_date(values.get('peak_date'), with_year=not one_year)} "
+                f"to {_money(values.get('trough_close'))} on {_nice_date(values.get('trough_date'), with_year=not one_year)}."
             )
         else:
-            text = f"Verified {symbol} max drawdown ({window}): none — no close fell below an earlier one."
+            text = f"From {window}, {symbol} had no drawdown: it never closed below an earlier high."
     else:
         other = str(data.get("comparison_symbol") or "").upper()
         correlation = values.get("correlation")
-        text = (
-            f"Verified correlation of {symbol} and {other} daily returns ({window}): {float(correlation):.2f}."
-            if isinstance(correlation, (int, float))
-            else f"I couldn't compute a verified correlation for {symbol} and {other} ({window})."
-        )
+        if isinstance(correlation, (int, float)):
+            strength = abs(float(correlation))
+            if strength >= 0.7:
+                relation = "they moved together closely" if correlation > 0 else "they tended to move in opposite directions"
+            elif strength >= 0.4:
+                relation = "they tended to move together" if correlation > 0 else "they often moved in opposite directions"
+            elif strength >= 0.2:
+                relation = "they moved together only loosely" if correlation > 0 else "they moved in opposite directions only loosely"
+            else:
+                relation = "they moved largely independently"
+            text = (
+                f"From {window}, the daily returns of {symbol} and {other} had a correlation of "
+                f"{float(correlation):.2f}, so {relation}."
+            )
+        else:
+            text = f"I couldn't compute a correlation for {symbol} and {other} from {window}."
     notes = [
         str(item.get("reason"))
         for item in (data.get("unknowns") or [])
         if isinstance(item, dict) and item.get("reason")
     ]
     if notes:
-        text += " Note: " + "; ".join(notes) + "."
+        caveat = _as_sentence("; ".join(notes))
+        text += " One caveat: " + caveat[:1].lower() + caveat[1:]
     return text
 
 
@@ -5520,14 +5684,19 @@ def _run_market_tool(
             isinstance(value, (int, float)) for value in (confidence, momentum, trend_strength)
         ):
             return "I don't have enough verified market-context data to summarize the market.", False
-        details = [f"regime is {regime}", f"volatility is {volatility}"]
-        if isinstance(momentum, (int, float)):
-            details.append(f"momentum {float(momentum):+.2f}")
-        if isinstance(trend_strength, (int, float)):
-            details.append(f"trend strength {float(trend_strength):.2f}")
+        reply = f"The market is in a {regime} regime with {volatility} volatility"
         if isinstance(confidence, (int, float)):
-            details.append(f"confidence {float(confidence):.0%}")
-        return "Verified market context: " + "; ".join(details) + ".", True
+            reply += f" ({float(confidence):.0%} confidence)"
+        reply += "."
+        readings = []
+        if isinstance(momentum, (int, float)):
+            readings.append(f"momentum is {float(momentum):+.2f}")
+        if isinstance(trend_strength, (int, float)):
+            readings.append(f"trend strength is {float(trend_strength):.2f}")
+        if readings:
+            text = _join_and(readings)
+            reply += f" {text[:1].upper()}{text[1:]}."
+        return reply, True
     if parsed.action == "get_trend":
         symbol = str(result.data.get("symbol") or arguments.get("symbol") or "the symbol").upper()
         direction = str(result.data.get("direction") or "unknown").replace("_", " ")
@@ -5535,11 +5704,22 @@ def _run_market_tool(
         classification = str(result.data.get("classification") or "").replace("_", " ")
         if direction == "unknown" and strength == "unknown":
             return f"I don't have enough verified trend data for {symbol}.", False
-        details = [f"{direction} direction", f"{strength} strength"]
+        chart = _chart_name(result.timeframe or arguments.get("timeframe") or "1d")
+        # The data's own words (sideways/bullish/weak) are kept: the answer
+        # verifier checks direction words against these labels.
+        if direction == "sideways":
+            movement = "moving sideways"
+        elif direction in {"up", "down"}:
+            movement = f"trending {direction}"
+        else:
+            movement = f"in {'an' if direction[:1] in 'aeiou' else 'a'} {direction} trend"
+        reply = f"On the {chart} chart, {symbol} is {movement}"
+        if strength != "unknown":
+            reply += f" with {strength} strength"
+        reply += "."
         if classification:
-            details.append(f"{classification} classification")
-        timeframe = result.timeframe or arguments.get("timeframe") or "1d"
-        return f"Verified {symbol} trend ({timeframe}): " + "; ".join(details) + ".", True
+            reply += f" Overall, it reads as {classification}."
+        return reply, True
     if parsed.action == "get_indicator":
         return _format_indicator_reply(
             result.data,
@@ -5609,25 +5789,33 @@ def _run_market_tool(
                 continue
             symbol = str(row.get("symbol") or "").upper()
             value = row.get("value")
-            rank = row.get("rank")
             if not symbol or not isinstance(value, (int, float)):
                 continue
-            suffix = "%" if metric.endswith("_percent") else ""
-            prefix = "$" if metric == "price" else ""
-            rows.append(f"{symbol} {prefix}{float(value):.2f}{suffix} (rank {rank})")
+            if metric.endswith("_percent"):
+                shown = f"{float(value):.2f}%"
+            elif metric == "price":
+                shown = f"${float(value):.2f}"
+            elif metric == "volume":
+                shown = f"{float(value):,.0f}"
+            else:
+                shown = f"{float(value):.2f}"
+            rows.append((symbol, shown))
         if rows:
-            end_of_day_note = (
-                " As of the most recent regular-market close; the regular session is closed."
-                if completed_session_comparison
-                else ""
-            )
-            return (
-                f"Verified compare_symbols comparison by {label}: "
-                + "; ".join(rows)
-                + "."
-                + end_of_day_note,
-                True,
-            )
+            first, first_value = rows[0]
+            if len(rows) == 1:
+                reply = f"{first}'s {label} is {first_value}."
+            elif len(rows) == 2:
+                reply = f"Ranked by {label}, {first} comes first at {first_value}, ahead of {rows[1][0]} at {rows[1][1]}."
+            else:
+                rest = _join_and([f"{symbol} ({shown})" for symbol, shown in rows[1:]])
+                reply = f"Ranked by {label}, {first} comes first at {first_value}, followed by {rest}."
+            if comparison_timeframe in {"1d", "1wk"} and _is_regular_market_closed():
+                reply += " These figures are as of the last market close."
+            elif completed_session_comparison:
+                # Current daily bars mid-session: the session in progress
+                # isn't in them, and the market is not closed.
+                reply += " These use daily closes through the last completed session, so the session in progress isn't included."
+            return reply, True
     if parsed.action in _BROWSER_LOCAL_ACTIONS:
         return _format_browser_local_reply(
             parsed.action,

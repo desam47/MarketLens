@@ -354,9 +354,8 @@ class TestPriceStatisticsTurn(_Base):
         ):
             msg, grounded, *_ = answer_chat_message(self.session.id, "What is TSLA's max drawdown this year?")
 
-        self.assertIn("Verified TSLA max drawdown", msg.content)
-        self.assertIn("-33.33%", msg.content)
-        self.assertIn(f"$120.00 on {days[1].isoformat()}", msg.content)
+        self.assertIn("TSLA's largest drawdown was 33.33%", msg.content)
+        self.assertIn("$120.00 on Jan 6", msg.content)
         mock_ai.complete.assert_not_called()
         verification = next(block for block in msg.response_blocks_payload if block["type"] == "verification")
         self.assertEqual(verification["data"]["status"], "verified", verification)

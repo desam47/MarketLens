@@ -1,8 +1,8 @@
 # Version 5 Chat Bug Fixes
 
 **Created:** 2026-09-24
-**Last updated:** 2026-09-24 (batch 10: daily-close freshness)
-**Status:** All items and gaps complete. Batches 1 to 7 are committed (batch 3's migration is applied to the live DB); batch 8 (the four gaps) is committed too. Batch 9 (follow-ups, live checks, isolated e2e) is committed too; batch 10 (daily-close freshness) is committed too. Nothing is pushed.
+**Last updated:** 2026-09-24 (batch 11: natural reply wording)
+**Status:** All items and gaps complete. Batches 1 to 7 are committed (batch 3's migration is applied to the live DB); batch 8 (the four gaps) is committed too. Batch 9 (follow-ups, live checks, isolated e2e) is committed too; batch 10 (daily-close freshness) is committed too; batch 11 (natural reply wording) is committed too. Nothing is pushed.
 **Scorecard:** 20 ✅ COMPLETE, 0 ⚠️ PARTIAL, 0 ❌ NOT STARTED, 0 🟡 DEFERRED.
 **Source:** 2026-09-24 Chat review of `backend/ai/chat.py`, `backend/api/ai/chat_router.py`, `backend/repositories/chat_repository.py`, `frontend/src/components/ChatPanel.tsx`, and `frontend/src/services/api.ts`.
 **Related:** [Phase audit](phase_audit_v5.md), [Version 5 plan](v5_plan.md)
@@ -1068,6 +1068,61 @@ VERIFIED, and "get_price_statistics · webull · 19 h old".
 
 Removing each change fails its test.
 
+### Reply wording (batch 11, from user feedback)
+
+The server's own replies read like log lines, for example "Verified
+compare_symbols comparison by return: AAPL 93.59% (rank 1); MSFT 59.40%
+(rank 2). As of the most recent regular-market close; the regular session
+is closed." They leaked tool names, used ISO dates and raw provider ids,
+and used a "Verified …" prefix that the Answer-verification badge already
+covers.
+
+**Bug found while rewriting:** since batch 10, a daily comparison is also
+used mid-session, but its note still said "the regular session is
+closed". That was false during market hours. The note now depends on the
+state: "These figures are as of the last market close." after the close,
+and "These use daily closes through the last completed session, so the
+session in progress isn't included." mid-session.
+
+**Resolution:** the formatters in `chat.py` now write plain sentences:
+- **Replies rewritten:**
+  - comparisons ("Ranked by return, AAPL comes first at 93.52%, ahead of
+    MSFT at 35.16%.");
+  - price statistics ("From Jan 2 to Sep 23, 2026 (182 trading days),
+    TSLA's largest drawdown was 33.95%: it dropped from $451.67 on Jan 5
+    to $298.32 on Jul 29.");
+  - trend ("On the daily chart, NVDA is moving sideways with weak
+    strength. Overall, it reads as weak bullish.");
+  - market context, indicators, change-since, quotes, support and
+    resistance, session stats, collections (news, bars, events),
+    fundamentals and options, move evidence, anomalies;
+  - portfolio, journal and saved-scan summaries.
+- **Shared helpers:** `_nice_date`, `_date_span`, `_chart_name`,
+  `_source_name`, `_age_words`, `_count`, `_join_and`, `_as_sentence` and
+  `_stale_note`.
+- **Verifier rules kept:**
+  - Every number is still printed from the evidence.
+  - Dates are written out ("Sep 23, 2026").
+  - Stale data never uses "current", "today" or "now", and its age is
+    given in words.
+  - Intraday timeframes stay tokens ("5m").
+  - Direction words match the value's sign ("up 1.25%", "down 4.20%").
+  - Trend replies keep the data's own labels ("sideways", "weak
+    bullish").
+- **Unchanged:** calculation replies (already plain sentences), the
+  watchlist ranking list, and the trade-plan line, whose "100-102" style
+  ranges would become separately checked numbers if reworded.
+
+**Checked live** (2026-09-24, in session): a comparison and a trend
+question gave the replies above, both with Answer verification VERIFIED.
+
+**Tests:**
+- **Updated:** 23 assertions in 6 test files, plus one Phase 5.8
+  evaluation expectation ("session premarket" is now "premarket
+  session"). Each checks the same fact in the new wording.
+- **New:** the in-session comparison test asserts the reply doesn't
+  mention a market close.
+
 ## Enhancements
 
 1. ~~**One reply path**~~: done in batch 6 (`_reply_events`, BF-09).
@@ -1082,6 +1137,17 @@ Removing each change fails its test.
    routing, actions, turn orchestration and formatting.
 
 ## Verification
+
+### Batch 11 (2026-09-24): natural reply wording
+
+| Suite | Result |
+|---|---|
+| `backend/tests/ai`, `backend/tests/api`, `backend/tests/engines` | 1,630 passed, 30 subtests passed |
+| `ruff` on the changed files | clean |
+| Live check in the running app | comparison and trend replies in plain sentences, both VERIFIED |
+
+Neither full suite was run. The e2e checks use broad patterns
+(`/AAPL|quote/i`) and don't depend on the old wording.
 
 ### Batch 10 (2026-09-24): daily-close freshness
 
@@ -1273,7 +1339,8 @@ The full backend suite was not run.
 - **Docs:** commit `12420e5`, `docs(v5): correct tool and action counts; record housekeeping`, and commit `52af7dc`, `docs(v5): update BF-12 follow-up for alert-chat polling`, on `development`.
 - **Batch 8 (gaps):** commit `58abaf1`, `fix(chat): confirm Clear, refuse bare history wipes, keep notebook save off the event loop`, on `development`.
 - **Batch 9 (follow-ups):** commit `8ce8fa9`, `fix(chat): read $10k account sizes, ask Yahoo for BRK-B, label question steps, isolate e2e`, on `development`.
-- **Batch 10 (daily-close freshness):** commit `fix(chat): judge daily data by session date, not a 15-minute age limit`, on `development`.
+- **Batch 10 (daily-close freshness):** commit `be6ba00`, `fix(chat): judge daily data by session date, not a 15-minute age limit`, on `development`.
+- **Batch 11 (reply wording):** commit `fix(chat): write server replies as plain sentences`, on `development`.
 
 | Date | ID | Status | Commit | Files | Tests | Notes |
 |---|---|---|---|---|---|---|
@@ -1303,3 +1370,4 @@ The full backend suite was not run.
 | 2026-09-24 | Gaps | ✅ FIXED | batch 8 | `backend/api/ai/chat_router.py`, `frontend/src/components/ChatPanel.tsx`, `e2e/tests/chat.spec.ts`, two test files (lint), plus tests | 5 new, 2 updated | Clear confirms first; a bare `DELETE /sessions` is refused (`?all=true` wipes all); notebook save fully off the event loop and type-checks symbol lists; 3 `ruff` errors fixed. |
 | 2026-09-24 | Follow-ups | ✅ FIXED | batch 9 | `backend/ai/chat.py`, `backend/market_data/providers/yfinance_provider.py`, `frontend/src/components/ChatPanel.tsx`, `frontend/src/services/api.ts`, `frontend/src/styles/App.css`, `e2e/playwright.config.ts`, `e2e/tests/chat.spec.ts`, plus tests | 6 new, 3 updated | `$10k` account sizes; `BRK.B` at Yahoo; `needs_input` step status; isolated e2e servers; live checks in the running app. |
 | 2026-09-24 | Daily freshness | ✅ FIXED | batch 10 | `backend/engines/market_calendar.py`, `backend/ai/response_blocks.py`, `backend/ai/tool_registry.py`, `backend/ai/market_tools.py`, `backend/ai/chat.py`, `frontend/src/components/ChatPanel.tsx`, plus tests | 13 new, 1 updated | Daily evidence judged by session date; age from the close; price statistics end at the last completed session; daily comparisons usable in session; ages shown as "19 h". |
+| 2026-09-24 | Reply wording | ✅ FIXED | batch 11 | `backend/ai/chat.py`, `backend/ai/evaluations/phase_5_8_chat_cases.json`, 6 test files | 23 assertions updated, 1 added | Server replies in plain sentences; mid-session comparisons no longer claim the market is closed. |

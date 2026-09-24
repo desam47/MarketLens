@@ -87,7 +87,7 @@ def test_market_overview_routes_to_verified_context_without_ai(monkeypatch) -> N
 
     assert grounded is True
     assert "risk on" in text
-    assert "momentum +0.24" in text
+    assert "Momentum is +0.24" in text
     assert requests[0].tool_name == "get_market_context"
     complete.assert_not_called()
 
@@ -129,8 +129,8 @@ def test_symbol_overview_routes_to_verified_trend_without_ai(monkeypatch) -> Non
     )
 
     assert grounded is True
-    assert "NVDA trend" in text
-    assert "weak bullish classification" in text
+    assert "NVDA is moving sideways" in text
+    assert "reads as weak bullish" in text
     assert requests[0].tool_name == "get_trend"
     assert requests[0].timeframe == "1d"
     complete.assert_not_called()
@@ -169,12 +169,12 @@ def test_indicator_result_formats_value_without_raw_historical_bars(monkeypatch)
     text, grounded = _run_market_tool(None, parsed)
 
     assert grounded is True
-    assert "DVLT RSI (14): 42.8" in text
-    assert "as of 2025-12-11" in text
-    assert "21.3 hours old and historical" in text
+    assert "DVLT's RSI (14) is 42.8" in text
+    assert "as of Dec 11, 2025" in text
+    assert "several hours old" in text
     assert '"bars"' not in text
     assert "20503393" not in text
-    assert "source webull" in text
+    assert "from Webull" in text
     complete.assert_not_called()
 
 
@@ -207,9 +207,9 @@ def test_daily_change_formats_previous_close_comparison(monkeypatch) -> None:
     text, grounded = _run_market_tool(None, parsed)
 
     assert grounded is True
-    assert "DVLT change: -4.17%" in text
+    assert "DVLT is down 4.17%" in text
     assert "versus the previous close" in text
-    assert "1d" in text
+    assert "daily chart" in text
     assert '"changes"' not in text
 
 
@@ -235,7 +235,7 @@ def test_generic_market_tool_response_is_readable_without_raw_json(monkeypatch) 
     text, grounded = _run_market_tool(None, parsed)
 
     assert grounded is True
-    assert "AAPL quote:" in text
+    assert "AAPL is trading at" in text
     assert "$227.50" in text
     assert "raw" not in text
     assert "secret" not in text
@@ -273,7 +273,7 @@ def test_streaming_symbol_overview_uses_the_same_typed_route(monkeypatch) -> Non
 
     result = next(payload for kind, payload in events if kind == "result")
     assert result[1] is True
-    assert "NVDA trend" in result[0]
+    assert "NVDA is moving sideways" in result[0]
     assert requests[0].tool_name == "get_trend"
 
 
@@ -353,7 +353,7 @@ def test_historical_question_uses_remembered_timeframe(monkeypatch) -> None:
     )
 
     assert grounded is True
-    assert "historical bars" in text
+    assert "price bars" in text and "hourly chart" in text
     assert requests[0].arguments["timeframe"] == "1h"
     complete.assert_not_called()
 
@@ -387,7 +387,7 @@ def test_why_move_routes_to_evidence_tool(monkeypatch) -> None:
     )
 
     assert grounded is True
-    assert "move evidence" in text
+    assert "nothing that establishes a cause" in text
     assert requests[0].tool_name == "why_did_it_move"
     complete.assert_not_called()
 
@@ -421,7 +421,7 @@ def test_what_changed_routes_to_comparison_tool(monkeypatch) -> None:
     )
 
     assert grounded is True
-    assert "AAPL change: +2.00%" in text
+    assert "AAPL is up 2.00%" in text
     assert "versus yesterday's close" in text
     assert requests[0].arguments["reference"] == "yesterday"
     complete.assert_not_called()
@@ -504,7 +504,7 @@ def test_private_holdings_weakness_does_not_broaden_to_watchlists(monkeypatch) -
     )
 
     assert grounded is True
-    assert "Portfolio weakness ranking is unavailable" in text
+    assert "can't rank your portfolio's weakest holdings" in text
     assert requests[0].tool_name == "get_risk_dashboard"
     complete.assert_not_called()
 
@@ -541,7 +541,7 @@ def test_portfolio_change_uses_private_scope_and_explains_missing_snapshot(monke
     )
 
     assert grounded is True
-    assert "Portfolio changes are unavailable" in text
+    assert "can't show how your portfolio changed" in text
     assert "Which ticker" not in text
     assert requests[0].tool_name == "get_risk_dashboard"
     complete.assert_not_called()
@@ -789,7 +789,7 @@ def test_comparison_routes_to_ranking_tool(monkeypatch) -> None:
     )
 
     assert grounded is True
-    assert "compare_symbols" in text
+    assert "Ranked by volatility, AAPL comes first" in text
     assert requests[0].arguments["metric"] == "volatility_percent"
     assert requests[0].timeframe == "1d"
     verification = verify_answer(
@@ -833,8 +833,8 @@ def test_daily_comparison_remains_usable_after_market_close(monkeypatch) -> None
     text, grounded = _run_market_tool(None, parsed, trace=trace)
 
     assert grounded is True
-    assert "AAPL 2.50% (rank 1)" in text
-    assert "most recent regular-market close" in text
+    assert "AAPL comes first at 2.50%" in text
+    assert "as of the last market close" in text
     assert trace[0]["ok"] is True
     assert trace[0]["visual_type"] == "comparison_table"
 
@@ -869,7 +869,7 @@ def test_comparison_uses_resolved_daily_timeframe_for_after_close_freshness(monk
     text, grounded = _run_market_tool(None, parsed)
 
     assert grounded is True
-    assert "most recent regular-market close" in text
+    assert "as of the last market close" in text
 
 
 def test_intraday_comparison_still_rejects_stale_bars_after_market_close(monkeypatch) -> None:
@@ -933,7 +933,7 @@ def test_scenario_question_routes_to_scenario_tool(monkeypatch) -> None:
     )
 
     assert grounded is True
-    assert "scenario_analysis" in text
+    assert "portfolio scenario" in text
     assert requests[0].arguments["price_shocks"] == {"AAPL": -5.0}
     complete.assert_not_called()
 
@@ -1045,7 +1045,7 @@ def test_counterargument_and_sensitivity_route_to_typed_tools(monkeypatch) -> No
         {},
     )
     assert grounded is True
-    assert "Sensitivity analysis" in text
+    assert "sensitivity analysis" in text
     assert requests[-1].tool_name == "sensitivity_analysis"
     complete.assert_not_called()
 
@@ -1073,7 +1073,7 @@ def test_event_timeline_routes_to_typed_tool(monkeypatch) -> None:
     )
 
     assert grounded is True
-    assert "market event timeline" in text
+    assert "market events" in text
     assert requests[0].tool_name == "market_event_timeline"
     complete.assert_not_called()
 
@@ -1283,8 +1283,7 @@ def test_anomaly_analysis_routes_and_formats_reply(monkeypatch) -> None:
 
     assert grounded is True
     assert screened == []
-    assert "anomaly analysis" in text
-    assert "1 detected anomalies" in text
+    assert "1 unusual reading for" in text
     assert "MarketLens engine" in text
     assert "{" not in text
 
@@ -1317,6 +1316,6 @@ def test_sensitivity_analysis_routes_and_formats_reply(monkeypatch) -> None:
 
     assert grounded is True
     assert screened == []
-    assert "Sensitivity analysis" in text
+    assert "sensitivity analysis" in text
     assert "MarketLens calculator" in text
     assert "{" not in text

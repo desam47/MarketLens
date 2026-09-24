@@ -929,15 +929,13 @@ class TestBrowserLocalChatData(unittest.TestCase):
             "MarketLens local scanner presets",
         )
 
-        self.assertIn("Portfolio risk is verified", risk)
-        self.assertIn("1 position", risk)
+        self.assertIn("gross exposure is", risk)
+        self.assertIn("one position", risk)
         self.assertIn("$1,000.00", risk)
         self.assertNotIn("PRIVATE1", risk)
         self.assertNotIn("{", risk)
-        self.assertIn("Trade journal review is verified", journal)
-        self.assertIn("1 total entry", journal)
-        self.assertIn("Saved scans are verified", scans)
-        self.assertIn("1 saved preset", scans)
+        self.assertIn("Your trade journal has 1 entry, and it's closed", journal)
+        self.assertIn("You have 1 saved Scanner preset.", scans)
 
     def test_shared_preset_is_selected_only_by_explicit_name_or_scope(self):
         token = _TURN_BROWSER_DATA.set({
