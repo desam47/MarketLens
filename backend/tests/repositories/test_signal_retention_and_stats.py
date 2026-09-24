@@ -49,11 +49,13 @@ class _Db(unittest.TestCase):
         finished = r5 is not None and complete
         with self.Session() as db:
             for i in range(n):
+                # Each row is a different bar: the table allows one signal per bar.
+                self._seq = getattr(self, "_seq", 0) + 1
                 db.add(
                     HistoricalSignal(
                         symbol=symbol,
                         timeframe=tf,
-                        timestamp=NOW - timedelta(days=days_old, minutes=i),
+                        timestamp=NOW - timedelta(days=days_old, minutes=i, seconds=self._seq),
                         trend_state=state,
                         return_5b=r5,
                         return_10b=r10,

@@ -673,6 +673,10 @@ export interface RegimeCount {
 
 export type SignalScopeMode = 'all_active' | 'watchlist' | 'all_stored';
 
+export type RecordSignalsResponse =
+  | { status: 'preview'; symbols: string[]; pairs: number }
+  | { status: 'recorded'; symbols: string[]; pairs: number; recorded: number };
+
 export interface SignalResearchScope {
   mode: SignalScopeMode;
   watchlist_ids: number[];
@@ -2260,21 +2264,18 @@ class ApiService {
     );
   }
 
+  /**
+   * Record signals for newly closed bars. Without ``confirm`` the server only
+   * previews the resolved symbols and (symbol, timeframe) pairs; nothing is written.
+   */
   async recordSignalsNow(
+    confirm = false,
     symbols?: string[],
-    timeframes?: string[],
-  ): Promise<{ recorded: number }> {
-    return this.fetch<{ recorded: number }>('/signals/record', {
+  ): Promise<RecordSignalsResponse> {
+    return this.fetch<RecordSignalsResponse>('/signals/record', {
       method: 'POST',
-      body: JSON.stringify({ symbols, timeframes }),
+      body: JSON.stringify(symbols ? { symbols, confirm } : { confirm }),
     });
-  }
-
-  async deleteOldSignals(days = 180): Promise<{ deleted: number; older_than_days: number }> {
-    return this.fetch<{ deleted: number; older_than_days: number }>(
-      `/signals/old?older_than_days=${days}&confirm=true`,
-      { method: 'DELETE' },
-    );
   }
 
   // Scanner (Phase 11 — live stream)

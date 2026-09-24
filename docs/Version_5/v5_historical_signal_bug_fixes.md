@@ -1,9 +1,9 @@
 # Version 5 Historical Signals Bug Fixes
 
 **Created:** 2026-09-24
-**Last updated:** 2026-09-24 (batch 2c: HS-07, HS-08, HS-09, HS-10, HS-17)
-**Status:** Batches 1 to 2c are complete, including HS-09's migration of the stored rows. The operational items (batch 3) remain.
-**Scorecard:** 14 ✅ COMPLETE, 1 ⚠️ PARTIAL, 3 ❌ NOT STARTED, 0 🟡 DEFERRED.
+**Last updated:** 2026-09-24 (batch 3: HS-11, HS-12, HS-14, HS-18)
+**Status:** Complete. All 18 findings are fixed and covered by regression tests, including two data migrations applied to the live database (HS-09, HS-12).
+**Scorecard:** 18 ✅ COMPLETE, 0 ⚠️ PARTIAL, 0 ❌ NOT STARTED, 0 🟡 DEFERRED.
 **Source:** 2026-09-24 code review of the Historical Signals backend, API, storage, card, research dashboard, and replay panel at `d0aebd2` (HS-01 to HS-14). A follow-up review of batches 1 and 2a at `8f6a803` added HS-15 to HS-18.
 **Related:** [Phase audit](phase_audit_v5.md), [AI Analysis fixes](v5_ai_analysis.md), [Chat bug fixes](v5_bug_fixes.md)
 
@@ -34,12 +34,12 @@ Line numbers for HS-01 to HS-14 refer to the code at `d0aebd2`; line numbers for
 | HS-08 | High | Provenance | Regime data is not historical and covers under a fifth of rows | Verified | ✅ COMPLETE |
 | HS-09 | High | Data quality | Several stored context fields are placeholders rather than evidence | Verified | ✅ COMPLETE |
 | HS-10 | High | Replay | Neutral or unknown signals are simulated as long trades; session scope drifts | Code-read | ✅ COMPLETE |
-| HS-11 | Medium | API safety | Manual recording accepts ignored client scope and mutations lack server guardrails | Code-read | ❌ NOT STARTED |
-| HS-12 | Medium | Storage | No database uniqueness constraint protects signal identity | Verified | ❌ NOT STARTED |
+| HS-11 | Medium | API safety | Manual recording accepts ignored client scope and mutations lack server guardrails | Code-read | ✅ COMPLETE |
+| HS-12 | Medium | Storage | No database uniqueness constraint protects signal identity | Verified | ✅ COMPLETE |
 | HS-13 | Medium | API + presentation | A valid zero regime average is returned as unavailable | Code-read | ✅ COMPLETE |
-| HS-14 | Medium | Tests | Regression coverage preserves faulty semantics and misses lifecycle transitions | Code-read | ⚠️ PARTIAL |
+| HS-14 | Medium | Tests | Regression coverage preserves faulty semantics and misses lifecycle transitions | Code-read | ✅ COMPLETE |
 | HS-17 | Medium | Research | Research metrics describe one 250-row page, not the selected population | Code-read | ✅ COMPLETE |
-| HS-18 | Medium | API + UI | “Delete >180d” is undone at restart and ignores the selected scope | Code-read | ❌ NOT STARTED |
+| HS-18 | Medium | API + UI | “Delete >180d” is undone at restart and ignores the selected scope | Code-read | ✅ COMPLETE |
 
 **Next suggested order:**
 
@@ -47,7 +47,7 @@ Line numbers for HS-01 to HS-14 refer to the code at `d0aebd2`; line numbers for
 2. ~~**Batch 2a — truthful scope:** HS-05 and HS-06.~~ Done.
 3. ~~**Batch 2b — outcomes and AI correctness:** HS-15 and HS-16.~~ Done.
 4. ~~**Batch 2c — methodology:** HS-07, HS-08, HS-09, HS-10, and HS-17.~~ Done.
-5. **Batch 3 — operational integrity and regressions:** HS-11, HS-12, HS-18, then the rest of HS-14 as the release gate.
+5. ~~**Batch 3 — operational integrity and regressions:** HS-11, HS-12, HS-18, then the rest of HS-14 as the release gate.~~ Done.
 
 ---
 
@@ -301,18 +301,32 @@ Only a state matching bearish/down/sell becomes short. Neutral, warm-up `NULL`, 
 
 ### HS-11 — Manual recording accepts ignored client scope and mutations lack server guardrails
 
-**Status:** ❌ NOT STARTED
+**Status:** ✅ COMPLETE (2026-09-24, batch 3)
 **Where:** client request (`frontend/src/services/api.ts:2146`) and record/backfill routes (`backend/api/signals/router.py:209` and `:223`).
 
 The client accepts symbols/timeframes and sends JSON. The route declares query parameters, ignores that body, and records all active ingestion symbols/timeframes when no query parameters are present. Bulk record and backfill have no server-side confirmation, idempotency key, estimated work, audit record, or rate limit.
 
 **Impact:** a caller can believe it requested a narrow operation while triggering a broad one; repeated clicks can compete with the ingestion loop.
 
-**Resolution:** use typed single/bulk request models, return resolved scope and work estimate, and add server-owned confirmation plus idempotency for manual bulk operations.
+**Resolution:**
+
+- **Request body:** bulk `POST /api/signals/record` now reads a typed body, `RecordSignalsRequest` (`symbols`, `confirm`). Unknown fields such as `timeframes` are rejected with 422 instead of ignored. Requested symbols must be ingested, otherwise the response is a 422 naming the ones that aren't.
+- **Confirmation:** without `confirm: true` the route writes nothing. It returns a preview of the resolved symbols and the number of (symbol, timeframe) pairs with bars. The card shows that in a confirmation dialog, then repeats the call with `confirm: true`.
+- **Guardrails:** manual record and `POST /api/signals/backfill` share a lock, so a second click while one is running gets 409 instead of stacking work beside the ingestion loop. Each run writes an audit line to the log with its scope and result. Idempotency comes from the data itself: recording skips bars already stored (and HS-12 makes that a database guarantee), and backfill only advances outcomes.
+- **Card:** the card now sets its status line after reloading. Before, the reload cleared the "Recorded N" and "Backfilled N" messages as soon as they appeared.
+
+The single-record mode (query parameters) is unchanged.
+
+**Tests:**
+
+- `test_record_now_previews_then_records_ingested_symbols`: the preview writes nothing, then confirmation records.
+- `test_record_now_honours_the_requested_symbols`: the body's symbols are used; an unknown symbol and an unknown field are both rejected.
+- `test_manual_bulk_runs_do_not_overlap`: 409 for both routes while the lock is held.
+- Card tests: confirming records; declining writes nothing.
 
 ### HS-12 — No database uniqueness constraint protects signal identity
 
-**Status:** ❌ NOT STARTED
+**Status:** ✅ COMPLETE (2026-09-24, batch 3)
 **Where:** `HistoricalSignal` (`backend/models/signal.py:26`) and initial schema (`alembic/versions/20260828_8175af1a213e_initial_schema.py:159`).
 
 The recorder checks `(symbol, timeframe, timestamp)` before insert, but the table has no matching unique constraint. Concurrent ingestion, manual recording, retry, or two processes can pass that read-before-write check together.
@@ -321,7 +335,23 @@ The recorder checks `(symbol, timeframe, timestamp)` before insert, but the tabl
 
 **Impact:** duplicate rows bias counts, averages, win rates, exports, and replay results.
 
-**Resolution:** add a unique index, deduplicate existing rows with an audited migration, and treat uniqueness conflicts as safe no-ops.
+**Resolution:**
+
+- **Migration:** `20261003_signal_identity_unique` removes the extra rows and adds the unique index `uq_historical_signals_symbol_timeframe_timestamp`. From each group it keeps the most complete row: most outcomes, then a regime, then the lowest id. It logs how many rows it removed per timeframe. It also drops `ix_historical_signals_symbol_timeframe_timestamp`, a non-unique index on the same columns that existed on the live database outside the migration history. The model declares the same unique index.
+- **Conflict handling:** the recorder's bulk insert (`_insert_rows`) and `bulk_create` go through `SignalRepository.insert_ignoring_duplicates` (`INSERT … ON CONFLICT DO NOTHING`), so a bar another writer stored first is skipped. `record_signal` treats the `IntegrityError` from a lost race as a duplicate.
+
+**Applied to the live database:**
+
+- It was validated first from a scratch Alembic tree: its migration test passed there, and on a copy of the live signals it removed 1,879 rows in 1.9 s (5m 1,246, 1m 615, 30m 8, 2m 7, 3m 2, 15m 1).
+- After a `.backup`, it was installed and the reload applied it. The live table went from 618,820 to 616,941 rows with no duplicate groups left.
+
+**Deployment incident:** the recorder's `ON CONFLICT` code reached the dev server through `--reload` before the migration did. SQLite rejects `ON CONFLICT` without a matching unique index, so signal inserts failed for about two minutes (16:44:58 to 16:45:00 ET, 52 errors) until the migration was applied at 16:46. Bars from that window are written as the restarted recorder re-seeds each pair, which records any closed bar without a row. Seeding runs about 3 s per 90 s cycle, cheapest timeframes first, so it catches up over roughly half an hour. At 16:51, AAPL 1m was already complete, and 89 one-minute bars across 15 other symbols were still waiting. With `--reload`, install a migration before the code that depends on it.
+
+**Tests:**
+
+- `backend/tests/migrations/test_signal_identity_migration.py`: seeds duplicate groups and the old index, then checks the rows kept (2, 4, 5, 8), the audit log line, rejection of a new duplicate, and downgrade.
+- `test_bulk_create_skips_rows_that_already_exist` and `test_database_rejects_a_duplicate_signal`.
+- `test_insert_rows_race_with_another_writer_is_a_no_op`.
 
 ### HS-13 — A valid zero regime average is returned as unavailable
 
@@ -336,7 +366,7 @@ The serializer checks truthiness rather than `is not None`. An exact 0.0% averag
 
 ### HS-14 — Regression coverage preserves faulty semantics and misses lifecycle transitions
 
-**Status:** ⚠️ PARTIAL (2026-09-24, batches 1 and 2a)
+**Status:** ✅ COMPLETE (2026-09-24, batches 1 to 3)
 **Where:** partial-fill test (`backend/tests/services/test_signal_recorder.py:219`), research test (`frontend/src/components/SignalResearchDashboard.test.tsx:8`), and replay test (`frontend/src/components/HistoricalReplayPanel.test.tsx:8`).
 
 The partial-fill test said a later backfill completes remaining outcomes but did not run that later pass. The research test expected a cumulative raw result from bullish and bearish calls, encoding the directionality problem. There was no card-specific test or coverage for deletion parameters, multi-watchlist scope, date coverage, neutral replay calls, session alignment, or duplicate inserts.
@@ -349,11 +379,11 @@ The partial-fill test said a later backfill completes remaining outcomes but did
 - multi-watchlist union, selected-watchlist isolation, date filtering, pagination, and full export (HS-05, HS-06);
 - a zero regime average (HS-13).
 
-**Remaining:**
+**Also covered since the review:**
 
 - ~~a `HistoricalSignalCard` test~~: added in batch 2c;
 - ~~neutral replay calls and session alignment (HS-10)~~: covered in batch 2c;
-- duplicate inserts (HS-12);
+- ~~duplicate inserts (HS-12)~~: covered in batch 3;
 - ~~queue progress past unfinishable rows (HS-15)~~: covered in batch 2b;
 - ~~direction-adjusted AI stats (HS-16)~~: covered in batch 2b.
 
@@ -383,7 +413,7 @@ The dashboard now renders only this summary, so paging is gone, and its coverage
 
 ### HS-18 — “Delete >180d” is undone at restart and ignores the selected scope
 
-**Status:** ❌ NOT STARTED
+**Status:** ✅ COMPLETE (2026-09-24, batch 3)
 **Where:** `HistoricalSignalCard.handleCleanup` (`frontend/src/components/HistoricalSignalCard.tsx:154`), `DELETE /api/signals/old` (`backend/api/signals/router.py:496`), `prune_signals_by_retention` (`backend/repositories/signal_repository.py:415`), and `_fill_signal_gaps` (`backend/api/main_helpers.py:69`).
 
 Automatic retention already prunes signals per timeframe:
@@ -396,7 +426,9 @@ A 180-day manual delete therefore reaches only 1h, 4h, 1d, and 1wk signals. The 
 
 **Impact:** the destructive action only lasts until the next restart. Its lasting effects are stripped regime labels and a large re-backfill. A trader may also believe it applies only to the selected scope.
 
-**Resolution:** remove the manual button, since automatic retention already bounds storage. If a manual delete is kept, scope it and exclude symbols and timeframes whose bars are still retained. Add a test that a deleted range stays deleted after gap-fill runs.
+**Resolution:** the manual delete is removed, since automatic retention already bounds storage. That means the card's button, `api.deleteOldSignals`, `DELETE /api/signals/old`, and `SignalRepository.delete_older_than`. The card now says signals are pruned automatically with their bars, on each timeframe's retention window. The test for a deleted range staying deleted after gap-fill no longer applies, because there is no manual delete to undo.
+
+**Tests:** `test_manual_delete_route_is_gone` checks that the route no longer deletes anything. The card test checks there is no Delete control.
 
 ---
 
@@ -417,6 +449,20 @@ A 180-day manual delete therefore reaches only 1h, 4h, 1d, and 1wk signals. The 
 6. **Replay costs:** add optional commission and slippage to the simulated trades; the replay currently assumes none.
 
 ## Verification
+
+### Batch 3 (2026-09-24)
+
+| Suite | Result |
+|---|---|
+| Signals API, all repository tests, `backend/tests/services`, migrations, AI market tools, analysis, chat, scanner API, multi-timeframe | 617 passed, 17 subtests passed |
+| Every backend test file that touches historical signals (15 files) | 370 passed, 5 subtests passed |
+| `HistoricalSignalCard`, `SignalResearchDashboard`, `HistoricalReplayPanel` suites | 7 passed |
+| TypeScript (`tsc --noEmit`) and `ruff` on the changed files | clean |
+| HS-12 migration test, run from a scratch Alembic tree before installing | passed |
+| HS-12 migration on a copy of the live signals | 1,879 duplicates removed; 1.9 s |
+| HS-12 migration on the live database (after a `.backup`) | applied; 616,941 rows, no duplicate groups; recording resumed with no errors |
+
+The full backend and frontend suites and the production build were not run.
 
 ### Batch 2c (2026-09-24)
 
@@ -492,6 +538,7 @@ The full backend and frontend suites and the production build were not run for t
 - **Batch 2a:** commit `f762f8a`, `fix(signals): make research scope and coverage explicit`.
 - **Review of batches 1 and 2a:** commit `59e269a`, `docs(v5): review historical signals batches 1 and 2a`.
 - **Batch 2b:** commit `b430e06`, `fix(signals): unblock outcome queue and direction-adjust track record`.
+- **Batch 3:** in the working tree, not yet committed. The HS-12 migration is installed and applied to the live database.
 - **Batch 2c:** commit `2e46ecc`, `fix(signals): per-timeframe research, regime coverage, honest fields`. The HS-09 migration is applied to the live database.
 
 | Date | ID | Status | Commit | Files | Tests | Notes |
@@ -513,6 +560,10 @@ The full backend and frontend suites and the production build were not run for t
 | 2026-09-24 | HS-09 | ✅ COMPLETE | `2e46ecc` | `signal_recorder.py`, `market_tools.py`, `alembic/versions/20261002_signal_placeholder_fields.py`, `test_signal_recorder.py` | 1 updated + migration run | New rows carry no placeholders; stored placeholders cleared on the live database. |
 | 2026-09-24 | HS-10 | ✅ COMPLETE | `2e46ecc` | `HistoricalReplayPanel.tsx`, test | 1 UI | Directional trades only; one session scope; assumptions shown. |
 | 2026-09-24 | HS-17 | ✅ COMPLETE | `2e46ecc` | `signal_repository.py`, `router.py`, `api.ts`, `SignalResearchDashboard.tsx`, tests | 1 API, 2 UI | Server-side summary over the full filtered population. |
+| 2026-09-24 | HS-11 | ✅ COMPLETE | batch 3 | `router.py`, `api.ts`, `HistoricalSignalCard.tsx`, tests | 3 API, 2 UI | Typed body, preview then confirm, one manual run at a time. |
+| 2026-09-24 | HS-12 | ✅ COMPLETE | batch 3 | `alembic/versions/20261003_signal_identity_unique.py`, `signal.py`, `signal_repository.py`, `signal_recorder.py`, tests | migration test + 3 | Duplicates removed on the live database; unique index; conflicts are no-ops. |
+| 2026-09-24 | HS-18 | ✅ COMPLETE | batch 3 | `router.py`, `signal_repository.py`, `api.ts`, `HistoricalSignalCard.tsx`, tests | 1 API, 1 UI | Manual delete removed; retention owns pruning. |
+| 2026-09-24 | HS-14 | ✅ COMPLETE | batches 1–3 | tests | see entry | Every finding now has a regression. |
 
 ---
 

@@ -118,14 +118,37 @@ class SignalRepository:
     def bulk_create(self, records: list[dict[str, Any]]) -> int:
         """Insert multiple HistoricalSignal rows efficiently.
 
-        Returns the number of rows inserted.
+        Returns the number of rows inserted; see :meth:`insert_ignoring_duplicates`.
+        """
+        inserted = self.insert_ignoring_duplicates(records)
+        self.db.commit()
+        return inserted
+
+    def insert_ignoring_duplicates(self, records: list[dict[str, Any]]) -> int:
+        """Insert rows, skipping any whose (symbol, timeframe, timestamp) already exists.
+
+        The unique index on that triple is what keeps a signal from being
+        stored twice when two writers (the recording loop, startup gap-fill,
+        a manual request, or the backfill worker process) race past their
+        own "already recorded?" checks. A conflict is a safe no-op, not an
+        error. Returns the number of rows actually inserted. Does not commit.
         """
         if not records:
             return 0
-        objects = [HistoricalSignal(**r) for r in records]
-        self.db.bulk_save_objects(objects, return_defaults=False)
-        self.db.commit()
-        return len(objects)
+        dialect = self.db.get_bind().dialect.name
+        if dialect == "postgresql":
+            from sqlalchemy.dialects.postgresql import insert as dialect_insert
+        else:
+            from sqlalchemy.dialects.sqlite import insert as dialect_insert
+        # A Core insert on the table reports rowcount; records use ORM attribute
+        # names, so map each to its column (``_outcome_missing`` is "outcome_computed").
+        attrs = HistoricalSignal.__mapper__.column_attrs
+        rows = [{attrs[key].columns[0].name: value for key, value in record.items()} for record in records]
+        statement = dialect_insert(HistoricalSignal.__table__).on_conflict_do_nothing(
+            index_elements=["symbol", "timeframe", "timestamp"]
+        )
+        result = self.db.execute(statement, rows)
+        return max(int(result.rowcount or 0), 0)
 
     def get_by_id(self, signal_id: int) -> HistoricalSignal | None:
         return self.db.query(HistoricalSignal).filter(HistoricalSignal.id == signal_id).first()
@@ -264,17 +287,6 @@ class SignalRepository:
         if completed_only:
             q = q.filter(outcome_complete_filter())
         return q
-
-    def delete_older_than(self, days: int = 90) -> int:
-        """Delete signals older than ``days`` days. Returns count deleted."""
-        cutoff = datetime.now() - timedelta(days=days)
-        count = (
-            self.db.query(HistoricalSignal)
-            .filter(HistoricalSignal.timestamp < cutoff)
-            .delete(synchronize_session="fetch")
-        )
-        self.db.commit()
-        return count
 
     def delete_for_symbol(self, symbol: str) -> int:
         """Delete all signal rows for ``symbol`` (all timeframes).

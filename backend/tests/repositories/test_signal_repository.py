@@ -177,28 +177,27 @@ class TestSignalRepository(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0].timestamp, datetime(2025, 1, 1))
 
-    # --- delete_older_than ---
+    # --- signal identity (HS-12) ---
 
-    def test_delete_older_than_removes_stale(self):
-        now = datetime.utcnow()
-        # Signal from 400 days ago is stale for 180-day cutoff
-        self._create_signal(symbol="AAPL", timestamp=now - timedelta(days=400))
-        # Signal from 30 days ago is recent for 180-day cutoff
-        self._create_signal(symbol="MSFT", timestamp=now - timedelta(days=30))
+    def test_bulk_create_skips_rows_that_already_exist(self):
+        """A second writer's copy of the same bar is a no-op, not an error or a duplicate."""
+        records = [
+            dict(symbol="AAPL", timestamp=datetime(2025, 1, i), timeframe="1d", price=100.0 + i)
+            for i in range(1, 4)
+        ]
         with self.Session() as db:
-            deleted = self._repo(db).delete_older_than(days=180)
-        self.assertEqual(deleted, 1)
+            self.assertEqual(self._repo(db).bulk_create(records[:2]), 2)
         with self.Session() as db:
-            remaining = self._repo(db).get_history(symbol="AAPL")
-        self.assertEqual(len(remaining), 0)
+            self.assertEqual(self._repo(db).bulk_create(records), 1)  # only Jan 3 is new
+        with self.Session() as db:
+            self.assertEqual(db.query(HistoricalSignal).count(), 3)
 
-    def test_delete_older_than_none_to_delete(self):
-        now = datetime.utcnow()
-        # Signal from 30 days ago is not stale for 365-day cutoff
-        self._create_signal(symbol="AAPL", timestamp=now - timedelta(days=30))
-        with self.Session() as db:
-            deleted = self._repo(db).delete_older_than(days=365)
-        self.assertEqual(deleted, 0)
+    def test_database_rejects_a_duplicate_signal(self):
+        from sqlalchemy.exc import IntegrityError
+
+        self._create_signal(symbol="AAPL", timestamp=datetime(2025, 1, 1), timeframe="1d")
+        with self.assertRaises(IntegrityError):
+            self._create_signal(symbol="AAPL", timestamp=datetime(2025, 1, 1), timeframe="1d")
 
     # --- get_signals_needing_outcomes ---
 

@@ -58,10 +58,9 @@ export function HistoricalSignalCard({ defaultSymbol = '' }: HistoricalSignalCar
   const [regimeCoverage, setRegimeCoverage] = useState<SignalResearchSummary['regime_coverage'] | null>(null);
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState<{ msg: string; isError: boolean } | null>(null);
-  const [busy, setBusy] = useState<{ backfill: boolean; record: boolean; cleanup: boolean }>({
+  const [busy, setBusy] = useState<{ backfill: boolean; record: boolean }>({
     backfill: false,
     record: false,
-    cleanup: false,
   });
 
   useEffect(() => {
@@ -127,8 +126,9 @@ export function HistoricalSignalCard({ defaultSymbol = '' }: HistoricalSignalCar
     setStatus(null);
     try {
       const r = await api.backfillOutcomes(200);
-      setStatus({ msg: `Backfilled ${r.updated} signal(s).`, isError: false });
+      // Reload first: loadSignals clears the status line.
       await Promise.all([loadSignals(), loadResearch()]);
+      setStatus({ msg: `Backfilled ${r.updated} signal(s).`, isError: false });
     } catch (err: any) {
       setStatus({ msg: err?.message || 'Backfill failed', isError: true });
     } finally {
@@ -140,30 +140,17 @@ export function HistoricalSignalCard({ defaultSymbol = '' }: HistoricalSignalCar
     setBusy((b) => ({ ...b, record: true }));
     setStatus(null);
     try {
-      const r = await api.recordSignalsNow();
-      setStatus({ msg: `Recorded ${r.recorded} signal(s).`, isError: false });
+      const preview = await api.recordSignalsNow(false);
+      const prompt = `Record signals for newly closed bars of ${preview.symbols.length} ingested symbol(s) `
+        + `across ${preview.pairs} symbol/timeframe pair(s)? Bars already recorded are skipped.`;
+      if (!window.confirm(prompt)) return;
+      const r = await api.recordSignalsNow(true);
       await loadSignals();
+      setStatus({ msg: `Recorded ${r.status === 'recorded' ? r.recorded : 0} signal(s).`, isError: false });
     } catch (err: any) {
       setStatus({ msg: err?.message || 'Record failed', isError: true });
     } finally {
       setBusy((b) => ({ ...b, record: false }));
-    }
-  };
-
-  const handleCleanup = async () => {
-    if (!window.confirm('Delete signals older than 180 days? This cannot be undone.')) {
-      return;
-    }
-    setBusy((b) => ({ ...b, cleanup: true }));
-    setStatus(null);
-    try {
-      const r = await api.deleteOldSignals(180);
-      setStatus({ msg: `Deleted ${r.deleted} old signal(s).`, isError: false });
-      await loadSignals();
-    } catch (err: any) {
-      setStatus({ msg: err?.message || 'Cleanup failed', isError: true });
-    } finally {
-      setBusy((b) => ({ ...b, cleanup: false }));
     }
   };
 
@@ -176,7 +163,9 @@ export function HistoricalSignalCard({ defaultSymbol = '' }: HistoricalSignalCar
       <p className="label" style={{ marginTop: 0 }}>
         Every meaningful trend snapshot is stored with forward 5/10/20-bar
         returns, MFE, and MAE. Outcomes are computed only after 20+ future
-        bars exist, so there's no look-ahead bias.
+        bars exist, so there's no look-ahead bias. Signals are pruned
+        automatically with their bars, on each timeframe's configured
+        bar-retention window.
       </p>
 
       <div className="signal-filters">
@@ -234,9 +223,6 @@ export function HistoricalSignalCard({ defaultSymbol = '' }: HistoricalSignalCar
         </button>
         <button className="btn" onClick={handleRecord} disabled={busy.record}>
           {busy.record ? 'Recording…' : 'Record Now'}
-        </button>
-        <button className="btn btn-danger" onClick={handleCleanup} disabled={busy.cleanup}>
-          {busy.cleanup ? 'Cleaning…' : 'Delete > 180d'}
         </button>
       </div>
 

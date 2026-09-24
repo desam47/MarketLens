@@ -24,6 +24,7 @@ import time
 from datetime import datetime, timedelta
 
 from sqlalchemy import and_, func
+from sqlalchemy.exc import IntegrityError
 
 from backend.config.settings import settings
 from backend.database import SessionLocal
@@ -157,6 +158,12 @@ class SignalRecorder:
             self._last_recorded[key] = ts
             logger.debug(f"Recorded signal for {sym}/{tf} @ {ts}")
             return signal
+        except IntegrityError:
+            # Another writer stored this bar between the check above and the insert;
+            # the unique index turned the race into a duplicate, which is a no-op.
+            db.rollback()
+            self._last_recorded[key] = ts
+            return None
         except Exception as e:
             logger.error(f"Failed to record signal for {symbol}/{timeframe}: {e}")
             db.rollback()
@@ -556,15 +563,15 @@ class SignalRecorder:
         if not scored:
             return 0
         regime, regime_loaded = None, False
-        objects = []
+        records = []
         for bar, score in scored:
             label = label_columns(score)
             if score is not None and now - bar_end(bar.timestamp, timeframe) <= _FRESH:
                 if not regime_loaded:
                     regime, regime_loaded = self._get_market_regime(), True
                 label["market_regime"] = regime
-            objects.append(
-                HistoricalSignal(
+            records.append(
+                dict(
                     symbol=symbol,
                     timestamp=bar.timestamp,
                     timeframe=timeframe,
@@ -591,13 +598,14 @@ class SignalRecorder:
                 )
             )
         try:
-            db.bulk_save_objects(objects, return_defaults=False)
+            # A row another writer stored first is skipped, not an error (HS-12).
+            inserted = SignalRepository(db).insert_ignoring_duplicates(records)
             db.commit()
         except Exception as e:
             db.rollback()
-            logger.error(f"_insert_rows({symbol}, {timeframe}, n={len(objects)}) failed: {e}")
+            logger.error(f"_insert_rows({symbol}, {timeframe}, n={len(records)}) failed: {e}")
             raise
-        return len(objects)
+        return inserted
 
     def _get_market_regime(self) -> str | None:
         """Try to read the current market regime from the global engine.

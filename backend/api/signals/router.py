@@ -9,23 +9,28 @@ Routes:
   GET    /api/signals/research/count-by-regime      - signal count by regime
   GET    /api/signals/research/summary  - research metrics over the full filtered population
   POST   /api/signals/backfill          - trigger outcome backfill manually
-  DELETE /api/signals/old               - delete signals older than N days
+  POST   /api/signals/record            - preview, then record signals for newly closed bars
 
 All endpoints read/write through ``SignalRepository`` so the API and the
 ingestion service share one path to the DB.
 """
 
 import logging
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import date, datetime, time, timedelta
 from io import StringIO
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, field_serializer
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from backend.market_data.services.ingestion_service import ingestion_service
+from backend.models import BarModel
 from backend.repositories.signal_repository import SignalRepository, directional_outcome
 from backend.services.signal_recorder import signal_recorder
 from backend.utils.timezone import format_edt_iso
@@ -102,6 +107,33 @@ class RegimeCount(BaseModel):
 
 class BackfillResponse(BaseModel):
     updated: int
+
+
+class RecordSignalsRequest(BaseModel):
+    """Bulk recording request. Unknown fields are rejected rather than ignored."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    symbols: list[str] | None = None
+    confirm: bool = False
+
+
+# Manual bulk work (record, outcome backfill) runs one request at a time, so
+# repeated clicks cannot stack up alongside the ingestion loop's own passes.
+_manual_run_lock = threading.Lock()
+
+
+@contextmanager
+def _exclusive_manual_run() -> Iterator[None]:
+    if not _manual_run_lock.acquire(blocking=False):
+        raise HTTPException(
+            status_code=409,
+            detail="A manual signal recording or outcome backfill is already running; try again when it finishes.",
+        )
+    try:
+        yield
+    finally:
+        _manual_run_lock.release()
 
 
 class TimeframeCoverage(BaseModel):
@@ -486,7 +518,9 @@ def trigger_backfill(
     Records forward outcomes (5/10/20-bar returns, MFE, MAE) for signals
     that don't yet have them.
     """
-    updated = signal_recorder.backfill_outcomes(batch_size=batch_size)
+    with _exclusive_manual_run():
+        updated = signal_recorder.backfill_outcomes(batch_size=batch_size)
+    logger.info("Manual outcome backfill: batch_size=%d updated=%d", batch_size, updated)
     return BackfillResponse(updated=updated)
 
 
@@ -500,6 +534,8 @@ def record_signal(
     market_regime: str | None = None,
     price: float | None = None,
     timestamp: datetime | None = None,
+    request: RecordSignalsRequest | None = Body(None),
+    db: Session = Depends(get_db),
 ):
     """Record a signal for a symbol/timeframe manually.
 
@@ -508,9 +544,12 @@ def record_signal(
         signal via ``signal_recorder.record_signal`` and returns
         ``{"status": "recorded", ...}`` or ``{"status": "duplicate_or_skipped"}``.
       * **Bulk from recent bars** — omit both: records a signal for every
-        newly closed bar of every (symbol, timeframe) in the ingestion
-        service (a bar still forming is left for a later call). Returns
-        ``{"recorded": N}`` where ``N`` is the count of new rows written.
+        newly closed bar of every (symbol, timeframe) of the ingested
+        symbols, or of the ``symbols`` in the JSON body (each must be
+        ingested). Without ``confirm: true`` it only returns a preview of
+        the resolved symbols and the number of (symbol, timeframe) pairs;
+        with it, it records and returns ``{"status": "recorded",
+        "recorded": N, ...}``. A bar still forming is left for a later call.
 
     The bulk mode is what the ingestion loop uses internally; the test
     suite validates it via ``record_from_recent_bars`` to ensure the
@@ -519,9 +558,35 @@ def record_signal(
     # Bulk mode: no explicit symbol/timeframe → record from recent bars
     # using the ingestion service's active symbol list.
     if symbol is None and timeframe is None:
-        symbols = list(ingestion_service.symbols)
-        recorded = signal_recorder.record_from_recent_bars(symbols)
-        return {"recorded": recorded}
+        request = request or RecordSignalsRequest()
+        ingested = [s.upper() for s in ingestion_service.symbols]
+        if request.symbols is None:
+            symbols = ingested
+        else:
+            symbols = list(dict.fromkeys(s.strip().upper() for s in request.symbols if s.strip()))
+            unknown = [s for s in symbols if s not in ingested]
+            if unknown or not symbols:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Only ingested symbols can be recorded; not ingested: {', '.join(unknown) or '(none given)'}",
+                )
+        pairs = (
+            db.query(func.count())
+            .select_from(
+                db.query(BarModel.symbol, BarModel.timeframe)
+                .filter(BarModel.symbol.in_(symbols))
+                .distinct()
+                .subquery()
+            )
+            .scalar()
+        ) if symbols else 0
+        scope = {"symbols": symbols, "pairs": int(pairs or 0)}
+        if not request.confirm:
+            return {"status": "preview", **scope}
+        with _exclusive_manual_run():
+            recorded = signal_recorder.record_from_recent_bars(symbols)
+        logger.info("Manual signal recording: %d symbols, %d pairs, %d new rows", len(symbols), scope["pairs"], recorded)
+        return {"status": "recorded", "recorded": recorded, **scope}
 
     # Single-record mode: explicit symbol/timeframe required.
     if symbol is None or timeframe is None:
@@ -566,20 +631,3 @@ def get_latest_signals(symbol: str, db: Session = Depends(get_db)):
     if not latest:
         raise HTTPException(status_code=404, detail="No signals found for this symbol")
     return latest
-
-
-@router.delete("/old", response_model=dict)
-def delete_old_signals(
-    older_than_days: int = Query(30, ge=1),
-    confirm: bool = Query(False, description="Must be true to delete retained research data"),
-    db: Session = Depends(get_db),
-):
-    """Delete signals older than N days."""
-    if not confirm:
-        raise HTTPException(
-            status_code=400,
-            detail="Set confirm=true after reviewing the deletion scope.",
-        )
-    repo = SignalRepository(db)
-    deleted = repo.delete_older_than(older_than_days)
-    return {"deleted": deleted, "older_than_days": older_than_days}

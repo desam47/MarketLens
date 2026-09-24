@@ -553,6 +553,22 @@ class TestSignalRecorderBackfillSignals(unittest.TestCase):
         inputs = json.loads(signals[-1].confidence_inputs)
         self.assertEqual((inputs["bar_provider"], inputs["bar_data_status"]), ("test", "historical"))
 
+    def test_insert_rows_race_with_another_writer_is_a_no_op(self):
+        """HS-12: a batch that lost the race to another writer skips the bar, not fails."""
+        from types import SimpleNamespace
+
+        bar = SimpleNamespace(
+            timestamp=datetime(2025, 3, 3), close=101.0, high=102.0, low=100.0,
+            provider="test", data_status="historical",
+        )
+        now = datetime(2026, 1, 1)
+        with self.Session() as db:
+            self.assertEqual(self.recorder._insert_rows(db, "RACE", "1d", [(bar, 10.0)], now), 1)
+            # A second writer whose "already recorded?" check ran before the first commit.
+            self.assertEqual(self.recorder._insert_rows(db, "RACE", "1d", [(bar, 10.0)], now), 0)
+        with self.Session() as db:
+            self.assertEqual(db.query(HistoricalSignal).filter_by(symbol="RACE").count(), 1)
+
     def test_backfill_signals_for_symbol_dedup_skips_existing(self):
         """Second call records 0 new signals (DB dedup + in-process cache)."""
         sym = "BULK2"

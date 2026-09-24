@@ -376,47 +376,62 @@ class TestSignalsAPI(unittest.TestCase):
     # --- record-now ---
 
     @patch("backend.api.signals.router.signal_recorder.record_from_recent_bars", return_value=5)
-    def test_record_now_uses_ingestion_service_defaults(self, mock_record):
+    def test_record_now_previews_then_records_ingested_symbols(self, mock_record):
         # Patch the router module's ingestion_service binding (the source-module
         # patch doesn't reach the router's `from ... import ingestion_service`).
         with patch("backend.api.signals.router.ingestion_service") as mock_ing:
             mock_ing.symbols = ["AAPL", "MSFT"]
-            mock_ing.timeframes = ["1d", "1h"]
-            r = self.client.post("/api/signals/record")
+            preview = self.client.post("/api/signals/record")
+            self.assertEqual(preview.status_code, 200)
+            self.assertEqual(preview.json(), {"status": "preview", "symbols": ["AAPL", "MSFT"], "pairs": 0})
+            mock_record.assert_not_called()  # nothing runs without confirmation
+
+            r = self.client.post("/api/signals/record", json={"confirm": True})
         self.assertEqual(r.status_code, 200)
-        self.assertEqual(r.json()["recorded"], 5)
-        # The recorder should have been called with the symbols from ingestion service
+        self.assertEqual((r.json()["status"], r.json()["recorded"]), ("recorded", 5))
         args, _ = mock_record.call_args
-        self.assertEqual(args[0], ["AAPL", "MSFT"])
-        # timeframes argument was removed (Phase 3.1 — bars table is 1m-only;
-        # record_from_recent_bars queries all available timeframes)
-        self.assertEqual(len(args), 1)
+        self.assertEqual(args, (["AAPL", "MSFT"],))
 
-    # --- delete old ---
+    @patch("backend.api.signals.router.signal_recorder.record_from_recent_bars", return_value=1)
+    def test_record_now_honours_the_requested_symbols(self, mock_record):
+        """HS-11: the body used to be ignored and every ingested symbol recorded."""
+        with patch("backend.api.signals.router.ingestion_service") as mock_ing:
+            mock_ing.symbols = ["AAPL", "MSFT"]
+            r = self.client.post("/api/signals/record", json={"symbols": ["msft"], "confirm": True})
+            self.assertEqual(r.json()["symbols"], ["MSFT"])
+            self.assertEqual(mock_record.call_args.args, (["MSFT"],))
 
-    def test_delete_old_signals(self):
-        now = datetime.utcnow()
-        # Insert two signals at different ages
-        self._seed(symbol="AAPL", timestamp=now - timedelta(days=400))
-        self._seed(symbol="MSFT", timestamp=now - timedelta(days=10))
-        r = self.client.delete("/api/signals/old?older_than_days=180&confirm=true")
-        self.assertEqual(r.status_code, 200)
-        body = r.json()
-        self.assertEqual(body["deleted"], 1)
-        self.assertEqual(body["older_than_days"], 180)
-        # Verify only the recent one remains
-        r2 = self.client.get("/api/signals/?include_all=true")
-        remaining = r2.json()
-        self.assertEqual(len(remaining), 1)
-        self.assertEqual(remaining[0]["symbol"], "MSFT")
+            unknown = self.client.post("/api/signals/record", json={"symbols": ["TSLA"], "confirm": True})
+            self.assertEqual(unknown.status_code, 422)
+            ignored_field = self.client.post("/api/signals/record", json={"timeframes": ["1d"], "confirm": True})
+            self.assertEqual(ignored_field.status_code, 422)
+        self.assertEqual(mock_record.call_count, 1)
 
-    def test_delete_old_signals_requires_confirmation(self):
+    def test_manual_bulk_runs_do_not_overlap(self):
+        import importlib
+
+        signals_router = importlib.import_module("backend.api.signals.router")
+
+        self.assertTrue(signals_router._manual_run_lock.acquire(blocking=False))
+        try:
+            with patch("backend.api.signals.router.signal_recorder.backfill_outcomes") as mock_backfill:
+                r = self.client.post("/api/signals/backfill")
+            self.assertEqual(r.status_code, 409)
+            mock_backfill.assert_not_called()
+            with patch("backend.api.signals.router.ingestion_service") as mock_ing:
+                mock_ing.symbols = ["AAPL"]
+                self.assertEqual(self.client.post("/api/signals/record", json={"confirm": True}).status_code, 409)
+        finally:
+            signals_router._manual_run_lock.release()
+
+    # --- no manual delete (HS-18) ---
+
+    def test_manual_delete_route_is_gone(self):
+        """Retention prunes signals with their bars; a manual delete was undone by gap-fill."""
         self._seed(symbol="AAPL", timestamp=datetime.utcnow() - timedelta(days=400))
-        r = self.client.delete("/api/signals/old?older_than_days=180")
-        self.assertEqual(r.status_code, 400)
-        r2 = self.client.get("/api/signals/?include_all=true")
-        self.assertEqual(len(r2.json()), 1)
-
+        r = self.client.delete("/api/signals/old?older_than_days=180&confirm=true")
+        self.assertIn(r.status_code, (404, 405))
+        self.assertEqual(len(self.client.get("/api/signals/?include_all=true").json()), 1)
 
 if __name__ == "__main__":
     unittest.main()

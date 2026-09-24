@@ -33,4 +33,39 @@ describe('HistoricalSignalCard', () => {
     expect(counts).toHaveBeenLastCalledWith('all_active', undefined, '4h');
     expect(screen.getByText(/Regime at Recording \(4 Hour\)/)).toBeInTheDocument();
   });
+
+  it('records only after the trader confirms the previewed scope, and has no manual delete', async () => {
+    jest.spyOn(api, 'getWatchlists').mockResolvedValue([]);
+    jest.spyOn(api, 'listSignals').mockResolvedValue([]);
+    jest.spyOn(api, 'getRegimePerformance').mockResolvedValue([]);
+    jest.spyOn(api, 'getSignalCountByRegime').mockResolvedValue([]);
+    jest.spyOn(api, 'getSignalResearchSummary').mockRejectedValue(new Error('offline'));
+    const record = jest.spyOn(api, 'recordSignalsNow')
+      .mockResolvedValueOnce({ status: 'preview', symbols: ['AAPL', 'MSFT'], pairs: 20 })
+      .mockResolvedValueOnce({ status: 'recorded', symbols: ['AAPL', 'MSFT'], pairs: 20, recorded: 7 });
+    const confirm = jest.spyOn(window, 'confirm').mockReturnValue(true);
+
+    render(<HistoricalSignalCard />);
+    expect(screen.queryByText(/Delete/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Record Now' }));
+    await waitFor(() => expect(screen.getByText('Recorded 7 signal(s).')).toBeInTheDocument());
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('2 ingested symbol(s) across 20 symbol/timeframe pair(s)'));
+    expect(record.mock.calls).toEqual([[false], [true]]);
+  });
+
+  it('writes nothing when the trader declines the preview', async () => {
+    jest.spyOn(api, 'getWatchlists').mockResolvedValue([]);
+    jest.spyOn(api, 'listSignals').mockResolvedValue([]);
+    jest.spyOn(api, 'getRegimePerformance').mockResolvedValue([]);
+    jest.spyOn(api, 'getSignalCountByRegime').mockResolvedValue([]);
+    jest.spyOn(api, 'getSignalResearchSummary').mockRejectedValue(new Error('offline'));
+    const record = jest.spyOn(api, 'recordSignalsNow').mockResolvedValue({ status: 'preview', symbols: ['AAPL'], pairs: 10 });
+    jest.spyOn(window, 'confirm').mockReturnValue(false);
+
+    render(<HistoricalSignalCard />);
+    fireEvent.click(screen.getByRole('button', { name: 'Record Now' }));
+    await waitFor(() => expect(record).toHaveBeenCalledTimes(1));
+    expect(record).toHaveBeenCalledWith(false);
+  });
 });

@@ -14,6 +14,7 @@ from sqlalchemy import (
     Column,
     DateTime,
     Float,
+    Index,
     Integer,
     String,
     Text,
@@ -32,6 +33,17 @@ class HistoricalSignal(Base):
     """
 
     __tablename__ = "historical_signals"
+    # One row per bar: writers race (recording loop, startup gap-fill, manual
+    # requests, the backfill worker process), so the database enforces it.
+    __table_args__ = (
+        Index(
+            "uq_historical_signals_symbol_timeframe_timestamp",
+            "symbol",
+            "timeframe",
+            "timestamp",
+            unique=True,
+        ),
+    )
 
     # ``id`` needs no ``index=True``: SQLite indexes the INTEGER PRIMARY KEY
     # natively, so it only created a redundant second copy. See alembic
