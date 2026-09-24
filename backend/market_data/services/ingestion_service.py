@@ -16,6 +16,12 @@ from sqlalchemy.orm import Session
 
 from backend.database import SessionLocal
 from backend.engines.market_calendar import aggregate_bar_session, us_market_calendar
+from backend.market_data.hourly_bars import (
+    aggregate_1h_to_4h,
+    build_1h_from_1m,
+    closed_provider_hours,
+    hour_session,
+)
 from backend.models import (
     Bar,
     BarModel,
@@ -68,54 +74,28 @@ def _instantiate_backfill_provider(name: str):
 
 
 def _normalize_1h_bar(b: Bar, provider_name: str) -> Bar | None:
-    """Normalize a 1h bar timestamp to a clean :00 boundary.
+    """Keep a provider 1h bar only if it starts on the hour (MD-01).
 
-    All providers in our chain (Alpaca, Webull, yfinance) should align to
-    either the top of the hour (:00) or market-hour anchors (:30) that
-    represent the same hourly candle. yfinance uses :30; Alpaca and Webull
-    use :00. This function floors :30 bars to the preceding :00 so the
-    DB's (symbol, timeframe, timestamp) unique-key matches across providers.
+    Stored 1h bars cover a clock hour: "10:00" is 10:00-11:00 ET. Webull and
+    Yahoo anchor regular-session hourly bars on the half hour (09:30-10:30,
+    ...). Such a bar straddles two clock hours, so no relabelling places it
+    correctly: flooring it to :00, as this function used to, stored every one
+    30 minutes early, with an hour's high and low taken partly from the next
+    hour. Those bars are skipped; clock hours come from our own 1m bars
+    (``_resample_1h_from_1m_and_upsert``) or from Alpaca, whose hourly bars
+    start on the hour. See ``backend/market_data/hourly_bars.py``.
 
-    Note: yfinance is the only provider that includes the 16:00 ET close bar.
-    The fallback chain tries yfinance after Alpaca precisely to capture that
-    bar. Do NOT switch the canonical offset to :30 here — Alpaca and Webull
-    bars would then collide (and the 16:00 from yfinance would still need
-    an extra shift).
-
-    Bars with other offsets are logged and skipped.
-
-    Returns a new Bar with the normalized timestamp, or None if the bar
-    should be skipped.
+    A kept bar gets its session from its clock hour (``upsert_bars`` leaves
+    1h sessions to the writer). Returns ``None`` for a skipped bar.
     """
     ts = b.timestamp
-    minute = ts.minute
-    second = ts.second
-
-    if minute == 0 and second == 0:
-        # Clean :00 bar — use as-is (Alpaca, Webull)
+    if ts.minute == 0 and ts.second == 0 and ts.microsecond == 0:
+        b.session = hour_session(ts)
         return b
 
-    if minute == 30 and second == 0:
-        # yfinance-style 30-min offset — floor to the top of the hour
-        normalized_ts = ts.replace(minute=0, second=0, microsecond=0)
-        return Bar(
-            symbol=b.symbol,
-            timestamp=normalized_ts,
-            open=b.open,
-            high=b.high,
-            low=b.low,
-            close=b.close,
-            volume=b.volume,
-            timeframe=b.timeframe,
-            provider=b.provider,
-            data_status=b.data_status,
-        )
-
-    # Unexpected offset — skip and log once per symbol per loop run
-    # (logger.debug to avoid noise; raise to surface if needed during testing)
     logger.debug(
-        f"Skipping 1h bar for {b.symbol} with unexpected offset "
-        f"(minute={minute}, second={second}) from {provider_name}"
+        f"Skipping 1h bar for {b.symbol} at {ts:%H:%M:%S} from {provider_name}: "
+        "it does not start on the hour"
     )
     return None
 
@@ -133,9 +113,9 @@ def _normalize_1d_bar(b: Bar, provider_name: str) -> Bar | None:
     the two rows for the same day — which one a query returns is whatever
     happens to sort first, not a deliberate choice (2026-09-09 fix).
 
-    Mirrors _normalize_1h_bar's approach: floor the known alternate offset
-    to the canonical one; skip (log) anything unrecognized rather than
-    risk silently mis-bucketing it.
+    Floors the known alternate offset to the canonical one, which is safe
+    for a daily bar: both stamps name the same session. Anything
+    unrecognized is skipped (logged) rather than risk mis-bucketing it.
     """
     ts = b.timestamp
     hour, minute, second = ts.hour, ts.minute, ts.second
@@ -685,6 +665,88 @@ class MarketDataIngestionService:
                 if len(rows) < 4:
                     continue
 
+                # Live in-progress bucket, same convention as 1d/1h/sub-hour:
+                # written INCOMPLETE and refreshed each pass until it closes.
+                # See hourly_bars.aggregate_1h_to_4h for the bucket rules.
+                now = datetime.now(_NY_TZ).replace(tzinfo=None)
+                to_write = aggregate_1h_to_4h(symbol, (self._model_to_bar(r) for r in rows), now)
+                if to_write:
+                    written += upsert_bars(db, to_write)
+                    analysis_bars.extend(to_write)
+                # Small delay between symbols to avoid bursts
+                await asyncio.sleep(0.05)
+            db.commit()
+            self._dispatch_latest_analysis_bars(analysis_bars)
+            if written:
+                from backend.market_data.services.cache import _redis_cache
+
+                for symbol in symbols_to_process:
+                    _redis_cache.invalidate_bars_for_symbol(symbol)
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+        return written
+
+    # ------------------------------------------------------------------
+    # 1h → 4h aggregation (aligned to NY market-hour boundaries)
+    # ------------------------------------------------------------------
+
+    # How far back to look when resampling 1h→4h / 1d→1wk on the live,
+    # frequently-run path (full_history=False). Once a bucket closes it
+    # never needs to be revisited — these only need to cover however far
+    # back a late-arriving bar could plausibly land. _gapfill_1h_once
+    # fetches at most the last 5 days of 1h bars, so 10 days gives that
+    # comfortable headroom; _write_1d_bars fetches at most 30 days, so 60
+    # days does the same for 1d→1wk. Without this cap, both functions
+    # re-scanned EVERY stored 1h/1d row for every symbol on every ~2 min
+    # tick — unlike the sub-hour resampler, which was already windowed —
+    # so the scan cost grew unbounded with total retained history instead
+    # of staying flat. full_history=True (startup / explicit backfill
+    # calls only) restores the unwindowed full scan.
+    _4H_RESAMPLE_WINDOW_DAYS = 10
+    _1WK_RESAMPLE_WINDOW_DAYS = 60
+
+    async def _resample_1h_to_4h_and_upsert(
+        self, _symbol: str | None = None, full_history: bool = False
+    ) -> int:
+        """Read 1h bars → aggregate to 4h (NY market hours) → upsert.
+
+        4h buckets: 00:00-03:59, 04:00-07:59, 08:00-11:59, 12:00-15:59,
+        16:00-19:59, 20:00-23:59 ET.  Only confirmed-closed buckets
+        (end-time < now) are written.
+
+        If ``_symbol`` is provided, resample only that symbol instead of
+        ``self.symbols`` (used by backfill_service for newly added symbols).
+
+        By default only the last ``_4H_RESAMPLE_WINDOW_DAYS`` of 1h bars
+        are scanned (see the class-level comment above); pass
+        ``full_history=True`` for a one-time full backfill (startup).
+        """
+        from backend.repositories.bar_repository import upsert_bars
+
+        symbols_to_process = [_symbol] if _symbol else self.symbols
+        written = 0
+        analysis_bars: list[Bar] = []
+        db = SessionLocal()
+        try:
+            for symbol in symbols_to_process:
+                query = db.query(BarModel).filter(
+                    and_(
+                        BarModel.symbol == symbol.upper(),
+                        BarModel.timeframe == "1h",
+                    )
+                )
+                if not full_history:
+                    cutoff = datetime.now(_NY_TZ).replace(tzinfo=None) - timedelta(
+                        days=self._4H_RESAMPLE_WINDOW_DAYS
+                    )
+                    query = query.filter(BarModel.timestamp >= cutoff)
+                rows = query.order_by(BarModel.timestamp.asc()).all()
+                if len(rows) < 4:
+                    continue
+
                 bars_src = [self._model_to_bar(r) for r in rows]
                 buckets: dict[datetime, list[Bar]] = {}
                 for bar in bars_src:
@@ -1065,12 +1127,10 @@ class MarketDataIngestionService:
 
         Written with data_status=INCOMPLETE if the bucket's hour hasn't
         closed yet (only ever true for the current-hour case), else
-        HISTORICAL. Either way this upserts onto the SAME
-        (symbol, "1h", hour_start) key _1h_write_loop/_gapfill_1h_loop
-        write to — for the live case, the real bar naturally overwrites
-        this one once the hour closes and a fresh fetch runs; for the
-        correction case, THIS call is the one doing the overwriting, and
-        that's the point.
+        HISTORICAL; later passes refresh it until the hour closes. This
+        upserts onto the SAME (symbol, "1h", hour_start) key
+        _1h_write_loop/_gapfill_1h_loop write to, and a bar built here always
+        wins: ``upsert_bars`` never lets a provider 1h bar replace it (MD-01).
 
         Spans premarket/regular/after-hours 1m data, matching 1d's live
         pre-close bar (``_resample_1d_live_and_upsert``) — changed
@@ -1114,30 +1174,11 @@ class MarketDataIngestionService:
                         .order_by(BarModel.timestamp.asc())
                         .all()
                     )
-                    if len(rows) < 2:
-                        continue  # not enough of this hour ingested
-
-                    bars_src = [self._model_to_bar(r) for r in rows]
-                    bar = Bar(
-                        symbol=symbol.upper(),
-                        timeframe="1h",
-                        open=bars_src[0].open,
-                        high=max(b.high for b in bars_src),
-                        low=min(b.low for b in bars_src),
-                        close=bars_src[-1].close,
-                        volume=sum(b.volume for b in bars_src),
-                        timestamp=hour_start,
-                        provider="live_from_1m",
-                        data_status=(
-                            DataStatus.INCOMPLETE if hour_end > now_naive else DataStatus.HISTORICAL
-                        ),
-                        # This hour can straddle a session boundary (e.g. the
-                        # 09:00 bucket spans premarket + regular) — aggregate
-                        # from the 1m members' own sessions rather than
-                        # classifying from hour_start alone. See
-                        # aggregate_bar_session's docstring.
-                        session=aggregate_bar_session(b.session for b in bars_src),
+                    bar = build_1h_from_1m(
+                        symbol, hour_start, [self._model_to_bar(r) for r in rows], now_naive
                     )
+                    if bar is None:
+                        continue  # not enough of this hour ingested
                     written += upsert_bars(db, [bar])
                     analysis_bars.append(bar)
             db.commit()
@@ -1436,9 +1477,11 @@ class MarketDataIngestionService:
         loops to catch up on a short gap) — pass a wider window like "1y"
         when bootstrapping a brand-new symbol that has no history at all.
         """
-        return await self._fetch_bars_with_fallback(
+        bars, provider = await self._fetch_bars_with_fallback(
             symbol, "1h", range_, self._STALE_1H_THRESHOLD, _normalize_1h_bar
         )
+        available_until = datetime.now(_NY_TZ).replace(tzinfo=None) - timedelta(minutes=15)
+        return closed_provider_hours(bars, available_until), provider
 
     # How stale the primary 1h provider's freshest bar can be before the
     # fallback chain is also consulted. Generous enough to tolerate normal
@@ -1470,10 +1513,9 @@ class MarketDataIngestionService:
         See ``_fetch_1h_bars_with_fallback`` for the freshness-aware
         fallback logic.
 
-        Timestamp normalization: clean :00 bars are kept as-is; Webull's 30-min
-        offset bars are floored to the preceding :00 so they slot into the DB's
-        (symbol, timeframe, timestamp) unique key correctly. Bars with other
-        offsets are skipped.
+        Only bars that start on the hour are kept (``_normalize_1h_bar``), and
+        ``upsert_bars`` never lets them replace an hour built from 1m, so this
+        fills only hours our 1m data does not cover.
         """
         from backend.repositories.bar_repository import upsert_bars
 
@@ -1577,17 +1619,9 @@ class MarketDataIngestionService:
         """Phase 3.8 — auto gap-fill for 1h bars.
 
         Runs every 30 min, 24/7. For each watched symbol, fetches the last
-        5 days of 1h bars via Alpaca primary + yfinance gap-fill (for 16:00 ET
-        close bar that Alpaca free tier misses for less-liquid symbols) and
-        writes all of them. Only full-hour boundaries (minute==0) are kept.
-
-        Why every 30 min: the 16:00 ET close bar arrives ~20:00 UTC via
-        yfinance; a 30-min cadence catches it within 30 min of arrival.
-        Combined with _1h_write_loop (hourly at :02), the 16:00 bar is
-        written no later than ~30 min after close.
-
-        Why 24/7: yfinance serves extended-hours bars at any time, so
-        gap-fill is useful even after RTH closes.
+        5 days of 1h bars from the BACKFILL_1H_* chain (Alpaca) and writes the
+        closed hours that start on the hour. Hours built from 1m are kept;
+        this only fills hours the 1m data misses.
         """
         if initial_delay > 0:
             await asyncio.sleep(initial_delay)
@@ -1606,10 +1640,9 @@ class MarketDataIngestionService:
         See ``_fetch_1h_bars_with_fallback`` for the freshness-aware
         fallback logic.
 
-        Timestamp normalization: clean :00 bars are kept as-is; Webull's 30-min
-        offset bars are floored to the preceding :00 so the merge against any
-        existing rows is unambiguous on (symbol, timestamp). Bars with other
-        offsets are skipped.
+        Only bars that start on the hour are kept (``_normalize_1h_bar``), and
+        ``upsert_bars`` never lets them replace an hour built from 1m, so this
+        fills only hours our 1m data does not cover.
         """
         from backend.repositories.bar_repository import upsert_bars
 

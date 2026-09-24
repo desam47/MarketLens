@@ -71,11 +71,24 @@ def _bar_to_model(bar: Bar) -> BarModel:
     )
 
 
+# A 1h bar built from our own 1m bars is exact for its clock hour, so a provider's 1h bar never
+# replaces it (MD-01). Only 1h: the provider's authoritative 16:02 daily bar is meant to replace
+# the live 1d bar built from 1m.
+_BUILT_FROM_1M = "live_from_1m"
+
+
+def _keeps_existing(timeframe: str, existing_provider: str | None, new_provider: str) -> bool:
+    return (
+        timeframe == "1h" and existing_provider == _BUILT_FROM_1M and new_provider != _BUILT_FROM_1M
+    )
+
+
 def upsert_bars(db: Session, bars: list[Bar]) -> int:
     """Bulk-insert or update a list of bars.
 
     Uses ``insert(...).on_conflict_do_update`` when the uniqueness
     constraint is in place; falls back to per-row merge when it isn't.
+    A provider 1h bar never replaces one built from 1m (``_keeps_existing``).
     Returns the number of rows written.
     """
     if not bars:
@@ -180,6 +193,11 @@ def upsert_bars(db: Session, bars: list[Bar]) -> int:
                 "data_status": stmt.excluded.data_status,
                 "session": stmt.excluded.session,
             },
+            where=~(
+                (BarModel.timeframe == "1h")
+                & (BarModel.provider == _BUILT_FROM_1M)
+                & (stmt.excluded.provider != _BUILT_FROM_1M)
+            ),
         )
         written = db.connection().execute(stmt, rows).rowcount
         db.commit()
@@ -197,6 +215,8 @@ def upsert_bars(db: Session, bars: list[Bar]) -> int:
                 )
                 .first()
             )
+            if existing and _keeps_existing(bar.timeframe, existing.provider, bar.provider):
+                continue
             if existing:
                 existing.open = bar.open
                 existing.high = bar.high

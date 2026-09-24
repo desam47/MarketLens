@@ -42,6 +42,7 @@ def _settings_mock(enabled=True, api_key="test_key", secret_key="test_secret"):
     mock.alpaca.secret_key = secret_key
     mock.alpaca.paper = True
     mock.alpaca.data_tier = "iex"
+    mock.alpaca.historical_feed = "sip"
     mock.alpaca.request_timeout = 15.0
     return mock
 
@@ -217,6 +218,52 @@ class TestAlpacaProviderBars(unittest.TestCase):
         self.assertNotIn("end", kwargs)
         # ``adjustment`` should be omitted (IEX tier compat).
         self.assertNotIn("adjustment", kwargs)
+
+    def test_historical_bars_request_the_consolidated_feed(self):
+        """MD-01/MD-03: the free plan serves SIP data older than 15 minutes; IEX
+        alone carries a few percent of the volume."""
+        from alpaca.data.enums import DataFeed
+
+        self._mock_data_client.get_stock_bars.return_value = _barset(bars=[_sdk_bar()])
+        self.provider.get_historical_bars("AAPL", timeframe="1h", range_="5d")
+        req = self._mock_data_client.get_stock_bars.call_args.args[0]
+        self.assertEqual(req.feed, DataFeed.SIP)
+
+    def test_refused_sip_falls_back_to_the_live_feed_for_good(self):
+        from alpaca.common.exceptions import APIError
+        from alpaca.data.enums import DataFeed
+
+        refused = APIError(
+            '{"code": 40310000, "message": "subscription does not permit querying SIP data"}',
+            SimpleNamespace(response=SimpleNamespace(status_code=403)),
+        )
+        self._mock_data_client.get_stock_bars.side_effect = [
+            refused,
+            _barset(bars=[_sdk_bar()]),
+            _barset(bars=[_sdk_bar()]),
+        ]
+        self.assertEqual(len(self.provider.get_historical_bars("AAPL", "1h", "5d")), 1)
+        self.provider.get_historical_bars("AAPL", "1h", "5d")
+
+        feeds = [c.args[0].feed for c in self._mock_data_client.get_stock_bars.call_args_list]
+        self.assertEqual(feeds, [DataFeed.SIP, DataFeed.IEX, DataFeed.IEX])
+
+    def test_other_errors_are_not_retried(self):
+        self._mock_data_client.get_stock_bars.side_effect = RuntimeError("timeout")
+        with self.assertRaises(RuntimeError):
+            self.provider.get_historical_bars("AAPL", "1h", "5d")
+        self.assertEqual(self._mock_data_client.get_stock_bars.call_count, 1)
+
+    def test_bars_between_caps_the_end_15_minutes_ago(self):
+        from datetime import timedelta
+
+        self._mock_data_client.get_stock_bars.return_value = _barset(bars=[])
+        now = datetime.now(UTC)
+        self.provider.get_bars_between("AAPL", "1h", now - timedelta(days=2), now)
+        req = self._mock_data_client.get_stock_bars.call_args.args[0]
+        # The provider reads the clock a moment after ``now``.
+        self.assertLess(req.end.replace(tzinfo=UTC), now - timedelta(minutes=14))
+        self.assertEqual(req.start.replace(tzinfo=UTC), now - timedelta(days=2))
 
     def test_get_historical_bars_returns_empty_on_no_data(self):
         self._mock_data_client.get_stock_bars.return_value = _barset(bars=[])

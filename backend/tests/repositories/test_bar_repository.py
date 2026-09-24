@@ -115,6 +115,50 @@ class TestBarRepository(unittest.TestCase):
             self.assertEqual(row.close, 150.0)
             self.assertEqual(row.provider, "yahoo_finance")
 
+    def test_provider_1h_bar_does_not_replace_one_built_from_1m(self):
+        """MD-01: an hour built from 1m is exact; a provider's 1h bar for the same
+        key (e.g. Webull's, which starts on the half hour) must not replace it."""
+        built = _make_bar("AAPL", datetime(2025, 1, 2, 10), 100.0, timeframe="1h")
+        built.provider = "live_from_1m"
+        provider = _make_bar("AAPL", datetime(2025, 1, 2, 10), 150.0, timeframe="1h")
+        provider.provider = "alpaca"
+        rebuilt = _make_bar("AAPL", datetime(2025, 1, 2, 10), 101.0, timeframe="1h")
+        rebuilt.provider = "live_from_1m"
+
+        with self.Session() as db:
+            bar_repository.upsert_bars(db, [built])
+            self.assertEqual(bar_repository.upsert_bars(db, [provider]), 0)
+            row = db.query(BarModel).one()
+            self.assertEqual((row.provider, row.close), ("live_from_1m", 100.0))
+
+            bar_repository.upsert_bars(db, [rebuilt])
+            db.refresh(row)
+            self.assertEqual((row.provider, row.close), ("live_from_1m", 101.0))
+
+    def test_1m_built_bar_replaces_a_provider_1h_bar(self):
+        provider = _make_bar("AAPL", datetime(2025, 1, 2, 10), 150.0, timeframe="1h")
+        built = _make_bar("AAPL", datetime(2025, 1, 2, 10), 100.0, timeframe="1h")
+        built.provider = "live_from_1m"
+
+        with self.Session() as db:
+            bar_repository.upsert_bars(db, [provider])
+            bar_repository.upsert_bars(db, [built])
+            row = db.query(BarModel).one()
+            self.assertEqual((row.provider, row.close), ("live_from_1m", 100.0))
+
+    def test_provider_daily_bar_still_replaces_the_live_one(self):
+        """Only 1h is protected: the 16:02 authoritative daily bar replaces the live 1d bar."""
+        live = _make_bar("AAPL", datetime(2025, 1, 2), 100.0, timeframe="1d")
+        live.provider = "live_from_1m"
+        final = _make_bar("AAPL", datetime(2025, 1, 2), 101.0, timeframe="1d")
+        final.provider = "webull"
+
+        with self.Session() as db:
+            bar_repository.upsert_bars(db, [live])
+            bar_repository.upsert_bars(db, [final])
+            row = db.query(BarModel).one()
+            self.assertEqual((row.provider, row.close), ("webull", 101.0))
+
     def test_upsert_bars_empty_input_is_noop(self):
         with self.Session() as db:
             written = bar_repository.upsert_bars(db, [])

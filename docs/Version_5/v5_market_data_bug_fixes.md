@@ -1,9 +1,9 @@
 # Version 5 Market Data Bug Fixes
 
 **Created:** 2026-09-24
-**Last updated:** 2026-09-24 (batch 1a: MD-02)
-**Status:** Review complete; MD-02 is fixed for new log records and the old log files holding credentials are deleted; token rotation and a worker restart remain. Nine findings: one Critical, two High, two Medium, four Low. The Critical finding affects every 1h and 4h chart, signal, and AI answer built on stored bars before 2026-09-23.
-**Scorecard:** 0 ✅ COMPLETE, 1 ⚠️ PARTIAL, 8 ❌ NOT STARTED, 0 🟡 DEFERRED.
+**Last updated:** 2026-09-24 (batch 1b: MD-01)
+**Status:** Review complete. MD-01 is fixed: 1h bars are placed on the clock hour, and the stored 1h/4h history and its signals were repaired on the live database. MD-02: log records are redacted, confirmed on live Webull errors, and the old log files holding credentials are deleted; only token rotation remains. Nine findings: one Critical, two High, two Medium, four Low. The Critical finding affects every 1h and 4h chart, signal, and AI answer built on stored bars before 2026-09-23.
+**Scorecard:** 1 ✅ COMPLETE, 1 ⚠️ PARTIAL, 7 ❌ NOT STARTED, 0 🟡 DEFERRED.
 **Source:** 2026-09-24 review of market-data ingestion, bar storage, retention, and the logs they produce. It covered `backend/market_data/services/ingestion_service.py`, `backend/market_data/providers/*`, `backend/repositories/bar_repository.py`, `backend/services/purge_service.py`, `backend/api/watchlist/router.py`, and `scripts/restart_dev.sh`, at `b41530c`, and checked each finding against the live database and logs.
 **Related:** [Historical Signals fixes](v5_historical_signal_bug_fixes.md), [AI Analysis fixes](v5_ai_analysis.md), [Chat bug fixes](v5_bug_fixes.md), [Phase audit](phase_audit_v5.md)
 
@@ -22,7 +22,7 @@ Line numbers refer to the code at `b41530c`.
 
 | ID | Severity | Area | Title | Evidence | Status |
 |---|---|---|---|---|---|
-| MD-01 | Critical | Bars | Provider 1h bars are stored 30 minutes earlier than the data they hold | Verified | ❌ NOT STARTED |
+| MD-01 | Critical | Bars | Provider 1h bars are stored 30 minutes earlier than the data they hold | Verified | ✅ COMPLETE |
 | MD-02 | High | Security | Webull credentials are written to the log files in plain text | Verified | ⚠️ PARTIAL |
 | MD-03 | High | Bars | One series mixes providers whose volume differs by up to 2,800 times | Verified | ❌ NOT STARTED |
 | MD-04 | Medium | Storage | Data for symbols in no watchlist is never removed | Verified | ❌ NOT STARTED |
@@ -44,7 +44,7 @@ Line numbers refer to the code at `b41530c`.
 
 ### MD-01 — Provider 1h bars are stored 30 minutes earlier than the data they hold
 
-**Status:** ❌ NOT STARTED
+**Status:** ✅ COMPLETE (2026-09-24, batch 1b). New 1h bars are placed on the clock hour, and the stored 1h/4h bars and their signals were repaired on the live database.
 **Where:** `_normalize_1h_bar` (`backend/market_data/services/ingestion_service.py:70`), used by `_write_1h_recent_window` (`:1465`, hourly) and `_gapfill_1h_once` (`:1601`, every 30 minutes).
 
 Webull and Yahoo return regular-session hourly bars anchored on the half hour: the first covers 09:30–10:30. `_normalize_1h_bar` floors a `:30` timestamp to the preceding `:00`, so that bar is stored as "09:00". Its open, high, low, close, and volume all come from 09:30–10:30, but the bar is labelled 09:00–10:00.
@@ -61,13 +61,57 @@ The code already knows this. A 2026-09-09 note in `_resample_1h_from_1m_and_upse
 
 **Impact:** every 1h and 4h chart, trend score, recorded signal, outcome, and AI or Chat answer that uses those bars puts price action 30 minutes earlier than it happened. Each labelled hour contains the first half of the next hour. The pre-market half hour before 09:30 is missing from the "09:00" bar, and the last bar of the day holds only 15:30–16:00. A 1h signal "at the 10:00 close" is scored on prices up to 11:30.
 
-**Resolution:**
+**Resolution:** 1h bars now always cover a clock hour. They are built from our 1m bars where those exist, and otherwise come from Alpaca's consolidated (SIP) hourly bars, which start on the hour.
 
-- **Stop the mislabelling:** stop flooring `:30`-anchored provider bars. Within the 1m retention window, build 1h only from 1m, which is already correct. Beyond it, use a provider whose hourly bars start on the hour, or skip them.
-- **Repair stored bars:** rebuild every 1h bar in the 1m window from 1m, then rebuild the 4h bars from those.
-- **Older history:** either re-fetch it from an aligned source, or mark it as legacy-shifted and keep it out of signals.
-- **Signals:** re-record the affected 1h and 4h signals and their outcomes.
-- **Test:** add one that fails if a stored 1h bar's close does not equal the close of its last 1m member.
+- **Probe (read-only, SPY, 2026-09-23):** Alpaca's free plan serves SIP bars older than 15 minutes, back at least a year. Its hourly bars match the 1m-built hours to the cent, with regular-session volume within 1%. Its IEX bars, the feed used until now, carried 1,199 shares for 08:00 and 109,823 for 09:00, against 3.67 million on SIP.
+- **Skip, don't floor:** `_normalize_1h_bar` now drops any provider 1h bar that does not start on the hour, instead of flooring it. A kept bar gets its session from its clock hour (`hour_session`: the 09:00 hour is "mixed").
+- **1m-built hours win:** `upsert_bars` never lets a provider 1h bar replace one built from 1m (`live_from_1m`). A 1m-built bar still replaces a provider bar. The 16:02 daily bar still replaces the live 1d bar.
+- **Alpaca over SIP:** `get_historical_bars` and the new `get_bars_between` request `ALPACA_HISTORICAL_FEED` (default `sip`), with `end` capped at 15 minutes ago. If the account is refused SIP (401/403), the provider falls back to `ALPACA_DATA_TIER` for the rest of the process. This also gives Alpaca's 1m and 1d fallback bars full-market volume (MD-03).
+- **1h chain:** `BACKFILL_1H_PRIMARY=alpaca` and an empty `BACKFILL_1H_FALLBACK`, in `.env`, `.env.example`, and the settings defaults. Webull and Yahoo cannot serve as fallbacks: every hourly bar they return starts on the half hour.
+- **Closed hours only:** the 1h write and gap-fill loops and the tier-2 backfill keep only hours that had ended 15 minutes before, so a partial SIP hour is never stored as HISTORICAL. The tier-2 backfill is also cut to `BACKFILL_1H_DAYS`; it used to keep the whole `5y` response.
+- **Shared builders:** `backend/market_data/hourly_bars.py` holds the 1m→1h and 1h→4h builders, used by the ingestion loops and the repair. It does not import the market-data manager, which would authenticate Webull.
+
+**Repair:** `scripts/repair_hourly_bars.py --db <path> [--apply]` runs `backend/market_data/hourly_repair.py` on each symbol with 1h bars, one transaction per symbol:
+
+- builds every whole hour our 1m bars cover;
+- keeps existing `live_from_1m` bars;
+- fills every other hour from Alpaca SIP, starting at the symbol's first stored 1h day;
+- deletes every other provider 1h bar, whether or not it was replaced;
+- rebuilds the symbol's 4h bars from the result;
+- deletes its 1h and 4h historical signals. The recorder re-records them from the repaired bars when the server restarts.
+
+A dry run does all of this and rolls it back. The data is fetched before anything is deleted, so a failed Alpaca request leaves the symbol unchanged.
+
+**Trial run on a `.backup` copy of the live database (2026-09-24 17:49):**
+
+- **Coverage:** 25 symbols, none failed. Every 1h bar is on the hour, and `misplaced_hours` is 0 for every symbol: each 1h bar with 1m data closes on its last 1m close.
+- **1h rows, 38,367 → 69,553:** 4,378 built from 1m and 64,165 from Alpaca SIP. The count grows because SIP has every hour from 04:00 to 19:00 (16 a day), the same span the 1m-built bars have had since 2026-09-17. The old history had 7–9 hours a day.
+- **Dropped:** 34 shifted hours had no SIP bar and were removed: 33 for CTNT and 1 for CYN, both thinly traded.
+- **4h and signals:** the 25 symbols' 4h rows were rebuilt, 11,388 → 16,957. 46,576 1h and 4h signals were deleted. 1,578 of them carried a recorded market regime; the regime is recorded only when a bar is fresh, so re-recorded rows will show "not recorded".
+- **Spot check, SPY 2026-01-08:** the old "09:00" Webull bar opened at 688.76, the 09:30 price. The new 09:00 bar opens at 689.07 and is tagged "mixed"; the 10:00 bar opens at 688.28.
+
+**Tests:**
+
+| File | What it covers |
+|---|---|
+| `backend/tests/market_data/test_hourly_bars.py` (new, 9 tests) | A 1h bar's close is the close of its hour's last 1m bar. Also sessions, the 4h buckets, and closed-hour filtering. |
+| `backend/tests/market_data/test_hourly_repair.py` (new, 6 tests) | The rebuilt series, 4h, signal deletion, rollback, a failed fetch, a symbol with no 1h bars. |
+| `test_bar_repository.py` | 3 precedence tests. |
+| `test_alpaca_provider.py` | 4 tests: SIP feed, refused-SIP fallback, no retry on other errors, `end` cap. |
+| `test_bar_normalization.py`, `test_ingestion_service.py` | Updated to skipping instead of flooring. A provider bar no longer replaces a 1m-built hour. |
+
+**Live repair (2026-09-24 17:53–17:56):**
+
+1. **Backup:** the live database went to `data/marketlens_pre_md01_20260924.db` (`.backup`, integrity check ok).
+2. **Repair:** `scripts/repair_hourly_bars.py --apply` gave the same result as the trial:
+   - 25 symbols, none failed;
+   - 1h rows 38,367 → 69,553, none off the hour;
+   - 34 hours dropped;
+   - 46,576 1h/4h signals deleted.
+3. **Misplaced hours:** 0 for 24 symbols. The one QQQ hour flagged was 17:00, still in progress: a 1m bar landed after the repair built it, and the live builder refreshes that hour every 2 minutes.
+4. **Restart:** the stack restarted at 17:57. Within minutes the recorder had re-recorded 63,706 1h and 16,190 4h signals, with outcomes for 62,928 and 15,968.
+   - Every closed 1h bar of the watched symbols has a signal.
+   - NOK and XLK have none: they are in no watchlist, so the recorder skips them (MD-04).
 
 ---
 
@@ -75,7 +119,7 @@ The code already knows this. A 2026-09-09 note in `_resample_1h_from_1m_and_upse
 
 ### MD-02 — Webull credentials are written to the log files in plain text
 
-**Status:** ⚠️ PARTIAL (2026-09-24, batch 1a). New records are redacted, and the log files written before the fix are deleted. Token rotation and a worker restart remain; see Remaining.
+**Status:** ⚠️ PARTIAL (2026-09-24, batch 1a). Records are redacted, confirmed on live Webull errors, and the log files written before the fix are deleted. Only token rotation remains; see Remaining.
 **Where:** the Webull SDK logger `webull.core.client`. The patches in `backend/market_data/providers/webull_provider.py:100`–`:152` only lower log levels and redirect files.
 
 When a Webull request fails, the SDK logs an ERROR containing the full request, headers included. These include `x-app-key`, `x-access-token`, and `x-signature`. The existing patches lower the SDK's DEBUG noise but still pass ERROR records through unchanged.
@@ -113,8 +157,8 @@ With the factory not installed, 4 of them fail. The full backend suite passes: 3
 **Remaining:**
 
 - **Token rotation:** rotate the Webull token. The deleted logs held it, and during this review two access-token values from them were printed into the review session's output by a check that should have hidden them.
-- **Worker restart:** the RQ workers run `SimpleWorker`, which does not fork, so they still run the code they loaded at 00:31 on 2026-09-24, before the fix. They have not logged a credential since 2026-09-19, but they are not redacted until restarted.
-- **Live confirmation:** no Webull request had failed since the fix went live, so the redaction has not yet been seen on a real record. It has been exercised only by the tests.
+- ~~**Worker restart:**~~ done 2026-09-24 17:35 with `scripts/restart_dev.sh`, after commit `63a11a8`. The RQ workers run `SimpleWorker`, which does not fork, so until then they ran the code loaded at 00:31, before the fix. After the restart, no errors and no credential values in `logs/`.
+- ~~**Live confirmation:**~~ done 2026-09-24. The dev-server reloads during MD-01 drew Webull 429s on `/openapi/config`, and the SDK logged them in full: 230 `ServerException` records across `backend.log`, `marketlens.log`, and the SDK's own `webull_trade_sdk.log`. The logs hold 673 redacted credential values and none in the clear.
 
 ### MD-03 — One series mixes providers whose volume differs by up to 2,800 times
 
@@ -255,6 +299,16 @@ The comment says the 1d table mixes midnight bars with 13:30 intraday snapshots 
 
 ## Verification
 
+### Batch 1b (2026-09-24, MD-01)
+
+| Suite | Result |
+|---|---|
+| `backend/tests/market_data` and `backend/tests/repositories` | 668 passed |
+| New: `test_hourly_bars.py`, `test_hourly_repair.py` | 15 passed |
+| `ruff check` on the changed files; `ruff format` on new files | clean |
+| Repair trial on a `.backup` copy | 25 symbols, 0 failures, 0 misplaced hours, 0 1h rows off the hour |
+| Live repair and restart | as the trial; 63,706 1h and 16,190 4h signals re-recorded |
+
 ### Batch 1a (2026-09-24)
 
 | Suite | Result |
@@ -283,15 +337,17 @@ The fresh schema for MD-08 was built under `.pytest_tmp/` and deleted afterwards
 ## Fix log
 
 - **Review:** commit `e4c1d69`, `docs(v5): review market data ingestion and track findings`.
-- **Batch 1a (MD-02):** in the working tree, not yet committed.
+- **Batch 1a (MD-02):** `63a11a8`.
+- **Batch 1b (MD-01):** this commit.
 
 | Date | ID | Status | Commit | Files | Tests | Notes |
 |---|---|---|---|---|---|---|
 | 2026-09-24 | MD-01 to MD-09 | ❌ NOT STARTED | `e4c1d69` | `docs/Version_5/v5_market_data_bug_fixes.md` | 10 probes | Review logged nine findings. |
-| 2026-09-24 | MD-02 | ⚠️ PARTIAL | batch 1a | `backend/observability/redaction.py`, `webull_provider.py`, `structured_logging.py`, `test_secret_redaction.py` | 8 tests | New records redacted; 114 old log files holding credentials deleted or emptied. Token rotation and worker restart remain. |
+| 2026-09-24 | MD-01 | ✅ COMPLETE | batch 1b | `hourly_bars.py`, `hourly_repair.py`, `scripts/repair_hourly_bars.py`, `ingestion_service.py`, `backfill_service.py`, `bar_repository.py`, `alpaca_provider.py`, `settings.py`, `.env.example` | 24 new, 1 rewritten | 1h on the clock hour; Alpaca SIP; live 1h/4h history repaired and signals re-recorded. |
+| 2026-09-24 | MD-02 | ⚠️ PARTIAL | `63a11a8` | `backend/observability/redaction.py`, `webull_provider.py`, `structured_logging.py`, `test_secret_redaction.py` | 8 tests | New records redacted; 114 old log files holding credentials deleted or emptied; workers restarted; redaction confirmed on 230 live Webull errors. Token rotation remains. |
 
 ---
 
 ## Reference
 
-Ingestion writes 1m bars from the live provider, fills gaps from fallback providers, and resamples 2m to 30m from 1m. 1h is written from providers and rebuilt from 1m for the current day; 4h is resampled from 1h; 1d comes from providers and 1wk from 1d. Every write goes through `upsert_bars`, keyed on `(symbol, timeframe, timestamp)`, so the last writer wins, and each bar records the `provider` that wrote it. Retention prunes each timeframe on its own window. Historical Signals, the trend engines, charts, Chat, and AI Analysis all read these stored bars.
+Ingestion writes 1m bars from the live provider, fills gaps from fallback providers, and resamples 2m to 30m from 1m. 1h is built from 1m where 1m exists and otherwise comes from Alpaca SIP (since MD-01); a provider 1h bar never replaces a 1m-built one; 4h is resampled from 1h; 1d comes from providers and 1wk from 1d. Every write goes through `upsert_bars`, keyed on `(symbol, timeframe, timestamp)`, so the last writer wins, and each bar records the `provider` that wrote it. Retention prunes each timeframe on its own window. Historical Signals, the trend engines, charts, Chat, and AI Analysis all read these stored bars.

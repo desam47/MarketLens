@@ -31,6 +31,7 @@ from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from alpaca.common.exceptions import APIError
 from alpaca.data.enums import DataFeed
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.live import StockDataStream
@@ -360,6 +361,8 @@ class AlpacaProvider(BaseMarketDataProvider):
         self._paper = self._cfg.paper
         self._data_tier = self._cfg.data_tier
         self._timeout = self._cfg.request_timeout
+        # Set once Alpaca refuses the historical feed; see ``get_bars_between``.
+        self._sip_refused = False
 
         # SDK clients (lazy so unit tests can mock them).
         self._data_client: StockHistoricalDataClient | None = None
@@ -563,40 +566,34 @@ class AlpacaProvider(BaseMarketDataProvider):
         range_: str = "3mo",
         include_extended_hours: bool = False,
     ) -> list[Bar]:
-        """Fetch a series of OHLCV bars via the SDK.
+        """Fetch a series of OHLCV bars via the SDK, ending 15 minutes ago.
 
         ``include_extended_hours`` is accepted for interface compatibility
-        with WebullProvider but currently ignored.
+        with WebullProvider but currently ignored. See ``get_bars_between``
+        for the feed and the 15-minute rule.
+        """
+        end_ts = datetime.now(UTC) - timedelta(minutes=15)
+        start_ts = end_ts - timedelta(seconds=_RANGE_SECONDS.get(range_, 7776000))
+        return self.get_bars_between(symbol, timeframe, start_ts, end_ts)
 
-        v3.6.x fix: pass ``feed=DataFeed.IEX`` (free-tier requirement) and
-        ``end=now-15min`` (free-tier recent-data rule). The SDK auto-paginates
-        up to 10,000 bars per page, so a 30-day 1m request returns the full
-        set in one call.
+    def get_bars_between(
+        self, symbol: str, timeframe: str, start: datetime, end: datetime
+    ) -> list[Bar]:
+        """Bars for ``symbol`` from ``start`` to ``end`` (aware datetimes).
 
-        Without ``feed=IEX`` the SIP-default request returns 403 on the free
-        tier. Without ``end``, the SDK returns the OLDEST 10k bars from
-        ``start`` forward (not what callers expect for a "30d" range).
+        Requests the consolidated SIP feed (``ALPACA_HISTORICAL_FEED``). The
+        free plan serves it for data older than 15 minutes, and its volume is
+        the whole market's; IEX, the free live feed, carries a few percent of
+        it (MD-03). ``end`` is capped at 15 minutes ago for that rule. If the
+        account is refused SIP, this falls back to ``ALPACA_DATA_TIER`` for the
+        rest of the process.
+
+        The SDK pages through the whole window itself; without an ``end`` it
+        would return the oldest 10k bars from ``start`` instead.
         """
         try:
-            tf = _resolve_tf(timeframe)
-            duration = _RANGE_SECONDS.get(range_, 7776000)
-            end_ts = datetime.now(UTC) - timedelta(minutes=15)
-            start_ts = end_ts - timedelta(seconds=duration)
-
-            req = StockBarsRequest(
-                symbol_or_symbols=symbol.upper(),
-                timeframe=tf,
-                start=start_ts,
-                end=end_ts,
-                feed=_resolve_feed(self._data_tier),
-                # NOTE: no ``limit=`` here. The SDK auto-paginates through all
-                # pages, so omitting ``limit`` returns the full window (up to ~50k
-                # rows). The Alpaca API enforces its own page size of 10k rows;
-                # the SDK's get_stock_bars() handles page tokens transparently.
-            )
-            client = self._get_data_client()
-            barset = client.get_stock_bars(req)
-            bars_raw = barset.data.get(symbol.upper(), [])
+            end = min(end, datetime.now(UTC) - timedelta(minutes=15))
+            bars_raw = self._fetch_bars(symbol, _resolve_tf(timeframe), start, end)
             bars: list[Bar] = [self._bar_from_sdk(symbol, item, timeframe) for item in bars_raw]
             self._reset_error_state()
             return bars
@@ -604,6 +601,42 @@ class AlpacaProvider(BaseMarketDataProvider):
         except Exception as exc:
             self._handle_error(exc, f"Failed to get historical bars for {symbol}")
             raise
+
+    def _fetch_bars(self, symbol: str, tf: TimeFrame, start: datetime, end: datetime) -> list:
+        feed = self._historical_feed()
+        client = self._get_data_client()
+        try:
+            barset = client.get_stock_bars(
+                StockBarsRequest(
+                    symbol_or_symbols=symbol.upper(), timeframe=tf, start=start, end=end, feed=feed
+                )
+            )
+        except APIError as exc:
+            live_feed = _resolve_feed(self._data_tier)
+            if feed == live_feed or exc.status_code not in (401, 403):
+                raise
+            logger.warning(
+                "Alpaca refused the %s feed for historical bars (HTTP %s); using %s from now on",
+                feed.value,
+                exc.status_code,
+                live_feed.value,
+            )
+            self._sip_refused = True
+            barset = client.get_stock_bars(
+                StockBarsRequest(
+                    symbol_or_symbols=symbol.upper(),
+                    timeframe=tf,
+                    start=start,
+                    end=end,
+                    feed=live_feed,
+                )
+            )
+        return barset.data.get(symbol.upper(), [])
+
+    def _historical_feed(self) -> DataFeed:
+        if self._sip_refused:
+            return _resolve_feed(self._data_tier)
+        return _resolve_feed(self._cfg.historical_feed)
 
     # ---------------------------------------------------------------- batch
 

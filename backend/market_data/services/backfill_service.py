@@ -14,7 +14,7 @@ then resampling:
     from it — resampling ungapped 1m data is the whole point of checking.
 
   **Tier 2 — 1h bars (last BACKFILL_1H_DAYS, default 365 days)**
-    Alpaca primary; yfinance/webull fallback from BACKFILL_1H_* in .env.
+    Alpaca (SIP) from BACKFILL_1H_* in .env; only bars that start on the hour (MD-01).
     Same gap-check-and-fill pass before 4h is resampled from it.
 
   **Tier 3 — 1d bars (last BACKFILL_1D_DAYS, default 1095 days)**
@@ -284,16 +284,28 @@ async def _fetch_tier1_1m_bars(
 # ---------------------------------------------------------------------------
 
 
+def _recent_closed_hours(bars: list[Bar], days: int) -> list[Bar]:
+    """1h bars from the last ``days`` whose hour had closed 15 minutes ago."""
+    from backend.market_data.hourly_bars import closed_provider_hours
+    from backend.utils.timezone import NY as _NY
+
+    now_ny = datetime.now(_NY).replace(tzinfo=None)
+    since = now_ny - timedelta(days=days)
+    closed = closed_provider_hours(bars, now_ny - timedelta(minutes=15))
+    return [b for b in closed if b.timestamp >= since]
+
+
 async def _fetch_tier2_1h_bars(symbol: str, days: int) -> list[Bar]:
     """Fetch 1h bars — primary + gap-fill (env-driven).
 
-    Webull's M60 endpoint returns 1h bars at clock-hour :00 offsets (9:00,
-    10:00…) but caps at 1,200 bars and omits the 16:00 close bar. Alpaca
-    and yfinance fill those gaps without pulling 5 years of overlapping history.
+    Only bars that start on the hour are kept (``_normalize_1h_bar``, MD-01):
+    Webull and Yahoo anchor hourly bars on the half hour, so the chain is
+    Alpaca alone by default, whose SIP hourly bars start on the hour. Bars are
+    limited to the last ``days`` and to hours that had closed 15 minutes ago
+    (Alpaca's free-plan delay).
 
     Logic:
-      1. Fetch primary provider (BACKFILL_1H_PRIMARY) — Webull by default.
-         This is the authoritative source covering the most recent ~1,200 bars.
+      1. Fetch primary provider (BACKFILL_1H_PRIMARY) — Alpaca by default.
       2. Build the set of timestamps returned by primary.
       3. For each gap-fill provider (BACKFILL_1H_FALLBACK), fetch bars for
          the same range but SKIP any bar whose (symbol, timeframe, timestamp)
@@ -332,7 +344,7 @@ async def _fetch_tier2_1h_bars(symbol: str, days: int) -> list[Bar]:
                 for n in (_normalize_1h_bar(b, primary_provider_name) for b in bars)
                 if n is not None
             ]
-            primary_bars.extend(normalized)
+            primary_bars.extend(_recent_closed_hours(normalized, days))
             logger.debug(
                 f"tier2 1h: {primary_provider_name} (primary, {range_str}) "
                 f"returned {len(normalized)} bars for {symbol}"
@@ -813,18 +825,10 @@ async def backfill_symbol_history(symbol: str, days: int | None = None) -> dict:
             except Exception as e:
                 logger.warning(f"backfill {symbol}: 1h gap-check failed: {e}")
 
-        # Correct 1h using our own 1m data wherever 1m coverage exists
-        # (RETENTION_TF_1M_DAYS). Found live 2026-09-09: Webull's 1h
-        # endpoint (the primary source above) returns bars anchored at
-        # :30, not :00 — _normalize_1h_bar floors those to the preceding
-        # :00, silently mislabeling which hour a bar's high/low actually
-        # belong to (a bar spanning [10:30,11:30) got filed under "10:00"
-        # even though its extremes could easily have occurred after
-        # 11:00). No floor/ceiling choice fixes that — the bar genuinely
-        # straddles two canonical hours. Our own 1m data has none of that
-        # ambiguity, so this overwrites tier2's bars with the verified
-        # aggregate wherever 1m is available. See
-        # ingestion_service._resample_1h_from_1m_and_upsert's docstring.
+        # Build 1h from our own 1m data wherever 1m coverage exists
+        # (RETENTION_TF_1M_DAYS). It is exact for each clock hour and
+        # replaces tier 2's provider bars for those hours; see
+        # ingestion_service._resample_1h_from_1m_and_upsert and MD-01.
         try:
             from backend.config.settings import settings as _settings_1h
             from backend.market_data.services.ingestion_service import ingestion_service

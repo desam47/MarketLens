@@ -798,11 +798,12 @@ class TestResample1hLive(unittest.IsolatedAsyncioTestCase):
         written = await service._resample_1h_from_1m_and_upsert()
         self.assertEqual(written, 0)
 
-    async def test_authoritative_bar_overwrites_the_live_one(self):
-        """A real, provider-sourced bar written to the same key (as
-        _1h_write_loop/_gapfill_1h_loop would once the hour actually
-        closes) must win — upsert's ON CONFLICT DO UPDATE, no special
-        casing needed."""
+    async def test_provider_bar_does_not_replace_the_hour_built_from_1m(self):
+        """MD-01: a provider 1h bar written to the same key (as
+        _1h_write_loop/_gapfill_1h_loop do) must not replace the bar built
+        from 1m, which is exact for its clock hour. Webull's and Yahoo's
+        hourly bars start on the half hour, so replacing it stored them
+        30 minutes early."""
         from datetime import timedelta
 
         from backend.market_data.services.ingestion_service import MarketDataIngestionService
@@ -841,9 +842,8 @@ class TestResample1hLive(unittest.IsolatedAsyncioTestCase):
             )
             .first()
         )
-        self.assertEqual(row.provider, "webull")
-        self.assertEqual(row.data_status, "HISTORICAL")
-        self.assertEqual(row.close, 108.0)
+        self.assertEqual(row.provider, "live_from_1m")
+        self.assertEqual(row.close, 105.0)
 
     async def test_corrects_an_already_closed_past_hour(self):
         """Regression test for the live bug (2026-09-09): a bad

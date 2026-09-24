@@ -183,12 +183,13 @@ class BackfillSettings(BaseSettings):
         validation_alias=AliasChoices("BACKFILL_1M_FALLBACK"),
     )
 
-    # 1h: alpaca primary; webull first, yfinance second.
+    # 1h: alpaca only. Webull and Yahoo hourly bars start on the half hour and are skipped
+    # (MD-01, ingestion_service._normalize_1h_bar), so they cannot serve as fallbacks.
     tf_1h_primary: str = Field(
         default="alpaca", validation_alias=AliasChoices("BACKFILL_1H_PRIMARY")
     )
     tf_1h_fallback: str = Field(
-        default="webull,yahoo_finance",
+        default="",
         validation_alias=AliasChoices("BACKFILL_1H_FALLBACK"),
     )
 
@@ -335,6 +336,9 @@ class AlpacaSettings(BaseSettings):
     # Data tier: "iex" (free) or "sip" (paid). Determines symbol availability
     # and rate limits. Auto-detected from credentials when possible.
     data_tier: str = Field(default="iex")
+    # Feed for historical REST bars. The free plan serves consolidated SIP data older than
+    # 15 minutes; IEX alone carries a few percent of the volume (MD-03).
+    historical_feed: str = Field(default="sip")
     request_timeout: float = Field(default=15.0)
 
 
