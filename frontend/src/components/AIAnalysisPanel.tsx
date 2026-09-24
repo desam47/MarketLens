@@ -80,6 +80,8 @@ export function AIAnalysisPanel({ symbol, timeframe = DEFAULT_TIMEFRAME }: AIAna
     const [backgroundStatus, setBackgroundStatus] = useState<string | null>(null);
     const [backgroundError, setBackgroundError] = useState<string | null>(null);
     const pollRef = useRef<number | null>(null);
+    const analysisRequestIdRef = useRef(0);
+    const analysisAbortRef = useRef<AbortController | null>(null);
 
     // Fetch AI config on mount so the user knows whether the feature is available.
     useEffect(() => {
@@ -90,10 +92,16 @@ export function AIAnalysisPanel({ symbol, timeframe = DEFAULT_TIMEFRAME }: AIAna
         return () => { cancelled = true; };
     }, []);
 
-    const runAnalysis = useCallback(async () => {
+    const runAnalysis = useCallback(async (forceRefresh = false) => {
         if (!symbol) return;
+        const requestId = ++analysisRequestIdRef.current;
+        analysisAbortRef.current?.abort();
+        const controller = new AbortController();
+        analysisAbortRef.current = controller;
         setLoading(true);
         setError(null);
+        setAnalysis(null);
+        setHasRun(false);
         // Clear any stale background job state
         if (pollRef.current !== null) {
             clearInterval(pollRef.current);
@@ -103,14 +111,22 @@ export function AIAnalysisPanel({ symbol, timeframe = DEFAULT_TIMEFRAME }: AIAna
         setBackgroundStatus(null);
         setBackgroundError(null);
         try {
-            const result = await api.analyzeSymbol(symbol, timeframe);
+            const result = await api.analyzeSymbol(symbol, timeframe, {
+                force_refresh: forceRefresh,
+                signal: controller.signal,
+            });
+            if (requestId !== analysisRequestIdRef.current) return;
             setAnalysis(result);
             setHasRun(true);
         } catch (e: any) {
+            if (requestId !== analysisRequestIdRef.current || e?.name === 'AbortError') return;
             setError(e.message || 'Analysis failed');
             setHasRun(true);
         } finally {
-            setLoading(false);
+            if (requestId === analysisRequestIdRef.current) {
+                setLoading(false);
+                analysisAbortRef.current = null;
+            }
         }
     }, [symbol, timeframe]);
 
@@ -161,11 +177,15 @@ export function AIAnalysisPanel({ symbol, timeframe = DEFAULT_TIMEFRAME }: AIAna
     const el = document.getElementById('ai-analysis-panel');
     if (el) {
       (el as any).runBackground = runBackground;
+      (el as any).refreshAnalysis = () => runAnalysis(true);
     }
     return () => {
-      if (el) delete (el as any).runBackground;
+      if (el) {
+        delete (el as any).runBackground;
+        delete (el as any).refreshAnalysis;
+      }
     };
-  }, [runBackground]);
+  }, [runBackground, runAnalysis]);
 
   // Auto-run on mount when AI is enabled and the symbol changes.
   useEffect(() => {
@@ -199,6 +219,9 @@ export function AIAnalysisPanel({ symbol, timeframe = DEFAULT_TIMEFRAME }: AIAna
   // Cleanup polling on unmount
   useEffect(() => {
     return () => {
+      analysisRequestIdRef.current += 1;
+      analysisAbortRef.current?.abort();
+      analysisAbortRef.current = null;
       if (pollRef.current !== null) {
         clearInterval(pollRef.current);
         pollRef.current = null;
@@ -266,11 +289,11 @@ export function AIAnalysisPanel({ symbol, timeframe = DEFAULT_TIMEFRAME }: AIAna
         ) : (
           <button
             className={`btn btn-small ${loading ? 'btn-loading' : ''}`}
-            onClick={runAnalysis}
+            onClick={() => runAnalysis(true)}
             disabled={loading || aiDisabled}
-            title={aiDisabled ? 'AI is disabled' : 'Re-run AI analysis'}
+            title={aiDisabled ? 'AI is disabled' : 'Refresh market data and rerun AI analysis'}
           >
-            {loading ? '⟳ Analyzing…' : hasRun ? '↻ Re-run' : '✨ Analyze'}
+            {loading ? '⟳ Analyzing…' : hasRun ? '↻ Refresh & rerun' : '✨ Analyze'}
           </button>
         )}
       </div>
@@ -308,7 +331,7 @@ export function AIAnalysisPanel({ symbol, timeframe = DEFAULT_TIMEFRAME }: AIAna
       {error && (
         <div className="ai-error">
           <p>⚠️ {error}</p>
-          <button className="btn btn-small data-state-retry" onClick={runAnalysis}>Retry</button>
+          <button className="btn btn-small data-state-retry" onClick={() => runAnalysis(true)}>Retry</button>
         </div>
       )}
 

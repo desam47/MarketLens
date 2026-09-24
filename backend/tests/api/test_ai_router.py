@@ -18,6 +18,19 @@ client = TestClient(app)
 
 class TestAnalyzeEndpoint(unittest.TestCase):
     @patch("backend.api.ai.router.analyze_symbol")
+    def test_force_refresh_is_forwarded(self, mock_analyze):
+        from backend.ai.prompt import AnalysisResponse
+
+        mock_analyze.return_value = AnalysisResponse(
+            summary="AAPL looks current and bullish.", trend="bullish", confidence=0.7
+        )
+
+        resp = client.post("/api/ai/analyze?symbol=AAPL&force_refresh=true")
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(mock_analyze.call_args.kwargs["force_refresh"])
+
+    @patch("backend.api.ai.router.analyze_symbol")
     @patch("backend.api.ai.router.ai_manager")
     def test_returns_ai_analysis(self, mock_ai_mgr, mock_analyze):
         from backend.ai.prompt import AnalysisResponse

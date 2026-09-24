@@ -760,9 +760,11 @@ class TestAnalysisCache(unittest.TestCase):
         self.assertIs(r1.trend, r2.trend)
         self.assertEqual(r1.cache_status, "fresh")
         self.assertEqual(r2.cache_status, "cached")
+        r3 = asyncio.run(analyze_symbol("AAPL", "1d", force_refresh=True))
+        self.assertEqual(r3.cache_status, "fresh")
         # Second call should NOT re-invoke the AI or build_context
-        self.assertEqual(mock_ai.complete.call_count, 1)
-        self.assertEqual(mock_ctx.call_count, 1)
+        self.assertEqual(mock_ai.complete.call_count, 2)
+        self.assertEqual(mock_ctx.call_count, 2)
 
     @patch("backend.ai.analyze.ai_manager")
     @patch("backend.ai.analyze.build_context")

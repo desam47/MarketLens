@@ -1556,3 +1556,19 @@ until the line is removed. The end-to-end evaluation pins these defaults
   serialization, tracker exclusion, and panel rendering. The focused backend
   suite passed with 136 tests and 17 subtests, the panel suite passed with 5
   tests, the production frontend build compiled, and Ruff/diff checks passed.
+
+## AI Analysis refresh and request ordering (2026-09-24)
+
+- **Fresh rerun.** The blocking and streaming AI Analysis endpoints accept
+  `force_refresh`, which bypasses the short-lived analysis cache and writes the
+  new successful result back to that cache.
+- **Request safety.** The panel aborts superseded requests, clears the previous
+  result while a new request is loading, and uses request ordering guards so a
+  late response cannot overwrite a newer symbol or timeframe result.
+- **Refresh controls.** The panel's refresh and retry actions request fresh
+  data. AI Hub's refresh action now triggers a fresh rerun in the mounted panel
+  without remounting it.
+- **Regression coverage.** Backend cache/API tests, frontend API/panel tests,
+  the production build, Ruff, and diff checks passed. The focused backend suite
+  passed with 137 tests and 17 subtests; the frontend targeted suites passed
+  with 14 tests.

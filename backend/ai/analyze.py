@@ -202,6 +202,7 @@ async def analyze_symbol(
     advisory: bool = True,
     portfolio_symbols: list[str] | None = None,
     model: str | None = None,
+    force_refresh: bool = False,
 ) -> AnalysisResponse | UncertaintyResponse:
     """Run a full AI analysis for ``symbol``.
 
@@ -264,12 +265,13 @@ async def analyze_symbol(
             max_tokens,
             temperature,
         )
-        now = time.monotonic()
-        with _cache_lock:
-            hit = _analysis_cache.get(cache_key)
-            if hit is not None and now - hit[0] < _ANALYSIS_TTL:
-                _analysis_cache.move_to_end(cache_key)
-                return hit[1].model_copy(update={"cache_status": "cached"})
+        if not force_refresh:
+            now = time.monotonic()
+            with _cache_lock:
+                hit = _analysis_cache.get(cache_key)
+                if hit is not None and now - hit[0] < _ANALYSIS_TTL:
+                    _analysis_cache.move_to_end(cache_key)
+                    return hit[1].model_copy(update={"cache_status": "cached"})
     else:
         cache_key = None
 
@@ -509,6 +511,7 @@ async def analyze_symbol_stream(
     model: str | None = None,
     max_tokens: int | None = None,
     temperature: float | None = None,
+    force_refresh: bool = False,
 ) -> AsyncIterator[tuple[str, Any]]:
     """Stream an AI analysis as ``(kind, payload)`` pairs for SSE.
 
@@ -537,24 +540,27 @@ async def analyze_symbol_stream(
             max_tokens,
             temperature,
         )
-        now = time.monotonic()
-        with _cache_lock:
-            hit = _analysis_cache.get(cache_key)
-            if hit is not None and now - hit[0] < _ANALYSIS_TTL:
-                _analysis_cache.move_to_end(cache_key)
-                cached = hit[1].model_copy(update={"cache_status": "cached"})
-                yield (
-                    "meta",
-                    {
-                        "symbol": cached.symbol,
-                        "timeframe": cached.timeframe,
-                        "track_record": getattr(cached, "track_record", {}) or {},
-                        "model": getattr(cached, "model", None),
-                    },
-                )
-                yield ("delta", cached.summary or "")
-                yield ("final", _result_to_dict(cached))
-                return
+        cached = None
+        if not force_refresh:
+            now = time.monotonic()
+            with _cache_lock:
+                hit = _analysis_cache.get(cache_key)
+                if hit is not None and now - hit[0] < _ANALYSIS_TTL:
+                    _analysis_cache.move_to_end(cache_key)
+                    cached = hit[1].model_copy(update={"cache_status": "cached"})
+        if cached is not None:
+            yield (
+                "meta",
+                {
+                    "symbol": cached.symbol,
+                    "timeframe": cached.timeframe,
+                    "track_record": getattr(cached, "track_record", {}) or {},
+                    "model": getattr(cached, "model", None),
+                },
+            )
+            yield ("delta", cached.summary or "")
+            yield ("final", _result_to_dict(cached))
+            return
     else:
         cache_key = None
 

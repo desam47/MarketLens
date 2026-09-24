@@ -99,11 +99,16 @@ export function AIHubPage({ symbol, onSymbolChange, onNavigate }: AIHubPageProps
     return () => { cancelled = true; };
   }, [pendingAlert]);
 
-  // The header ↻ and the SymbolInput submit re-key AITemplatesPanel only.
-  // Re-mounting AIAnalysisPanel would orphan an in-flight billable
-  // background job and re-fire analyzeSymbol. ChatPanel isn't tied to
-  // this ticker at all (universal chat), so the picker never touches it.
-  const handleRefresh = useCallback(() => setTemplatesReloadKey(k => k + 1), []);
+  // Refresh templates and ask the mounted Analysis panel to bypass its
+  // short-lived cache. The panel owns cancellation/request ordering, so this
+  // does not remount it or orphan an in-flight request.
+  const handleRefresh = useCallback(() => {
+    setTemplatesReloadKey(k => k + 1);
+    const panel = document.getElementById('ai-analysis-panel') as (HTMLElement & {
+      refreshAnalysis?: () => void;
+    }) | null;
+    panel?.refreshAnalysis?.();
+  }, []);
 
   // Chat is universal, but when a turn resolves to a ticker we point the
   // Hub's own symbol-scoped sections (Analysis, Templates) at it — same

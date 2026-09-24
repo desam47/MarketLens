@@ -242,6 +242,10 @@ async def analyze(
             "fallback chain."
         ),
     ),
+    force_refresh: bool = Query(
+        default=False,
+        description="Bypass the short-lived analysis cache and fetch fresh context.",
+    ),
     db: Session = Depends(get_db),
     _rl: None = Depends(check_rate_limit(_ai_limiter)),
 ) -> AnalyzeResponse:
@@ -286,6 +290,7 @@ async def analyze(
         system_prompt_override=rendered_system,
         portfolio_symbols=_parse_portfolio_symbols(portfolio_symbols),
         model=model,
+        force_refresh=force_refresh,
     )
 
     return AnalyzeResponse(
@@ -334,6 +339,7 @@ async def analyze_stream(
     ),
     portfolio_symbols: str | None = Query(default=None),
     model: str | None = Query(default=None),
+    force_refresh: bool = Query(default=False),
     db: Session = Depends(get_db),
     _rl: None = Depends(check_rate_limit(_ai_limiter)),
 ) -> StreamingResponse:
@@ -376,6 +382,7 @@ async def analyze_stream(
                 system_prompt_override=rendered_system,
                 portfolio_symbols=_parse_portfolio_symbols(portfolio_symbols),
                 model=model,
+                force_refresh=force_refresh,
             ):
                 if kind == "delta":
                     yield _sse("delta", {"text": payload})

@@ -118,4 +118,23 @@ describe('ApiService request timeout/cancellation', () => {
     jest.advanceTimersByTime(135000); // total 150s — AI_TIMEOUT_MS
     await expect(promise).rejects.toThrow(/timed out/i);
   });
+
+  it('sends force_refresh and composes the caller abort signal for AI Analysis', async () => {
+    const mock = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ symbol: 'AAPL' }),
+    });
+    global.fetch = mock as any;
+    const controller = new AbortController();
+
+    await expect(api.analyzeSymbol('AAPL', '1d', {
+      force_refresh: true,
+      signal: controller.signal,
+    })).resolves.toEqual({ symbol: 'AAPL' });
+
+    const [url, init] = mock.mock.calls[0];
+    expect(url).toContain('/ai/analyze?symbol=AAPL&timeframe=1d&force_refresh=true');
+    expect(init.method).toBe('POST');
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+  });
 });

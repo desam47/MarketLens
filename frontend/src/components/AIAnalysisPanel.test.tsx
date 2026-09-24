@@ -109,7 +109,11 @@ describe('AIAnalysisPanel', () => {
             render(<AIAnalysisPanel symbol="AAPL" />);
         });
         await waitFor(() => {
-            expect(mockApi.analyzeSymbol).toHaveBeenCalledWith('AAPL', '1d');
+            expect(mockApi.analyzeSymbol).toHaveBeenCalledWith(
+                'AAPL',
+                '1d',
+                expect.objectContaining({ force_refresh: false, signal: expect.anything() }),
+            );
         });
     });
 
@@ -175,5 +179,43 @@ describe('AIAnalysisPanel', () => {
         });
         expect(await screen.findByText('No validated trade setup.')).toBeInTheDocument();
         expect(screen.getByText(/Market data is stale/)).toBeInTheDocument();
+    });
+
+    it('ignores an older response after the symbol changes', async () => {
+        setConfig(true);
+        let resolveAAPL!: (result: AIAnalysisResult) => void;
+        let resolveMSFT!: (result: AIAnalysisResult) => void;
+        mockApi.analyzeSymbol
+            .mockImplementationOnce(() => new Promise(resolve => { resolveAAPL = resolve; }))
+            .mockImplementationOnce(() => new Promise(resolve => { resolveMSFT = resolve; }));
+        const { rerender } = render(<AIAnalysisPanel symbol="AAPL" />);
+        await waitFor(() => expect(mockApi.analyzeSymbol).toHaveBeenCalledTimes(1));
+
+        rerender(<AIAnalysisPanel symbol="MSFT" />);
+        await waitFor(() => expect(mockApi.analyzeSymbol).toHaveBeenCalledTimes(2));
+
+        await act(async () => {
+            resolveAAPL(makeResult({ summary: 'AAPL stale response.' }));
+            resolveMSFT(makeResult({ symbol: 'MSFT', summary: 'MSFT current response.' }));
+        });
+
+        expect(document.querySelector('.ai-summary')).toHaveTextContent('MSFT current response.');
+        expect(screen.queryByText(/AAPL stale response/)).not.toBeInTheDocument();
+    });
+
+    it('refresh button bypasses the cached result', async () => {
+        setConfig(true);
+        mockApi.analyzeSymbol.mockResolvedValue(makeResult());
+        render(<AIAnalysisPanel symbol="AAPL" />);
+        await waitFor(() => expect(mockApi.analyzeSymbol).toHaveBeenCalledTimes(1));
+        await screen.findByText('Market-data evidence');
+
+        await act(async () => {
+            screen.getByRole('button', { name: /refresh & rerun/i }).click();
+        });
+        await waitFor(() => expect(mockApi.analyzeSymbol).toHaveBeenCalledTimes(2));
+        expect(mockApi.analyzeSymbol.mock.calls[1][2]).toEqual(
+            expect.objectContaining({ force_refresh: true, signal: expect.anything() }),
+        );
     });
 });

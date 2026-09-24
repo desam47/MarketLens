@@ -2322,6 +2322,9 @@ class ApiService {
             portfolio_symbols?: string;
             // O12: chain-entry name to route this call through a specific model
             model?: string;
+            // Bypass the short-lived server cache and fetch fresh context.
+            force_refresh?: boolean;
+            signal?: AbortSignal;
         },
     ): Promise<AIAnalysisResult> {
         const params = new URLSearchParams({ symbol, timeframe });
@@ -2330,11 +2333,16 @@ class ApiService {
         if (options?.template_id != null) params.set('template_id', String(options.template_id));
         if (options?.portfolio_symbols) params.set('portfolio_symbols', options.portfolio_symbols);
         if (options?.model) params.set('model', options.model);
+        if (options?.force_refresh) params.set('force_refresh', 'true');
         // The endpoint is POST-only (backend/api/ai/router.py) — this.fetch()
         // defaults to GET when no method is given, which 405s. Found live
         // 2026-09-09 clicking "Re-run" in AIAnalysisPanel with AI actually
         // enabled for the first time.
-        return this.fetch<AIAnalysisResult>(`/ai/analyze?${params}`, { method: 'POST' }, AI_TIMEOUT_MS);
+        return this.fetch<AIAnalysisResult>(
+            `/ai/analyze?${params}`,
+            { method: 'POST', signal: options?.signal },
+            AI_TIMEOUT_MS,
+        );
     }
 
   // Phase 16: AI provider config
