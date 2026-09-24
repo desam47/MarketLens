@@ -200,23 +200,49 @@ class WatchlistRepository:
         return False
 
     def symbol_exists_in_any_watchlist(self, symbol: str) -> bool:
-        """Check whether ``symbol`` appears in any active watchlist (any list).
+        """Check whether ``symbol`` appears enabled in any ACTIVE watchlist.
 
         Used by the purge path to decide whether a symbol should have its
         bars deleted when it is removed from a specific watchlist: if it
         still exists in any other watchlist, we preserve the bars.
+
+        Joins ``Watchlist.is_active`` (MD-04, 2026-09-24): a symbol whose
+        only remaining watchlist has been deactivated, not deleted, is not
+        live-tracked (``_query_active_watchlists`` filters the same way),
+        so it must not count as "still watched" here either. Before this
+        fix, deactivating a watchlist silently orphaned its symbols' data —
+        ingestion stopped, but nothing became eligible for purge.
         """
         result = (
             self.db.query(func.count(WatchlistSymbol.id))
+            .join(Watchlist, WatchlistSymbol.watchlist_id == Watchlist.id)
             .filter(
                 and_(
                     WatchlistSymbol.symbol == symbol.upper(),
                     WatchlistSymbol.is_enabled.is_(True),
+                    Watchlist.is_active.is_(True),
                 )
             )
             .scalar()
         )
         return (result or 0) > 0
+
+    def all_watchlisted_symbols(self) -> set[str]:
+        """Every symbol enabled in an active watchlist — what ingestion tracks.
+
+        Single source of truth for "is this symbol watched", shared by the
+        orphan sweep (``purge_service.find_orphaned_symbols``) so it agrees
+        with ``symbol_exists_in_any_watchlist`` and with what
+        ``MarketDataIngestionService`` actually ingests.
+        """
+        rows = (
+            self.db.query(WatchlistSymbol.symbol)
+            .join(Watchlist, WatchlistSymbol.watchlist_id == Watchlist.id)
+            .filter(WatchlistSymbol.is_enabled.is_(True), Watchlist.is_active.is_(True))
+            .distinct()
+            .all()
+        )
+        return {s.upper() for (s,) in rows}
 
     def update_symbol_in_watchlist(
         self,

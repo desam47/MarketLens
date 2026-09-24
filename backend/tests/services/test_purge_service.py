@@ -486,3 +486,131 @@ def test_purge_safe_handles_unknown_table_gracefully(monkeypatch, test_symbol):
     # Safe variant should not raise; the failed table returns 0.
     result = purge_symbol_from_database_safe(test_symbol)
     assert result["bars"] == 0
+
+
+# ---------------------------------------------------------------------------
+# find_orphaned_symbols (MD-04)
+# ---------------------------------------------------------------------------
+
+
+def _insert_signal_at(db, symbol: str, timeframe: str, ts) -> None:
+    db.add(HistoricalSignal(symbol=symbol, timeframe=timeframe, timestamp=ts))
+
+
+class TestFindOrphanedSymbols:
+    """A symbol is orphaned when it is in no active watchlist AND its newest bar or
+    signal is older than the grace period. See backend/market_data/hourly_bars.py's
+    sibling module docstring in purge_service.find_orphaned_symbols."""
+
+    def setup_method(self):
+        import uuid
+
+        from backend.models.watchlist import Watchlist, WatchlistSymbol
+
+        self.suffix = uuid.uuid4().hex[:6].upper()
+        self.watched = f"ZZWATCH{self.suffix}"
+        self.stale_unwatched = f"ZZSTALE{self.suffix}"
+        self.fresh_unwatched = f"ZZFRESH{self.suffix}"
+        self.paused_watched = f"ZZPAUSE{self.suffix}"
+        self.symbols = [
+            self.watched,
+            self.stale_unwatched,
+            self.fresh_unwatched,
+            self.paused_watched,
+        ]
+
+        self.db = SessionLocal()
+        active = Watchlist(name=f"ZZ active {self.suffix}", is_active=True)
+        paused = Watchlist(name=f"ZZ paused {self.suffix}", is_active=False)
+        self.db.add_all([active, paused])
+        self.db.flush()
+        self.watchlist_ids = [active.id, paused.id]
+        self.db.add(WatchlistSymbol(watchlist_id=active.id, symbol=self.watched))
+        self.db.add(WatchlistSymbol(watchlist_id=paused.id, symbol=self.paused_watched))
+        self.db.commit()
+
+    def teardown_method(self):
+        from backend.models.watchlist import Watchlist, WatchlistSymbol
+
+        try:
+            for sym in self.symbols:
+                purge_symbol_from_database(sym)
+            self.db.query(WatchlistSymbol).filter(
+                WatchlistSymbol.watchlist_id.in_(self.watchlist_ids)
+            ).delete(synchronize_session=False)
+            self.db.query(Watchlist).filter(Watchlist.id.in_(self.watchlist_ids)).delete(
+                synchronize_session=False
+            )
+            self.db.commit()
+        finally:
+            self.db.close()
+
+    def test_stale_unwatched_symbol_is_orphaned(self):
+        from backend.services.purge_service import find_orphaned_symbols
+
+        _insert_bar(self.db, self.stale_unwatched, offset_min=20 * 24 * 60)  # 20 days old
+        self.db.commit()
+
+        orphans = find_orphaned_symbols(self.db, grace_days=7)
+        assert self.stale_unwatched in orphans
+
+    def test_fresh_unwatched_symbol_is_protected_by_the_grace_period(self):
+        """An on-demand chart view for a symbol on no watchlist must not be purged
+        while it is still being viewed."""
+        from backend.services.purge_service import find_orphaned_symbols
+
+        _insert_bar(self.db, self.fresh_unwatched, offset_min=5)
+        self.db.commit()
+
+        orphans = find_orphaned_symbols(self.db, grace_days=7)
+        assert self.fresh_unwatched not in orphans
+
+    def test_watched_symbol_is_never_orphaned_even_if_stale(self):
+        from backend.services.purge_service import find_orphaned_symbols
+
+        _insert_bar(self.db, self.watched, offset_min=365 * 24 * 60)
+        self.db.commit()
+
+        orphans = find_orphaned_symbols(self.db, grace_days=7)
+        assert self.watched not in orphans
+
+    def test_symbol_only_in_a_deactivated_watchlist_is_orphaned_once_stale(self):
+        """MD-04: deactivating (not deleting) a watchlist stops live tracking, so its
+        symbols must become purge-eligible like any other unwatched symbol."""
+        from backend.services.purge_service import find_orphaned_symbols
+
+        _insert_bar(self.db, self.paused_watched, offset_min=20 * 24 * 60)
+        self.db.commit()
+
+        orphans = find_orphaned_symbols(self.db, grace_days=7)
+        assert self.paused_watched in orphans
+
+    def test_a_recent_signal_also_counts_as_activity(self):
+        """A symbol whose only recent record is a signal, not a bar (e.g. a 1d bar
+        pruned before the signal), still counts as recently active."""
+        from datetime import timedelta
+
+        from backend.services.purge_service import find_orphaned_symbols
+        from backend.utils.timezone import now_ny
+
+        _insert_bar(self.db, self.fresh_unwatched, offset_min=20 * 24 * 60)
+        _insert_signal_at(
+            self.db, self.fresh_unwatched, "1d", now_ny().replace(tzinfo=None) - timedelta(days=1)
+        )
+        self.db.commit()
+
+        orphans = find_orphaned_symbols(self.db, grace_days=7)
+        assert self.fresh_unwatched not in orphans
+
+    def test_sweeping_purges_the_orphans(self):
+        """The ingestion service's sweep step, end to end: found orphans are actually
+        purged from every table."""
+        from backend.market_data.services.ingestion_service import MarketDataIngestionService
+
+        _insert_bar(self.db, self.stale_unwatched, offset_min=20 * 24 * 60)
+        self.db.commit()
+
+        service = MarketDataIngestionService(symbols=[], timeframes=["1m"])
+        purged = service._sweep_orphaned_symbols()
+        assert purged >= 1
+        assert _count_for_symbol(self.db, BarModel, self.stale_unwatched) == 0

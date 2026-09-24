@@ -150,6 +150,33 @@ class TestWatchlistAPI(unittest.TestCase):
             is_active=None,
         )
 
+    def test_update_watchlist_deactivating_refreshes_ingestion(self):
+        """MD-04: deactivating a watchlist must stop live tracking of its symbols
+        immediately, the same way deleting one or removing a symbol already does —
+        without this, a symbol left only in a deactivated watchlist kept being
+        ingested, and was never eligible for the orphan-sweep purge either."""
+        self.mock_repo.update_watchlist.return_value = _mock_watchlist(id=1, is_active=False)
+
+        with patch(
+            "backend.market_data.services.ingestion_service.ingestion_service.refresh_symbols_from_watchlist"
+        ) as mock_refresh:
+            response = self.client.put("/api/watchlists/1", json={"is_active": False})
+
+        self.assertEqual(response.status_code, 200)
+        mock_refresh.assert_called_once_with()
+
+    def test_update_watchlist_renaming_does_not_refresh_ingestion(self):
+        """A rename or description edit doesn't change what's tracked."""
+        self.mock_repo.update_watchlist.return_value = _mock_watchlist(id=1, name="Renamed")
+
+        with patch(
+            "backend.market_data.services.ingestion_service.ingestion_service.refresh_symbols_from_watchlist"
+        ) as mock_refresh:
+            response = self.client.put("/api/watchlists/1", json={"name": "Renamed"})
+
+        self.assertEqual(response.status_code, 200)
+        mock_refresh.assert_not_called()
+
     def test_delete_watchlist(self):
         """Test deleting a watchlist"""
         # Setup mock

@@ -148,6 +148,11 @@ class MarketDataSettings(BaseSettings):
     finnhub_rate_limit_per_minute: int = Field(default=1200)
     webull_rate_limit_per_minute: int = Field(default=100)  # ~200/min max sustained
     alpaca_rate_limit_per_minute: int = Field(default=60)
+    # MD-04: purge bars/signals for a symbol in no active watchlist once its newest
+    # stored bar or signal is this many days old — long enough that an on-demand
+    # chart view (not watchlisted) isn't purged mid-session.
+    orphan_sweep_enabled: bool = Field(default=True)
+    orphan_grace_days: int = Field(default=7)
 
 
 class BackfillSettings(BaseSettings):

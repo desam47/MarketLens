@@ -1971,6 +1971,68 @@ class MarketDataIngestionService:
             await self._resample_1h_to_4h_and_upsert()
         return written
 
+    # ------------------------------------------------------------------
+    # Orphan sweep (MD-04)
+    #
+    # Removing a symbol from a watchlist, or deleting the watchlist,
+    # purges its data immediately (backend/api/watchlist/router.py). Two
+    # paths still leave orphans: a symbol viewed on demand (any chart or
+    # analysis call that passes a ``db`` session to
+    # MarketDataManager.get_historical_bars, or the Webull stream)
+    # persists bars for a symbol that was never on a watchlist at all; and
+    # — before the MD-04 fix to symbol_exists_in_any_watchlist — a symbol
+    # left only in a deactivated (not deleted) watchlist was never
+    # eligible for purge, even though ingestion had already stopped
+    # tracking it. This sweep catches both: once a symbol not currently
+    # watched has gone ``orphan_grace_days`` without a new bar or signal,
+    # it is purged the same way removing it from a watchlist would purge
+    # it. Found live 2026-09-24: NOK, XLK, GOOGL, RIVN, SOXL, WMT.
+    # ------------------------------------------------------------------
+
+    _ORPHAN_SWEEP_EVERY_SECONDS = 6 * 3600
+
+    async def _orphan_sweep_loop(self, initial_delay: float = 0.0):
+        """Every 6h, purge symbols in no active watchlist that have gone
+        ``settings.market_data.orphan_grace_days`` without a new bar or signal."""
+        from backend.config.settings import settings
+
+        if initial_delay > 0:
+            await asyncio.sleep(initial_delay)
+        if not settings.market_data.orphan_sweep_enabled:
+            return
+        while self.is_running:
+            try:
+                await asyncio.to_thread(self._sweep_orphaned_symbols)
+            except Exception as e:
+                logger.error(f"Error in orphan sweep loop: {e}")
+            await self._jittered_sleep(self._ORPHAN_SWEEP_EVERY_SECONDS, jitter=60.0)
+
+    def _sweep_orphaned_symbols(self) -> int:
+        from backend.config.settings import settings
+        from backend.services.purge_service import (
+            find_orphaned_symbols,
+            purge_symbol_from_database_safe,
+        )
+
+        db = SessionLocal()
+        try:
+            orphans = find_orphaned_symbols(db, settings.market_data.orphan_grace_days)
+        finally:
+            db.close()
+        if not orphans:
+            return 0
+        total = 0
+        for symbol in orphans:
+            result = purge_symbol_from_database_safe(symbol)
+            total += result["total"]
+        if total:
+            logger.info(
+                f"Orphan sweep: purged {total} rows across {len(orphans)} symbols "
+                f"in no active watchlist, idle {settings.market_data.orphan_grace_days}+ days: "
+                f"{orphans}"
+            )
+        return total
+
     async def _gapfill_1m_once(self, days: int = 1) -> int:
         """Run a single gap-fill pass for all watched symbols.
 
@@ -2200,6 +2262,7 @@ class MarketDataIngestionService:
             asyncio.create_task(self._gapfill_1h_loop(initial_delay=39.0)),
             asyncio.create_task(self._retention_prune_loop(initial_delay=42.0)),
             asyncio.create_task(self._settle_1m_loop(initial_delay=45.0)),
+            asyncio.create_task(self._orphan_sweep_loop(initial_delay=48.0)),
         ]
         try:
             await asyncio.gather(*tasks)

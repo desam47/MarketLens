@@ -206,7 +206,16 @@ def get_watchlist(watchlist_id: int, db: Session = Depends(get_db)):
 
 @router.put("/{watchlist_id}", response_model=WatchlistResponse)
 def update_watchlist(watchlist_id: int, watchlist: WatchlistUpdate, db: Session = Depends(get_db)):
-    """Update a watchlist"""
+    """Update a watchlist.
+
+    Refreshes the ingestion service's symbol list when ``is_active``
+    changes (MD-04): deactivating a watchlist must stop live tracking of
+    its symbols immediately, the same way deleting one or removing a
+    symbol already does. It does not purge their data — deactivation is
+    reversible, unlike delete — the periodic orphan sweep
+    (``purge_service.find_orphaned_symbols``) purges them only once they
+    have gone untouched past its grace period.
+    """
     repo = WatchlistRepository(db)
     updated_watchlist = repo.update_watchlist(
         watchlist_id=watchlist_id,
@@ -216,6 +225,13 @@ def update_watchlist(watchlist_id: int, watchlist: WatchlistUpdate, db: Session 
     )
     if updated_watchlist is None:
         raise HTTPException(status_code=404, detail="Watchlist not found")
+    if watchlist.is_active is not None:
+        try:
+            from backend.market_data.services.ingestion_service import ingestion_service
+
+            ingestion_service.refresh_symbols_from_watchlist()
+        except Exception as e:
+            logger.debug(f"ingestion refresh after watchlist update failed: {e}")
     return updated_watchlist
 
 

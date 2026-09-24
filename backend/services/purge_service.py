@@ -36,9 +36,10 @@ Usage from the ingestion service (after a symbol leaves all watchlists)::
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta
 from typing import TypedDict
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from backend.database import SessionLocal
@@ -311,3 +312,51 @@ def purge_symbol_from_database_safe(symbol: str) -> PurgeResult:
             drawing_tools=0,
             total=0,
         )
+
+
+# ---------------------------------------------------------------------------
+# Orphan sweep (MD-04)
+# ---------------------------------------------------------------------------
+
+
+def find_orphaned_symbols(db: Session, grace_days: int) -> list[str]:
+    """Symbols with stored bars or signals that are not in any active watchlist
+    and have not been written to in ``grace_days`` days.
+
+    "Watched" matches ``MarketDataIngestionService``'s own symbol list:
+    enabled in a watchlist whose ``is_active`` is true
+    (``WatchlistRepository.all_watchlisted_symbols``).
+
+    Bars carry no write timestamp, so recency is judged by each symbol's
+    newest stored bar or signal timestamp against ``grace_days`` ago. This
+    also protects a symbol someone is viewing on demand (not on any
+    watchlist, e.g. a chart lookup via ``MarketDataManager.get_historical_bars``
+    with a live ``db`` session): its newest bar stays inside the grace
+    window for as long as it keeps being viewed, and only ages out once
+    nobody has for that many days.
+    """
+    from backend.models import HistoricalSignal
+    from backend.models.market_data_sql import BarModel
+    from backend.repositories.watchlist_repository import WatchlistRepository
+    from backend.utils.timezone import now_ny
+
+    watched = WatchlistRepository(db).all_watchlisted_symbols()
+    cutoff = now_ny().replace(tzinfo=None) - timedelta(days=grace_days)
+
+    newest: dict[str, datetime] = {}
+    for symbol, ts in db.query(BarModel.symbol, func.max(BarModel.timestamp)).group_by(
+        BarModel.symbol
+    ):
+        newest[symbol.upper()] = ts
+    for symbol, ts in db.query(
+        HistoricalSignal.symbol, func.max(HistoricalSignal.timestamp)
+    ).group_by(HistoricalSignal.symbol):
+        key = symbol.upper()
+        if key not in newest or ts > newest[key]:
+            newest[key] = ts
+
+    return sorted(
+        symbol
+        for symbol, ts in newest.items()
+        if symbol not in watched and ts is not None and ts < cutoff
+    )

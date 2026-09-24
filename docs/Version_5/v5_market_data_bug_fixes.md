@@ -1,9 +1,9 @@
 # Version 5 Market Data Bug Fixes
 
 **Created:** 2026-09-24
-**Last updated:** 2026-09-24 (batch 1c: MD-03)
-**Status:** Review complete. MD-03 is fixed: stored 1m bars are settled from Alpaca's consolidated (SIP) feed, so every timeframe carries full-market volume. MD-01 is fixed: 1h bars are placed on the clock hour, and the stored 1h/4h history and its signals were repaired on the live database. MD-02 is fixed: log records are redacted, confirmed on live Webull errors, the old log files holding credentials are deleted, and the Webull token was rotated. Nine findings: one Critical, two High, two Medium, four Low. The Critical finding affects every 1h and 4h chart, signal, and AI answer built on stored bars before 2026-09-23.
-**Scorecard:** 3 ✅ COMPLETE, 0 ⚠️ PARTIAL, 6 ❌ NOT STARTED, 0 🟡 DEFERRED.
+**Last updated:** 2026-09-24 (batch 2a: MD-04)
+**Status:** Review complete. MD-04 is fixed: a periodic sweep purges symbols in no active watchlist once they go stale, deactivating a watchlist now stops tracking immediately, and the six known orphans are purged. MD-03 is fixed: stored 1m bars are settled from Alpaca's consolidated (SIP) feed, so every timeframe carries full-market volume. MD-01 is fixed: 1h bars are placed on the clock hour, and the stored 1h/4h history and its signals were repaired on the live database. MD-02 is fixed: log records are redacted, confirmed on live Webull errors, the old log files holding credentials are deleted, and the Webull token was rotated. Nine findings: one Critical, two High, two Medium, four Low. The Critical finding affects every 1h and 4h chart, signal, and AI answer built on stored bars before 2026-09-23.
+**Scorecard:** 4 ✅ COMPLETE, 0 ⚠️ PARTIAL, 5 ❌ NOT STARTED, 0 🟡 DEFERRED.
 **Source:** 2026-09-24 review of market-data ingestion, bar storage, retention, and the logs they produce. It covered `backend/market_data/services/ingestion_service.py`, `backend/market_data/providers/*`, `backend/repositories/bar_repository.py`, `backend/services/purge_service.py`, `backend/api/watchlist/router.py`, and `scripts/restart_dev.sh`, at `b41530c`, and checked each finding against the live database and logs.
 **Related:** [Historical Signals fixes](v5_historical_signal_bug_fixes.md), [AI Analysis fixes](v5_ai_analysis.md), [Chat bug fixes](v5_bug_fixes.md), [Phase audit](phase_audit_v5.md)
 
@@ -25,7 +25,7 @@ Line numbers refer to the code at `b41530c`.
 | MD-01 | Critical | Bars | Provider 1h bars are stored 30 minutes earlier than the data they hold | Verified | ✅ COMPLETE |
 | MD-02 | High | Security | Webull credentials are written to the log files in plain text | Verified | ✅ COMPLETE |
 | MD-03 | High | Bars | One series mixes providers whose volume differs by up to 2,800 times | Verified | ✅ COMPLETE |
-| MD-04 | Medium | Storage | Data for symbols in no watchlist is never removed | Verified | ❌ NOT STARTED |
+| MD-04 | Medium | Storage | Data for symbols in no watchlist is never removed | Verified | ✅ COMPLETE |
 | MD-05 | Medium | Operations | `logs/backend.log` grows without limit | Verified | ❌ NOT STARTED |
 | MD-06 | Low | Providers | Overnight Webull requests repeat about 80 times an hour and are rate-limited | Verified | ❌ NOT STARTED |
 | MD-07 | Low | Signals | After each restart, signal recording takes about 30 minutes to catch up | Verified | ❌ NOT STARTED |
@@ -227,7 +227,7 @@ So even the primary source carried about half the market's extended-hours volume
 
 ### MD-04 — Data for symbols in no watchlist is never removed
 
-**Status:** ❌ NOT STARTED
+**Status:** ✅ COMPLETE (2026-09-24, batch 2a).
 **Where:** `purge_symbol_from_database_safe`, called only from the two watchlist delete routes (`backend/api/watchlist/router.py:222` and `:356`). Also `MarketDataManager.get_historical_bars` (`backend/market_data/services/manager_class.py:252`) and the stream bar writer (`backend/market_data/streaming/live_bar_persistence.py:124`), which persist bars for any symbol they are asked about.
 
 **Verified (read-only query of the live database):**
@@ -240,7 +240,28 @@ So even the primary source carried about half the market's extended-hours volume
 
 **Impact:** orphaned rows fill the outcome queue and the stale-bar checks, and they survive until retention prunes them: 1,096 days for daily bars. They also produced the stuck rows in Historical Signals HS-15.
 
-**Resolution:** add a periodic sweep that purges symbols in no watchlist, allowing a grace period for symbols viewed on demand. Run it once now for the six symbols above. Also make sure disabling a symbol or deactivating a watchlist refreshes the ingestion list, as removing one already does.
+**A self-inflicted complication, found during this fix:** `scripts/repair_hourly_bars.py` (MD-01) defaulted to every symbol with stored 1h bars, not the watchlist-scoped list `scripts/settle_1m_from_sip.py` (MD-03) used. Run live during MD-01, it fetched about 8.5 months of fresh Alpaca 1h/4h bars for NOK and XLK — neither watched — and deleted their old 1h/4h signals (53 and 62 rows) with no path to rebuild them, since nothing re-records signals for an unwatched symbol. NOK went from 8,476 bars (stale, last bar 2026-09-11) to 10,061 (fresh through 2026-09-24); XLK similarly. This also masked both from the grace-period check below for another week, since their newest bar became "today". The six symbols were purged by name rather than waiting on the sweep, so this is folded into MD-04's fix rather than filed separately.
+
+**Resolution:**
+
+- **Periodic sweep:** `MarketDataIngestionService._orphan_sweep_loop`, every 6h (`backend/market_data/services/ingestion_service.py`). `purge_service.find_orphaned_symbols(db, grace_days)` finds every symbol with a bar or signal, not currently in an active watchlist, whose newest bar or signal is older than `MARKET_DATA_ORPHAN_GRACE_DAYS` (default 7); each is purged via the existing `purge_symbol_from_database_safe`. The grace period protects a symbol being viewed on demand (a chart lookup with no watchlist entry): its newest stored bar stays recent for as long as it keeps being viewed. `MARKET_DATA_ORPHAN_SWEEP_ENABLED` turns it off.
+- **Deactivating a watchlist now refreshes ingestion:** `PUT /api/watchlists/{id}` calls `ingestion_service.refresh_symbols_from_watchlist()` when `is_active` changes, matching delete and remove-symbol. It does not purge immediately — deactivation is reversible — the sweep purges those symbols once they go stale.
+- **Closed a related gap:** `WatchlistRepository.symbol_exists_in_any_watchlist` checked `WatchlistSymbol.is_enabled` but never joined `Watchlist.is_active`, so a symbol left only in a *deactivated* watchlist counted as "still watched" by the purge-on-remove check, even though ingestion had already stopped tracking it. Now joins and filters on `Watchlist.is_active`, matching its own docstring and what ingestion tracks. New `all_watchlisted_symbols()` is the shared definition both the sweep and this check use.
+- **Run once, live:** the six named symbols were purged directly by name (2026-09-24 18:44), ahead of the sweep's grace period, since they were already confirmed orphaned: 34,119 rows across bars, signals, quotes, market_status, and backfill_jobs. Verified empty afterward.
+- **Stale incomplete bars:** resolved as a side effect — NOK and XLK no longer have any rows.
+- **Not changed:** `MarketDataManager.get_historical_bars` and the stream writer still persist bars for any symbol asked about, on demand — the sweep is the backstop for that, not a restriction on it; an on-demand lookup for a non-watchlisted symbol is intentional (Chat, Scanner, and Chart all support querying a symbol that isn't watchlisted).
+
+**Tests:**
+
+| File | What it covers |
+|---|---|
+| `test_watchlist_repository_active_filter.py` (new, 5 tests) | `symbol_exists_in_any_watchlist` / `all_watchlisted_symbols` against a real active/deactivated-watchlist join. |
+| `test_purge_service.py` (6 new) | `find_orphaned_symbols`: stale-unwatched is orphaned, fresh-unwatched is protected by the grace period, watched-but-stale is never orphaned, a symbol only in a deactivated watchlist is orphaned once stale, a recent signal also counts as activity, and the sweep step purges end to end. |
+| `test_watchlist_api.py` (2 new) | Deactivating a watchlist calls `refresh_symbols_from_watchlist`; renaming does not. |
+
+Full run: `backend/tests/market_data`, `services`, `watchlist`, `repositories`, `config` — 808 passed.
+
+**Live confirmation (2026-09-24 18:44–18:49):** restarted; the startup sweep pass found 0 orphans (the six were already purged by name) and logged nothing, as designed; live ingestion continued normally afterward (23 symbols, unaffected). `find_orphaned_symbols` called directly afterward also returns `[]`.
 
 ### MD-05 — `logs/backend.log` grows without limit
 
@@ -337,6 +358,15 @@ The comment says the 1d table mixes midnight bars with 13:30 intraday snapshots 
 
 ## Verification
 
+### Batch 2a (2026-09-24, MD-04)
+
+| Suite | Result |
+|---|---|
+| `backend/tests/market_data`, `services`, `watchlist`, `repositories`, `config` | 808 passed |
+| New: `test_watchlist_repository_active_filter.py`, 6 new in `test_purge_service.py`, 2 new in `test_watchlist_api.py` | 13 passed |
+| Live: six named orphans purged | 34,119 rows across bars, signals, quotes, market_status, backfill_jobs; verified 0 remaining |
+| Live: restart + startup sweep pass | 0 orphans found (already purged by name); ingestion continued normally (23 symbols) |
+
 ### Batch 1c (2026-09-24, MD-03)
 
 | Suite | Result |
@@ -383,19 +413,21 @@ The fresh schema for MD-08 was built under `.pytest_tmp/` and deleted afterwards
 ## Fix log
 
 - **Review:** commit `e4c1d69`, `docs(v5): review market data ingestion and track findings`.
-- **Batch 1a (MD-02):** `63a11a8`.
+- **Batch 1a (MD-02):** `63a11a8`, tracker completed after token rotation in `6798e22`.
 - **Batch 1b (MD-01):** `65ce005`.
-- **Batch 1c (MD-03):** this commit.
+- **Batch 1c (MD-03):** `11246cc`.
+- **Batch 2a (MD-04):** in the working tree, not yet committed.
 
 | Date | ID | Status | Commit | Files | Tests | Notes |
 |---|---|---|---|---|---|---|
 | 2026-09-24 | MD-01 to MD-09 | ❌ NOT STARTED | `e4c1d69` | `docs/Version_5/v5_market_data_bug_fixes.md` | 10 probes | Review logged nine findings. |
-| 2026-09-24 | MD-03 | ✅ COMPLETE | batch 1c | `sip_settle.py`, `scripts/settle_1m_from_sip.py`, `ingestion_service.py`, `bar_repository.py`, `alpaca_provider.py`, `settings.py`, `chat_replies.py` | 11 new | 1m settled from Alpaca SIP, live and one-off; IEX labelled. |
+| 2026-09-24 | MD-03 | ✅ COMPLETE | `11246cc` | `sip_settle.py`, `scripts/settle_1m_from_sip.py`, `ingestion_service.py`, `bar_repository.py`, `alpaca_provider.py`, `settings.py`, `chat_replies.py` | 11 new | 1m settled from Alpaca SIP, live and one-off; IEX labelled. |
 | 2026-09-24 | MD-01 | ✅ COMPLETE | `65ce005` | `hourly_bars.py`, `hourly_repair.py`, `scripts/repair_hourly_bars.py`, `ingestion_service.py`, `backfill_service.py`, `bar_repository.py`, `alpaca_provider.py`, `settings.py`, `.env.example` | 24 new, 1 rewritten | 1h on the clock hour; Alpaca SIP; live 1h/4h history repaired and signals re-recorded. |
+| 2026-09-24 | MD-04 | ✅ COMPLETE | batch 2a | `purge_service.py`, `watchlist_repository.py`, `ingestion_service.py`, `api/watchlist/router.py`, `settings.py`, plus 3 new test files | 13 new, 2 updated | Periodic sweep; deactivate refreshes ingestion; `symbol_exists_in_any_watchlist` now joins `Watchlist.is_active`; six known orphans purged live (34,119 rows). |
 | 2026-09-24 | MD-02 | ✅ COMPLETE | `63a11a8` | `backend/observability/redaction.py`, `webull_provider.py`, `structured_logging.py`, `test_secret_redaction.py` | 8 tests | New records redacted; 114 old log files holding credentials deleted or emptied; workers restarted; redaction confirmed on 230 live Webull errors; Webull app key/secret rotated 18:36. |
 
 ---
 
 ## Reference
 
-Ingestion writes 1m bars from the live provider (Webull), fills gaps from fallback providers, settles each minute from Alpaca SIP once it is 15 minutes old (since MD-03), and resamples 2m to 30m from 1m. 1h is built from 1m where 1m exists and otherwise comes from Alpaca SIP (since MD-01); a provider 1h bar never replaces a 1m-built one; 4h is resampled from 1h; 1d comes from providers and 1wk from 1d. Every write goes through `upsert_bars`, keyed on `(symbol, timeframe, timestamp)`, so the last writer wins except over a settled bar (`_SETTLED_BY`), and each bar records the `provider` that wrote it. Retention prunes each timeframe on its own window. Historical Signals, the trend engines, charts, Chat, and AI Analysis all read these stored bars.
+Ingestion writes 1m bars from the live provider (Webull), fills gaps from fallback providers, settles each minute from Alpaca SIP once it is 15 minutes old (since MD-03), and resamples 2m to 30m from 1m. 1h is built from 1m where 1m exists and otherwise comes from Alpaca SIP (since MD-01); a provider 1h bar never replaces a 1m-built one; 4h is resampled from 1h; 1d comes from providers and 1wk from 1d. Every write goes through `upsert_bars`, keyed on `(symbol, timeframe, timestamp)`, so the last writer wins except over a settled bar (`_SETTLED_BY`), and each bar records the `provider` that wrote it. Retention prunes each timeframe on its own window. A periodic sweep (since MD-04) purges any symbol with stored bars or signals that is not in an active watchlist and has gone stale, protected by a grace period for on-demand lookups. Historical Signals, the trend engines, charts, Chat, and AI Analysis all read these stored bars.
