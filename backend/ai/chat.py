@@ -107,6 +107,7 @@ from backend.ai.tool_registry import (
     resolve_relative_date,
 )
 from backend.config.settings import settings
+from backend.engines.market_calendar import daily_data_is_current
 from backend.models import Alert, AlertTrigger, ChatMessage
 from backend.models.chat import UNIVERSAL_SYMBOL
 from backend.repositories.chat_repository import ChatRepository
@@ -5418,6 +5419,8 @@ def _run_market_tool(
             )
         except ValueError:
             request_scope["timeframe"] = "1d"
+    elif parsed.action == "get_price_statistics":
+        request_scope["timeframe"] = "1d"  # always daily closes
     result = default_registry.execute(
         ToolRequest(
             tool_name=parsed.action,
@@ -5566,6 +5569,10 @@ def _run_market_tool(
         comparison_timeframe = str(result.timeframe or arguments.get("timeframe") or "").lower()
         completed_session_comparison = (
             comparison_timeframe in {"1d", "1wk"} and _is_regular_market_closed()
+        ) or (
+            # During the session, daily bars through the latest completed
+            # close are still the right reference.
+            comparison_timeframe == "1d" and daily_data_is_current(result.source_timestamp)
         )
         if (
             isinstance(result.freshness_seconds, (int, float))

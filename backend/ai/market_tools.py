@@ -6,6 +6,7 @@ import math
 import re
 import threading
 from datetime import UTC, date, datetime, timedelta
+from datetime import time as dt_time
 from pathlib import Path
 from statistics import median, stdev
 from typing import Any, Literal
@@ -1287,16 +1288,23 @@ def get_price_statistics_tool(request: PriceStatisticsRequest) -> BaseModel:
     requested when a provider's history starts later.
     """
     from backend.ai.calculator import CalculationRequest, calculate
+    from backend.engines.market_calendar import EASTERN, us_market_calendar
     from backend.utils.timezone import now_ny
 
-    today = now_ny().date()
-    end = min(request.end or today, today)
+    now = now_ny()
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=EASTERN)
+    today = now.date()
+    # Only completed sessions have a close: while today's session trades, the
+    # feed's bar for today is a live price, not a daily close.
+    last_close = us_market_calendar.latest_completed_session_date(now)
+    end = min(request.end or last_close, last_close)
     if request.start is not None:
         start = request.start
     else:
         start = end - timedelta(days=request.lookback_days or _PRICE_STATISTIC_DEFAULT_DAYS[request.metric])
     if start > end:
-        raise ValueError("the requested window starts in the future")
+        raise ValueError("no completed trading session in the requested window yet")
     range_ = _daily_range_covering(start, today)
 
     symbols = [request.symbol.upper()]
@@ -1373,7 +1381,10 @@ def get_price_statistics_tool(request: PriceStatisticsRequest) -> BaseModel:
 
     formulas = list(result.formulas)
     assumptions = list(result.assumptions)
-    assumptions.append("Uses regular-session daily closes; a window edge on a non-trading day moves to the nearest trading day inside it.")
+    assumptions.append(
+        "Uses completed regular-session daily closes (a session still trading is left out); "
+        "a window edge on a non-trading day moves to the nearest trading day inside it."
+    )
     if request.metric == "volatility":
         formulas.append(f"annualized = daily_volatility * sqrt({_TRADING_DAYS_PER_YEAR})")
     unknowns: list[dict[str, Any]] = []
@@ -1404,7 +1415,10 @@ def get_price_statistics_tool(request: PriceStatisticsRequest) -> BaseModel:
         unknowns=unknowns,
         sources=sources,
         provider=providers[0] if len(providers) == 1 else "MarketLens price statistics",
-        source_timestamp=min(source_times) if source_times else None,
+        # As of the last close used, so the age reads from that session's close.
+        source_timestamp=datetime.combine(last_used, dt_time(16, 0), tzinfo=EASTERN).isoformat()
+        if source_times
+        else None,
     )
 
 

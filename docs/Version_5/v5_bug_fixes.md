@@ -1,8 +1,8 @@
 # Version 5 Chat Bug Fixes
 
 **Created:** 2026-09-24
-**Last updated:** 2026-09-24 (batch 9: follow-ups, live checks, isolated e2e)
-**Status:** All items and gaps complete. Batches 1 to 7 are committed (batch 3's migration is applied to the live DB); batch 8 (the four gaps) is committed too. Batch 9 (follow-ups, live checks, isolated e2e) is committed too. Nothing is pushed.
+**Last updated:** 2026-09-24 (batch 10: daily-close freshness)
+**Status:** All items and gaps complete. Batches 1 to 7 are committed (batch 3's migration is applied to the live DB); batch 8 (the four gaps) is committed too. Batch 9 (follow-ups, live checks, isolated e2e) is committed too; batch 10 (daily-close freshness) is committed too. Nothing is pushed.
 **Scorecard:** 20 ✅ COMPLETE, 0 ⚠️ PARTIAL, 0 ❌ NOT STARTED, 0 🟡 DEFERRED.
 **Source:** 2026-09-24 Chat review of `backend/ai/chat.py`, `backend/api/ai/chat_router.py`, `backend/repositories/chat_repository.py`, `frontend/src/components/ChatPanel.tsx`, and `frontend/src/services/api.ts`.
 **Related:** [Phase audit](phase_audit_v5.md), [Version 5 plan](v5_plan.md)
@@ -48,16 +48,15 @@ code), so line numbers quoted in older notes or commits will not match.
 | BF-19 | Low | Frontend | Evidence card lost its 8-item cap; two ChatPanel tests failing | Verified | ✅ COMPLETE |
 | BF-20 | Low | Tests | Two context tests expect an inferred "live" quote status | Verified | ✅ COMPLETE |
 
-**Next:** nothing left in the tracker; the gaps (batch 8) and the
-follow-ups (batch 9) are fixed. What remains:
+**Next:** nothing left in the tracker; the gaps (batch 8), the
+follow-ups (batch 9) and daily-close freshness (batch 10) are fixed. What
+remains:
 - **Push:** push `development` when you want it on `origin`.
 - **Split `chat.py`:** the one open enhancement (see Enhancements). It is
   a large refactor with no behaviour change. It needs a decision first:
   tests patch names on `backend.ai.chat` (`ai_manager`, `build_context`
   and others), and code moved to another module stops seeing those
   patches.
-- **STALE badge on daily closes:** new, found in the live check (see
-  BF-04's follow-ups).
 - **Full e2e run:** only group A (4 of 34 tests) was run on the isolated
   servers.
 
@@ -314,12 +313,17 @@ Removing the route fails 3 tests; restoring the old reuse wording fails 1.
   right trading days, so no date shifted.
 - **Live data (checked, batch 9):** the same question in the running app
   gave −33.95% ($451.67 on Jan 5 to $298.32 on Jul 29), marked VERIFIED.
-- **Evidence says STALE for an up-to-date close (new, open):** in that
-  reply the Evidence badge said STALE and the tool pill "124095s old".
-  Yesterday's close is the newest complete daily close, but its age is
-  counted from the daily bar's timestamp (midnight ET), so any
-  daily-close answer looks stale during the trading day. The age is also
-  shown in raw seconds.
+- **Evidence said STALE for an up-to-date close (fixed in batch 10):** in
+  that reply the Evidence badge said STALE and the tool pill "124095s
+  old". Yesterday's close is the newest complete daily close, but its age
+  was counted from the daily bar's midnight timestamp against a flat
+  15-minute limit. See "Daily-close freshness" under Gaps.
+- **Today's forming bar counted as a close (fixed in batch 10):** found
+  while re-checking live. Once the session opened, the daily feed carried
+  a bar for today built from live 1-minute data (`live_from_1m`), and the
+  tool counted it: the same question then covered "2026-01-02 to
+  2026-09-24, 183 daily closes". The window now ends at the latest
+  completed session.
 
 ### BF-05 — Positional argument misbinding in Chat router
 
@@ -1021,6 +1025,49 @@ All four were fixed on 2026-09-24 in batch 8.
   136 tests). `ChatPanel.test.tsx` passes (60) and `tsc` has 0 errors.
   ESLint has no new findings. Neither full suite was run.
 
+### Daily-close freshness (batch 10, found in the live check)
+
+Daily data was judged like intraday data: anything older than 15 minutes
+(`_STALE_AFTER_SECONDS`) was stale. So a correct daily-close answer showed
+STALE all through the next session, and a daily comparison was withheld
+during market hours (`compare_symbols` accepted old daily bars only once
+the market had closed).
+
+**Resolution:**
+- **Calendar:** `market_calendar.py` gains
+  `latest_completed_session_date` (NYSE calendar, holidays included),
+  `daily_data_is_current` and `daily_bar_reference_time`.
+- **Evidence badge:** `response_blocks.py`'s three copies of the age rule
+  are one helper, `_age_status`. Daily (`1d`) evidence dated on or after
+  the latest completed session is `recent`; older daily evidence is still
+  `stale`; intraday evidence keeps the 15-minute limit.
+- **Age:** the registry measures a daily bar stamped at midnight from
+  that day's 16:00 ET close, so yesterday's close reads about 18 h, not
+  34 h. The tool pill shows "19 h old", not raw seconds (`formatAge`).
+- **Price statistics:** requests carry `timeframe="1d"`. The window ends
+  at the latest completed session, so a session still trading is left
+  out. `source_timestamp` is the last used day's 16:00 ET close.
+- **Comparisons:** a daily comparison whose bars include the latest
+  completed session is used during market hours too. Older daily bars
+  and intraday bars are still withheld.
+
+**Checked live** (2026-09-24, 10:44 ET, in session): "TSLA max drawdown
+this year" gave 2026-01-02 to 2026-09-23 (182 closes), −33.95%, Evidence
+VERIFIED, and "get_price_statistics · webull · 19 h old".
+
+**Tests:**
+- **Freshness rule:** `backend/tests/ai/test_daily_freshness.py` (10
+  tests) covers the calendar (including a weekend and Thanksgiving), the
+  badge (current, old, intraday), the registry age, the comparison gate
+  (in session, current vs old) and the price-statistics scope.
+- **Price statistics:** in `test_price_statistics.py`,
+  `test_todays_bar_counts_only_once_its_session_has_closed` (noon vs
+  17:00) is new. `test_volatility_reports_daily_and_annualized` now
+  expects the window to end at the previous close.
+- **Chat panel:** `formatAge` in `ChatPanel.test.tsx`.
+
+Removing each change fails its test.
+
 ## Enhancements
 
 1. ~~**One reply path**~~: done in batch 6 (`_reply_events`, BF-09).
@@ -1035,6 +1082,26 @@ All four were fixed on 2026-09-24 in batch 8.
    routing, actions, turn orchestration and formatting.
 
 ## Verification
+
+### Batch 10 (2026-09-24): daily-close freshness
+
+| Suite | Result |
+|---|---|
+| `backend/tests/ai`, `backend/tests/engines`, `backend/tests/api` | 1,630 passed, 30 subtests passed |
+| `backend/tests/ai/test_daily_freshness.py` (new) | 10 passed |
+| `backend/tests/ai/test_price_statistics.py` | 39 passed (2 new cases; 1 updated) |
+| `frontend/src/components/ChatPanel.test.tsx` | 62 passed (1 new) |
+| `tsc --noEmit`; `ruff`; `eslint` on changed files | clean |
+| Live check in the running app | the drawdown answer ends at 09-23 (182 closes); Evidence VERIFIED; "19 h old" |
+
+**Mutation check:** removing each change fails its test:
+- the badge's daily rule;
+- measuring age from the close;
+- the in-session comparison rule;
+- the price-statistics scope;
+- the window cap (fails 2).
+
+Neither full suite was run.
 
 ### Batch 9 (2026-09-24): follow-ups, live checks, isolated e2e
 
@@ -1205,7 +1272,8 @@ The full backend suite was not run.
 - **Batch 7:** commit `2728f43`, `feat(chat): cancel and time out streamed replies without resending`, on `development`.
 - **Docs:** commit `12420e5`, `docs(v5): correct tool and action counts; record housekeeping`, and commit `52af7dc`, `docs(v5): update BF-12 follow-up for alert-chat polling`, on `development`.
 - **Batch 8 (gaps):** commit `58abaf1`, `fix(chat): confirm Clear, refuse bare history wipes, keep notebook save off the event loop`, on `development`.
-- **Batch 9 (follow-ups):** commit `fix(chat): read $10k account sizes, ask Yahoo for BRK-B, label question steps, isolate e2e`, on `development`.
+- **Batch 9 (follow-ups):** commit `8ce8fa9`, `fix(chat): read $10k account sizes, ask Yahoo for BRK-B, label question steps, isolate e2e`, on `development`.
+- **Batch 10 (daily-close freshness):** commit `fix(chat): judge daily data by session date, not a 15-minute age limit`, on `development`.
 
 | Date | ID | Status | Commit | Files | Tests | Notes |
 |---|---|---|---|---|---|---|
@@ -1234,3 +1302,4 @@ The full backend suite was not run.
 | 2026-09-24 | BF-08 | ✅ COMPLETE | batch 7 | (no code; see entry) | existing draft-label test | The draft label already existed (`f24b4cf`); with batch 6's gating nothing remained. |
 | 2026-09-24 | Gaps | ✅ FIXED | batch 8 | `backend/api/ai/chat_router.py`, `frontend/src/components/ChatPanel.tsx`, `e2e/tests/chat.spec.ts`, two test files (lint), plus tests | 5 new, 2 updated | Clear confirms first; a bare `DELETE /sessions` is refused (`?all=true` wipes all); notebook save fully off the event loop and type-checks symbol lists; 3 `ruff` errors fixed. |
 | 2026-09-24 | Follow-ups | ✅ FIXED | batch 9 | `backend/ai/chat.py`, `backend/market_data/providers/yfinance_provider.py`, `frontend/src/components/ChatPanel.tsx`, `frontend/src/services/api.ts`, `frontend/src/styles/App.css`, `e2e/playwright.config.ts`, `e2e/tests/chat.spec.ts`, plus tests | 6 new, 3 updated | `$10k` account sizes; `BRK.B` at Yahoo; `needs_input` step status; isolated e2e servers; live checks in the running app. |
+| 2026-09-24 | Daily freshness | ✅ FIXED | batch 10 | `backend/engines/market_calendar.py`, `backend/ai/response_blocks.py`, `backend/ai/tool_registry.py`, `backend/ai/market_tools.py`, `backend/ai/chat.py`, `frontend/src/components/ChatPanel.tsx`, plus tests | 13 new, 1 updated | Daily evidence judged by session date; age from the close; price statistics end at the last completed session; daily comparisons usable in session; ages shown as "19 h". |

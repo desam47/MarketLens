@@ -214,7 +214,8 @@ class ToolRegistry:
                 or payload.get("timestamp")
                 or _oldest_nested_timestamp(payload)
             )
-            freshness_seconds = _freshness_seconds(source_timestamp)
+            daily = str(payload.get("timeframe") or request.timeframe or "").lower() == "1d"
+            freshness_seconds = _freshness_seconds(source_timestamp, daily=daily)
             warnings = _data_quality_warnings(payload, freshness_seconds)
             if duration_ms > spec.max_duration_ms:
                 warnings.append("Tool exceeded its expected duration budget.")
@@ -279,9 +280,18 @@ def _oldest_nested_timestamp(payload: Mapping[str, Any]) -> str | None:
     return oldest[1] if oldest else None
 
 
-def _freshness_seconds(source_timestamp: Any) -> float | None:
+def _freshness_seconds(source_timestamp: Any, *, daily: bool = False) -> float | None:
     if not source_timestamp:
         return None
+    if daily:
+        # A daily bar stamped at its session date's midnight holds that
+        # day's close, so its data is as of 16:00 ET, not midnight.
+        from backend.engines.market_calendar import daily_bar_reference_time
+
+        reference = daily_bar_reference_time(source_timestamp)
+        if reference is None:
+            return None
+        return round(max(0.0, (datetime.now(UTC) - reference).total_seconds()), 3)
     try:
         source = datetime.fromisoformat(str(source_timestamp).replace("Z", "+00:00"))
         if source.tzinfo is None:

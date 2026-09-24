@@ -1,5 +1,5 @@
 import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
-import { ChatPanel, mergePolledMessages, replyArrived, stepIcon } from './ChatPanel';
+import { ChatPanel, formatAge, mergePolledMessages, replyArrived, stepIcon } from './ChatPanel';
 import api from '../services/api';
 
 jest.mock('../services/api', () => ({
@@ -1290,5 +1290,15 @@ describe('stepIcon (BF-16 follow-up)', () => {
     expect(stepIcon('reused')).toBe('↻');
     expect(stepIcon('stopped')).toBe('•');
     expect(stepIcon(undefined)).toBe('•');
+  });
+});
+
+describe('formatAge', () => {
+  it('reads as seconds, minutes, hours or days', () => {
+    expect(formatAge(25)).toBe('25s');
+    expect(formatAge(840)).toBe('14 min');
+    expect(formatAge(66_000)).toBe('18 h');
+    expect(formatAge(124_095)).toBe('34 h');
+    expect(formatAge(300_000)).toBe('3 d');
   });
 });

@@ -98,12 +98,8 @@ def _quality(
     freshness_seconds = successful.get("freshness_seconds") if successful else None
     if not isinstance(freshness_seconds, (int, float)):
         freshness_status = "unknown" if successful else None
-    elif freshness_seconds <= 60:
-        freshness_status = "fresh"
-    elif freshness_seconds <= _STALE_AFTER_SECONDS:
-        freshness_status = "recent"
     else:
-        freshness_status = "stale"
+        freshness_status = _age_status(successful, freshness_seconds)
     if successful and (successful.get("fallback") or freshness_status == "stale") and state not in {"unavailable", "partial"}:
         state = "stale"
         confidence = 0.5
@@ -130,6 +126,22 @@ _NON_EVIDENCE_KINDS = {"model", "model_call", "observability", "server_reply", "
 
 def _is_evidence_item(item: dict[str, Any]) -> bool:
     return bool(item.get("tool")) and item.get("kind") not in _NON_EVIDENCE_KINDS
+
+
+def _age_status(item: dict[str, Any], freshness_seconds: float) -> str:
+    """fresh / recent / stale for an item with a known data age.
+
+    Daily bars are judged by date, not age: yesterday's close is the newest
+    complete daily close all through today's session, so it is "recent"
+    rather than stale however many seconds old it is.
+    """
+    if freshness_seconds <= 60:
+        return "fresh"
+    if str(item.get("timeframe") or "").lower() == "1d" and item.get("source_timestamp"):
+        from backend.engines.market_calendar import daily_data_is_current
+
+        return "recent" if daily_data_is_current(item["source_timestamp"]) else "stale"
+    return "recent" if freshness_seconds <= _STALE_AFTER_SECONDS else "stale"
 
 
 def _weakest_successful(items: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -164,12 +176,8 @@ def _item_quality(
     if not isinstance(freshness_seconds, (int, float)):
         freshness_seconds = None
         freshness_status = None if item.get("kind") == "calculation" else "unknown"
-    elif freshness_seconds <= 60:
-        freshness_status = "fresh"
-    elif freshness_seconds <= _STALE_AFTER_SECONDS:
-        freshness_status = "recent"
     else:
-        freshness_status = "stale"
+        freshness_status = _age_status(item, freshness_seconds)
     if not ok:
         state, confidence = "unavailable", 0.0
     elif item.get("fallback") or freshness_status == "stale":
@@ -271,11 +279,7 @@ def _trace_freshness(item: dict[str, Any]) -> tuple[str | None, float | None]:
     age = item.get("freshness_seconds")
     if not isinstance(age, (int, float)):
         return item.get("freshness_status"), _STALE_AFTER_SECONDS if item.get("freshness_status") else None
-    if age <= 60:
-        return "fresh", _STALE_AFTER_SECONDS
-    if age <= _STALE_AFTER_SECONDS:
-        return "recent", _STALE_AFTER_SECONDS
-    return "stale", _STALE_AFTER_SECONDS
+    return _age_status(item, age), _STALE_AFTER_SECONDS
 
 
 def build_response_blocks(

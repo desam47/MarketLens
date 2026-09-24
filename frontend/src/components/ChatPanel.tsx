@@ -68,6 +68,14 @@ const AWAIT_REPLY_TIMEOUT_MS = 120000;
 
 /** Whether ``fresh`` holds a reply to the latest user message ``content``. */
 /** Icon for a Chat step status; a step waiting on the trader is a question, not a failure. */
+/** A data age for people: "25s", "14 min", "18 h", "3 d". */
+export function formatAge(seconds: number): string {
+  if (seconds < 90) return `${Math.round(seconds)}s`;
+  if (seconds < 90 * 60) return `${Math.round(seconds / 60)} min`;
+  if (seconds < 48 * 3600) return `${Math.round(seconds / 3600)} h`;
+  return `${Math.round(seconds / 86400)} d`;
+}
+
 export function stepIcon(status?: string): string {
   switch (status) {
     case 'completed': return '✓';
@@ -1630,7 +1638,7 @@ function ToolTraceRow({ message }: { message: ChatMessage }) {
             ◌ Audit · {item.turn_duration_ms != null ? `${Math.round(item.turn_duration_ms)}ms` : 'measured'} · {item.within_target ? 'within target' : 'over target'}
           </span>;
         }
-        const freshness = item.freshness_seconds == null ? '' : ` · ${Math.round(item.freshness_seconds)}s old`;
+        const freshness = item.freshness_seconds == null ? '' : ` · ${formatAge(item.freshness_seconds)} old`;
         const fallback = item.fallback ? ' · fallback' : '';
         return <span className={`chat-tool-pill ${item.ok ? 'ok' : 'error'}`} key={`${item.tool ?? 'tool'}-${index}`}>
           {item.ok ? '✓' : '⚠'} {item.tool ?? 'tool'}{item.provider ? ` · ${item.provider}` : ''}{freshness}{fallback}

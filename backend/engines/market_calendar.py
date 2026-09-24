@@ -218,6 +218,59 @@ class USMarketCalendar:
         raise RuntimeError("Unable to find a future US regular session")
 
 
+    def latest_completed_session_date(self, now: datetime | None = None) -> date:
+        """The most recent trading day whose regular session has closed.
+
+        Before 16:00 ET on a trading day that is the previous trading day;
+        from 16:00 on, the same day. (An early-close day counts as closed
+        from 16:00, which only errs toward calling its data current late.)
+        """
+        et = self.to_et(now or datetime.now(EASTERN))
+        day = et.date()
+        for _ in range(15):
+            probe = datetime.combine(day, time(12, 0), tzinfo=EASTERN)
+            closed = day < et.date() or et.time() >= _REGULAR_CLOSE
+            if closed and self.is_trading_day(probe):
+                return day
+            day -= timedelta(days=1)
+        raise RuntimeError("Unable to find a completed US regular session")
+
+
+def _as_eastern(timestamp: str | datetime) -> datetime | None:
+    """Parse a source timestamp; a naive value is New York local time (the
+    tool layer's convention, unlike ``to_et``'s naive-means-UTC)."""
+    try:
+        value = timestamp if isinstance(timestamp, datetime) else datetime.fromisoformat(
+            str(timestamp).replace("Z", "+00:00")
+        )
+    except (TypeError, ValueError):
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=EASTERN)
+    return value.astimezone(EASTERN)
+
+
+def daily_data_is_current(source_timestamp: str | datetime | None, now: datetime | None = None) -> bool:
+    """Whether daily-bar data dated ``source_timestamp`` includes the latest
+    completed session. A daily close from yesterday is current all through
+    today's session; age in seconds says nothing about that."""
+    source = _as_eastern(source_timestamp) if source_timestamp else None
+    if source is None:
+        return False
+    return source.date() >= us_market_calendar.latest_completed_session_date(now)
+
+
+def daily_bar_reference_time(source_timestamp: str | datetime | None) -> datetime | None:
+    """The moment a daily bar's data is as of: its 16:00 ET close when the
+    provider stamps the bar at the session date's midnight, else the stamp."""
+    source = _as_eastern(source_timestamp) if source_timestamp else None
+    if source is None:
+        return None
+    if source.time() == time(0, 0):
+        return datetime.combine(source.date(), _REGULAR_CLOSE, tzinfo=EASTERN)
+    return source
+
+
 # Module-level singleton for the default US equity calendar.
 # Engines default to this so the test seam (``calendar=...`` constructor arg)
 # is purely an override path.

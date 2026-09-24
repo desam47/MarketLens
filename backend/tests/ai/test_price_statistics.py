@@ -118,11 +118,17 @@ def test_volatility_reports_daily_and_annualized(pinned_today, bars_by_symbol) -
 
     result = get_price_statistics_tool(PriceStatisticsRequest(symbol="AAPL", metric="volatility", lookback_days=30))
 
-    closes = [close for day, close in sorted(series["AAPL"].items()) if day >= TODAY - timedelta(days=30)]
+    # Noon on TODAY is mid-session, so the window ends at the previous close.
+    last_close = TODAY - timedelta(days=1)
+    closes = [
+        close for day, close in sorted(series["AAPL"].items())
+        if last_close - timedelta(days=30) <= day <= last_close
+    ]
     expected_daily = calculate(CalculationRequest(calculation="volatility", prices=closes)).values["period_volatility"]
     assert result.values["daily_volatility_percent"] == pytest.approx(expected_daily)
     assert result.values["annualized_volatility_percent"] == pytest.approx(expected_daily * math.sqrt(252))
-    assert result.start_date >= (TODAY - timedelta(days=30)).isoformat()
+    assert result.start_date >= (last_close - timedelta(days=30)).isoformat()
+    assert result.end_date == last_close.isoformat()
     # 30 days plus the edge slack needs more than the 1mo range covers.
     assert requests[0].range == "3mo" and requests[0].timeframe == "1d"
 
@@ -354,3 +360,18 @@ class TestPriceStatisticsTurn(_Base):
         mock_ai.complete.assert_not_called()
         verification = next(block for block in msg.response_blocks_payload if block["type"] == "verification")
         self.assertEqual(verification["data"]["status"], "verified", verification)
+
+
+
+@pytest.mark.parametrize(("hour", "last_day"), [(12, "2026-09-23"), (17, "2026-09-24")])
+def test_todays_bar_counts_only_once_its_session_has_closed(monkeypatch, bars_by_symbol, hour, last_day) -> None:
+    """Found live on 2026-09-24: mid-session, the daily feed carries a bar
+    for today built from live 1-minute data, and it was counted as a close."""
+    monkeypatch.setattr("backend.utils.timezone.now_ny", lambda: datetime(2026, 9, 24, hour, 0))
+    series, _ = bars_by_symbol
+    series["TSLA"] = dict(zip(_trading_days(date(2026, 9, 21), 4), [100, 90, 95, 80], strict=True))
+
+    result = get_price_statistics_tool(PriceStatisticsRequest(symbol="TSLA", metric="max_drawdown", lookback_days=10))
+
+    assert result.end_date == last_day
+    assert result.source_timestamp.startswith(f"{last_day}T16:00:00")
