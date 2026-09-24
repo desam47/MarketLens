@@ -538,7 +538,7 @@ The full backend and frontend suites and the production build were not run for t
 - **Batch 2a:** commit `f762f8a`, `fix(signals): make research scope and coverage explicit`.
 - **Review of batches 1 and 2a:** commit `59e269a`, `docs(v5): review historical signals batches 1 and 2a`.
 - **Batch 2b:** commit `b430e06`, `fix(signals): unblock outcome queue and direction-adjust track record`.
-- **Batch 3:** in the working tree, not yet committed. The HS-12 migration is installed and applied to the live database.
+- **Batch 3:** commit `dd24dc9`, `fix(signals): unique signal identity, guarded manual runs, no manual delete`. The HS-12 migration is applied to the live database.
 - **Batch 2c:** commit `2e46ecc`, `fix(signals): per-timeframe research, regime coverage, honest fields`. The HS-09 migration is applied to the live database.
 
 | Date | ID | Status | Commit | Files | Tests | Notes |
@@ -560,10 +560,10 @@ The full backend and frontend suites and the production build were not run for t
 | 2026-09-24 | HS-09 | ✅ COMPLETE | `2e46ecc` | `signal_recorder.py`, `market_tools.py`, `alembic/versions/20261002_signal_placeholder_fields.py`, `test_signal_recorder.py` | 1 updated + migration run | New rows carry no placeholders; stored placeholders cleared on the live database. |
 | 2026-09-24 | HS-10 | ✅ COMPLETE | `2e46ecc` | `HistoricalReplayPanel.tsx`, test | 1 UI | Directional trades only; one session scope; assumptions shown. |
 | 2026-09-24 | HS-17 | ✅ COMPLETE | `2e46ecc` | `signal_repository.py`, `router.py`, `api.ts`, `SignalResearchDashboard.tsx`, tests | 1 API, 2 UI | Server-side summary over the full filtered population. |
-| 2026-09-24 | HS-11 | ✅ COMPLETE | batch 3 | `router.py`, `api.ts`, `HistoricalSignalCard.tsx`, tests | 3 API, 2 UI | Typed body, preview then confirm, one manual run at a time. |
-| 2026-09-24 | HS-12 | ✅ COMPLETE | batch 3 | `alembic/versions/20261003_signal_identity_unique.py`, `signal.py`, `signal_repository.py`, `signal_recorder.py`, tests | migration test + 3 | Duplicates removed on the live database; unique index; conflicts are no-ops. |
-| 2026-09-24 | HS-18 | ✅ COMPLETE | batch 3 | `router.py`, `signal_repository.py`, `api.ts`, `HistoricalSignalCard.tsx`, tests | 1 API, 1 UI | Manual delete removed; retention owns pruning. |
-| 2026-09-24 | HS-14 | ✅ COMPLETE | batches 1–3 | tests | see entry | Every finding now has a regression. |
+| 2026-09-24 | HS-11 | ✅ COMPLETE | `dd24dc9` | `router.py`, `api.ts`, `HistoricalSignalCard.tsx`, tests | 3 API, 2 UI | Typed body, preview then confirm, one manual run at a time. |
+| 2026-09-24 | HS-12 | ✅ COMPLETE | `dd24dc9` | `alembic/versions/20261003_signal_identity_unique.py`, `signal.py`, `signal_repository.py`, `signal_recorder.py`, tests | migration test + 3 | Duplicates removed on the live database; unique index; conflicts are no-ops. |
+| 2026-09-24 | HS-18 | ✅ COMPLETE | `dd24dc9` | `router.py`, `signal_repository.py`, `api.ts`, `HistoricalSignalCard.tsx`, tests | 1 API, 1 UI | Manual delete removed; retention owns pruning. |
+| 2026-09-24 | HS-14 | ✅ COMPLETE | `8eb7ac9`–`dd24dc9` | tests | see entry | Every finding now has a regression. |
 
 ---
 
