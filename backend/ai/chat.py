@@ -1,5 +1,5 @@
 """
-Version 4, AI feature 4 — conversational AI chat panel.
+Version 5 — conversational AI chat panel.
 
 Scope (see docs/plan): single-turn-per-message (build_context() is
 rebuilt fresh per message, not held as server-side "memory"), no
@@ -416,10 +416,39 @@ _SIGNAL_HISTORY_INTENT = re.compile(
 _SAVED_SCANS_INTENT = re.compile(r"\b(saved scans?|saved (?:scanner )?presets?|scan(?:ner)? presets?|my presets?)\b", re.I)
 _JOURNAL_TOOL_INTENT = re.compile(r"\b(trade journal|journal entries?|trading journal|mistakes? review)\b", re.I)
 _ALERTS_TOOL_INTENT = re.compile(r"\b(my alerts?|active alerts?|alert rules?|notifications?)\b", re.I)
+# Watchlist CRUD intents — only add/create fire unconditionally; remove/delete go through the
+# server confirmation gate in _finalize_parsed (same path as AI-originated destructive actions).
+_WATCHLIST_ADD_INTENT = re.compile(r"\b(add|put)\b[^.!?]{0,60}\bwatch\s?list\b", re.I)
+_WATCHLIST_CREATE_INTENT = re.compile(
+    r"\b(create|make|start|build)\b[^.!?]{0,50}\bwatch\s?list\b|\bnew\s+watch\s?list\b", re.I
+)
+_WATCHLIST_REMOVE_FROM_INTENT = re.compile(
+    r"\b(remove|delete|take\s+off)\b[^.!?]{0,30}\bfrom\b[^.!?]{0,20}\bwatch\s?list\b|\bunwatch\b", re.I
+)
+_WATCHLIST_DELETE_INTENT = re.compile(
+    # Negative lookahead: don't match "delete X FROM watchlist" (that's remove_from_watchlist).
+    r"\bdelete\b(?![^.!?]{0,50}\bfrom\b)[^.!?]{0,50}\bwatch\s?list\b", re.I
+)
+# Extracts a bare single-word watchlist name from verb-adjacent phrases like
+# "create Tech watchlist" — used when _NAMED_WATCHLIST_RE finds nothing.
+# The negative lookahead prevents stopwords ("my", "the", "a", "an", "new")
+# from being captured as the name (e.g. "delete my watchlist" → None, not "my").
+_WATCHLIST_VERB_NAME_RE = re.compile(
+    r"\b(?:create|make|start|build|delete)\b\s+(?:a\s+)?(?:new\s+)?(?:the\s+)?(?:my\s+)?"
+    r"(?!(?:my|the|a|an|new)\b)(?P<name>[A-Za-z][A-Za-z0-9\-\.]{1,30})\s+watch\s?list\b",
+    re.I,
+)
 _WHY_MOVE_INTENT = re.compile(r"\b(why did .* move|why is .* (up|down)|what caused .* (move|drop|surge)|explain .* move)\b", re.I)
 _WHAT_CHANGED_INTENT = re.compile(r"\b(what changed|what has changed|since yesterday|since my last visit|changed since)\b", re.I)
 _COMPARISON_INTENT = re.compile(r"\b(compare|comparison|rank|ranking|strongest|weakest|best performing|worst performing|which .* (higher|lower|stronger|weaker))\b", re.I)
-_SCENARIO_INTENT = re.compile(r"\b(what if|scenario|under a sell[- ]?off|drops?\b|falls?\b|rises?\b|stop (?:moves?|changes?)|shock)\b", re.I)
+_SCENARIO_INTENT = re.compile(
+    r"\b(what if|scenario|under a sell[- ]?off|drops?\b|falls?\b|rises?\b|stop (?:moves?|changes?)|shock"
+    r"|suppose (?:i |the )?(?:bought?|entered?|got in)"
+    r"|let'?s say (?:i |the )?(?:bought?|entered?|got in|had)"
+    r"|if (?:i |the )?(?:bought?|entered?|got in) at"
+    r")\b",
+    re.I,
+)
 _SIMILARITY_INTENT = re.compile(r"\b(similar (?:setup|pattern|situation)|prior situations?|historical pattern|historical similarity|lookalike)\b", re.I)
 _SIGNAL_EXPLANATION_INTENT = re.compile(r"\b(explain (?:the )?(?:signal|setup)|why (?:is|was) .* signal|signal explanation|which indicators triggered|what confirms .* signal)\b", re.I)
 _COUNTERARGUMENT_INTENT = re.compile(r"\b(what invalidates|what would invalidate|invalidation|counterargument|counter-argument|opposing evidence|what could prove .* wrong|what would break)\b", re.I)
@@ -725,6 +754,26 @@ _NAMED_WATCHLIST_LEADING_RE = re.compile(
 def _resolve_named_watchlist_symbols(db, user_content: str) -> list[str]:
     resolved = _resolve_named_watchlist(db, user_content)
     return resolved[1] if resolved else []
+
+
+def _extract_watchlist_name(user_content: str) -> str | None:
+    """Extract a watchlist name from a CRUD intent message.
+
+    Tries the canonical _NAMED_WATCHLIST_RE patterns first (quoted name,
+    "my/the X watchlist", "watchlist called X"), then the verb-adjacent
+    single-word fallback for bare "create Tech watchlist" patterns.
+    """
+    m = _NAMED_WATCHLIST_RE.search(user_content)
+    if m:
+        name = (m.group("name1") or m.group("name2") or m.group("name3") or "").strip(" \"'“”")
+        if name:
+            return name
+    m2 = _WATCHLIST_VERB_NAME_RE.search(user_content)
+    if m2:
+        name = m2.group("name").strip(" \"'")
+        if name:
+            return name
+    return None
 
 
 def _resolve_named_watchlist(db, user_content: str) -> tuple[str, list[str]] | None:
@@ -1551,6 +1600,16 @@ def _format_generic_market_reply(
     if data.get("available") is False:
         return f"{action} ({label}) is unavailable{f' for {symbol}' if symbol else ''}: {data.get('reason') or 'the required verified data was not available'}."
 
+    if action == "save_to_journal":
+        saved = data.get("saved_entry") or {}
+        sym = str(saved.get("symbol") or arguments.get("symbol") or "").upper()
+        side = str(saved.get("side") or "").lower()
+        total = data.get("total_entries")
+        parts = [sym, side] if sym and side else [sym or side]
+        header = " ".join(p for p in parts if p)
+        count_note = f" You now have {total} {'entry' if total == 1 else 'entries'}." if isinstance(total, int) else ""
+        return f"Done — saved {header} trade to your Journal.{count_note}" if header else f"Done — trade saved to your Journal.{count_note}"
+
     details: list[str] = []
     if symbol:
         details.append(symbol)
@@ -1616,14 +1675,34 @@ def _format_generic_market_reply(
     timeframe_label = timeframe or data.get("timeframe")
     if timeframe_label:
         details.append(f"timeframe {timeframe_label}")
-    if source_timestamp:
-        details.append(f"as of {str(source_timestamp).split('T', 1)[0]}")
+
+    # Build compact freshness tag: "live, 4s" / "8min old" / "2hr old ⚠"
+    freshness_tag: str | None = None
+    stale = isinstance(freshness_seconds, (int, float)) and freshness_seconds > 900
+    if isinstance(freshness_seconds, (int, float)):
+        s = freshness_seconds
+        if s < 60:
+            freshness_tag = f"live, {s:.0f}s"
+        elif s < 3600:
+            freshness_tag = f"{s / 60:.0f}min old"
+        else:
+            freshness_tag = f"{s / 3600:.1f}hr old"
+        if stale:
+            freshness_tag += " ⚠"
+    elif source_timestamp:
+        freshness_tag = f"as of {source_timestamp.split('T', 1)[0]}"
+
+    provenance_parts: list[str] = []
     if provider:
-        details.append(f"source {provider}")
+        provenance_parts.append(provider)
+    if freshness_tag:
+        provenance_parts.append(freshness_tag)
+    if provenance_parts:
+        details.append(" · ".join(provenance_parts))
+
     reply = f"Verified {action} ({label}" + (f"; {'; '.join(details)}" if details else "") + ")."
-    if isinstance(freshness_seconds, (int, float)) and freshness_seconds > 900:
-        age = f"{freshness_seconds / 3600:.1f} hours" if freshness_seconds >= 3600 else f"{freshness_seconds / 60:.1f} minutes"
-        reply += f" Warning: this data is {age} old; refresh market data before treating it as current."
+    if stale:
+        reply += " Warning: refresh market data before treating it as current."
     return reply
 
 
@@ -1777,7 +1856,8 @@ def answer_chat_message(
         repo.set_planner_state(session_id, json.dumps(turn.planner_state, sort_keys=True))
         # _generate_reply delegates action execution to _run_turn_actions;
         # attach its transient trace to the returned ORM object for the API.
-        grounded = grounded and not turn.unavailable  # deterministic fail-safe
+        if not _trace_is_action_only(trace):
+            grounded = grounded and not turn.unavailable  # deterministic fail-safe
         # `screened` is populated only by the run_screen tool — tickers the
         # turn's own message never named, so turn.focus (derived from the
         # user's text) wouldn't otherwise include them, and the frontend's
@@ -1891,7 +1971,8 @@ def stream_chat_message(
                     "AI is currently unavailable, so I can't answer that right now.",
                     False,
                 )
-            grounded = grounded and not turn.unavailable
+            if not _trace_is_action_only(trace):
+                grounded = grounded and not turn.unavailable
             if trace:
                 turn.planner_state["last_tool_result"] = {
                     "tool": trace[-1].get("tool"),
@@ -1901,7 +1982,8 @@ def stream_chat_message(
                 }
             _expire_carried_confirmation(turn)
             repo.set_planner_state(session_id, json.dumps(turn.planner_state, sort_keys=True))
-            grounded = grounded and not turn.unavailable
+            if not _trace_is_action_only(trace):
+                grounded = grounded and not turn.unavailable
             # See answer_chat_message's matching comment — `screened` (from
             # run_screen) is merged into `focus` so the frontend's quick-action
             # buttons pick up tickers the turn's own message never named.
@@ -2462,6 +2544,91 @@ def _build_deterministic_chat_reply(
             action="get_alerts",
             action_tool_arguments={"symbol": focus_symbols[0]} if len(focus_symbols) == 1 else {},
         )
+
+    # Watchlist CRUD — checked last so read-only and intelligence routes take priority.
+    # Multi-step messages ("create X and add Y to it") are left for the AI so it can
+    # orchestrate the full chain; the deterministic path handles single-action turns only.
+    if not _MULTI_STEP_HINT.search(user_content) and _WATCHLIST_REMOVE_FROM_INTENT.search(user_content):
+        if len(focus_symbols) != 1:
+            return "Which ticker should I remove from your watchlist?"
+        return ChatReplyResponse(
+            reply="Verified remove from watchlist",
+            grounded=True,
+            action="remove_from_watchlist",
+            action_symbol=focus_symbols[0],
+            action_watchlist=_extract_watchlist_name(user_content),
+        )
+    if not _MULTI_STEP_HINT.search(user_content) and _WATCHLIST_DELETE_INTENT.search(user_content):
+        return ChatReplyResponse(
+            reply="Verified delete watchlist",
+            grounded=True,
+            action="delete_watchlist",
+            action_watchlist=_extract_watchlist_name(user_content),
+        )
+    if not _MULTI_STEP_HINT.search(user_content) and _WATCHLIST_ADD_INTENT.search(user_content):
+        if len(focus_symbols) != 1:
+            return "Which ticker should I add to your watchlist?"
+        return ChatReplyResponse(
+            reply="Verified add to watchlist",
+            grounded=True,
+            action="add_to_watchlist",
+            action_symbol=focus_symbols[0],
+            action_watchlist=_extract_watchlist_name(user_content),
+        )
+    if not _MULTI_STEP_HINT.search(user_content) and _WATCHLIST_CREATE_INTENT.search(user_content):
+        return ChatReplyResponse(
+            reply="Verified create watchlist",
+            grounded=True,
+            action="create_watchlist",
+            action_watchlist=_extract_watchlist_name(user_content),
+        )
+
+    return None
+
+
+def _run_deterministic_shortcircuit(
+    db,
+    user_content: str,
+    symbol_blocks: list[dict],
+    unavailable: list[str],
+    market_baseline: dict | None,
+    transcript: list[tuple[str, str]],
+    alert_context: dict | None,
+    trace: list[dict] | None,
+    planner_state: dict | None,
+    preferences: dict | None = None,
+    started_at: float | None = None,
+) -> tuple[str, bool, list[str]] | None:
+    """Run the deterministic short-circuit check before the AI call.
+
+    Returns ``(text, grounded, screened)`` when a deterministic reply was
+    built (both the plain-text case and the action case), or ``None`` when
+    the caller should proceed to the AI.  Called from both
+    ``_generate_reply`` and ``_generate_reply_streaming`` so the logic
+    only lives in one place.
+    """
+    deterministic = _build_deterministic_chat_reply(
+        user_content,
+        focus_symbols=[b["symbol"] for b in symbol_blocks],
+        planner_state=planner_state,
+    )
+    if isinstance(deterministic, str):
+        return deterministic, False, []
+    if deterministic is not None:
+        return _run_turn_actions(
+            db,
+            deterministic,
+            symbol_blocks,
+            unavailable,
+            market_baseline,
+            transcript,
+            user_content,
+            alert_context,
+            trace=trace,
+            started_at=started_at,
+            planner_state=planner_state,
+            preferences=preferences,
+        )
     return None
 
 
@@ -2545,28 +2712,13 @@ def _generate_reply(
         if _AMBIGUOUS_REFERENCE.search(user_content) and len(remembered) > 1:
             return f"Which ticker do you mean: {', '.join(remembered[:settings.ai.chat_max_tickers])}?", False, []
 
-    focus_symbols = [b["symbol"] for b in symbol_blocks]
-    deterministic = _build_deterministic_chat_reply(
-        user_content,
-        focus_symbols=focus_symbols,
-        planner_state=planner_state,
+    det = _run_deterministic_shortcircuit(
+        db, user_content, symbol_blocks, unavailable, market_baseline,
+        transcript, alert_context, trace, planner_state,
+        preferences=preferences, started_at=time.monotonic(),
     )
-    if isinstance(deterministic, str):
-        return deterministic, False, []
-    if deterministic is not None:
-        return _run_turn_actions(
-            db,
-            deterministic,
-            symbol_blocks,
-            unavailable,
-            market_baseline,
-            transcript,
-            user_content,
-            alert_context,
-            trace=trace,
-            started_at=time.monotonic(),
-            planner_state=planner_state,
-        )
+    if det is not None:
+        return det
 
     if not ai_manager.enabled:
         _trace_model_route(trace, "fallback", "deterministic")
@@ -2913,6 +3065,18 @@ def _action_was_executed(parsed) -> bool:
     return not (parsed.action in _DESTRUCTIVE_ACTIONS and not parsed.action_confirmed)
 
 
+def _trace_is_action_only(trace: list[dict]) -> bool:
+    """True when every substantive entry in the trace is a completed CRUD
+    action step — no market data fetches, no AI text generations.  The
+    grounded fail-safe (``grounded and not turn.unavailable``) must not
+    fire for these turns: the acted-upon ticker may not be in
+    ``_known_symbols()`` yet (e.g. just being added to a watchlist), but
+    a successful action is not a data-quality problem.
+    """
+    substantive = [e for e in trace if e.get("kind") not in {"context", "regeneration"}]
+    return bool(substantive) and all(e.get("kind") == "step" and e.get("status") == "completed" for e in substantive)
+
+
 def _run_turn_actions(
     db,
     parsed,
@@ -3257,31 +3421,13 @@ def _generate_reply_streaming(
             )
             return
 
-    deterministic = _build_deterministic_chat_reply(
-        turn.user_content,
-        focus_symbols=[b["symbol"] for b in turn.symbol_blocks],
-        planner_state=turn.planner_state,
+    det = _run_deterministic_shortcircuit(
+        db, turn.user_content, turn.symbol_blocks, turn.unavailable,
+        turn.market_baseline, turn.transcript, turn.alert_context,
+        trace, turn.planner_state, preferences=turn.preferences,
     )
-    if isinstance(deterministic, str):
-        yield ("result", (deterministic, False, []))
-        return
-    if deterministic is not None:
-        yield (
-            "result",
-            _run_turn_actions(
-                db,
-                deterministic,
-                turn.symbol_blocks,
-                turn.unavailable,
-                turn.market_baseline,
-                turn.transcript,
-                turn.user_content,
-                turn.alert_context,
-                trace=trace,
-                planner_state=turn.planner_state,
-                preferences=turn.preferences,
-            ),
-        )
+    if det is not None:
+        yield ("result", det)
         return
 
     if not ai_manager.enabled:

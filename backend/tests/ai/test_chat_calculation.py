@@ -120,4 +120,5 @@ def test_chat_market_tool_action_returns_provenance(monkeypatch) -> None:
     assert grounded is True
     assert screened == []
     assert "webull" in text
-    assert "3.2s old" in text
+    # 3.2s is fresh data — no age warning expected (warning only fires above 900s)
+    assert "3.2s old" not in text

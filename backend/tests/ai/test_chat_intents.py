@@ -1094,3 +1094,125 @@ def test_assumption_tool_updates_structured_planner_state() -> None:
     assert grounded is True
     assert "assumption_tracking" in text
     assert planner_state["research_assumptions"][0]["original_statement"].startswith("Break below")
+
+
+# ---------------------------------------------------------------------------
+# Behavioral round-trip tests for tools with no prior coverage
+# ---------------------------------------------------------------------------
+
+def test_signal_explanation_routes_and_formats_reply(monkeypatch) -> None:
+    from backend.ai.chat import _run_action
+
+    monkeypatch.setattr(
+        "backend.ai.chat.default_registry.execute",
+        lambda request: ToolResult(
+            tool_name=request.tool_name,
+            ok=True,
+            data={
+                "symbol": "AAPL",
+                "indicators": {"rsi_14": 54.2, "sma_20": 218.5},
+                "triggers": [
+                    {"indicator": "sma_20", "direction": "bullish", "reason": "price above SMA 20"},
+                ],
+                "sources": [{"name": "trend", "timeframe": "1d"}],
+                "unknowns": [],
+                "provider": "MarketLens signals",
+            },
+            provider="MarketLens signals",
+            source_timestamp="2026-09-23T15:00:00-04:00",
+            freshness_seconds=12.0,
+        ),
+    )
+    parsed = ChatReplyResponse(
+        reply="placeholder",
+        grounded=True,
+        action="signal_explanation",
+        action_tool_arguments={"symbol": "AAPL"},
+    )
+
+    text, grounded, screened = _run_action(None, parsed)
+
+    assert grounded is True
+    assert screened == []
+    assert "signal explanation" in text
+    assert "MarketLens signals" in text
+    # reply must not contain raw JSON or the full data dict
+    assert "{" not in text
+
+
+def test_anomaly_analysis_routes_and_formats_reply(monkeypatch) -> None:
+    from backend.ai.chat import _run_action
+
+    monkeypatch.setattr(
+        "backend.ai.chat.default_registry.execute",
+        lambda request: ToolResult(
+            tool_name=request.tool_name,
+            ok=True,
+            data={
+                "symbol": "TSLA",
+                "anomalies": [
+                    {
+                        "type": "price_return",
+                        "severity": "high",
+                        "value": -4.8,
+                        "z_score": -2.7,
+                        "direction": "down",
+                    }
+                ],
+                "corroborating": [],
+                "unknowns": [],
+                "provider": "MarketLens engine",
+            },
+            provider="MarketLens engine",
+            source_timestamp="2026-09-23T15:00:00-04:00",
+            freshness_seconds=5.0,
+        ),
+    )
+    parsed = ChatReplyResponse(
+        reply="placeholder",
+        grounded=True,
+        action="anomaly_analysis",
+        action_tool_arguments={"symbol": "TSLA"},
+    )
+
+    text, grounded, screened = _run_action(None, parsed)
+
+    assert grounded is True
+    assert screened == []
+    assert "anomaly analysis" in text
+    assert "1 detected anomalies" in text
+    assert "MarketLens engine" in text
+    assert "{" not in text
+
+
+def test_sensitivity_analysis_routes_and_formats_reply(monkeypatch) -> None:
+    """Sensitivity analysis is pure arithmetic — real tool runs end-to-end
+    without any external API call.  Monkeypatching the registry is skipped
+    so this test also validates the tool's own calculation pipeline."""
+    from backend.ai.chat import _run_action
+
+    parsed = ChatReplyResponse(
+        reply="placeholder",
+        grounded=True,
+        action="sensitivity_analysis",
+        action_tool_arguments={
+            "entry_price": 200.0,
+            "stop_price": 190.0,
+            "target_price": 220.0,
+            "quantity": 100,
+            "portfolio_value": 50000.0,
+            "entry_prices": [198.0, 202.0],
+            "stop_prices": [188.0, 192.0],
+            "target_prices": [215.0, 225.0],
+            "quantities": [80, 120],
+            "volatility_percentages": [20.0, 30.0],
+        },
+    )
+
+    text, grounded, screened = _run_action(None, parsed)
+
+    assert grounded is True
+    assert screened == []
+    assert "sensitivity analysis" in text
+    assert "MarketLens calculator" in text
+    assert "{" not in text

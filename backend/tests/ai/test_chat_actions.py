@@ -1636,6 +1636,9 @@ class TestEndToEnd(unittest.TestCase):
         p2 = patch("backend.ai.chat.resolve_turn_symbols", return_value=([], False))
         p2.start()
         self.addCleanup(p2.stop)
+        p2b = patch("backend.ai.chat.extract_unresolved_explicit_symbols", return_value=[])
+        p2b.start()
+        self.addCleanup(p2b.stop)
         p3 = patch("backend.ai.chat.build_market_baseline", return_value={})
         p3.start()
         self.addCleanup(p3.stop)
@@ -1662,10 +1665,14 @@ class TestEndToEnd(unittest.TestCase):
             )
         )
 
-        msg, grounded, *_ = answer_chat_message(self.session_id, "add RIVN to my watchlist")
+        # resolve_turn_symbols is patched to [] in setUp; override here so the
+        # deterministic add_to_watchlist route has RIVN in focus_symbols.
+        with patch("backend.ai.chat.resolve_turn_symbols", return_value=(["RIVN"], False)):
+            msg, grounded, *_ = answer_chat_message(self.session_id, "add RIVN to my watchlist")
 
         self.assertTrue(grounded)
         self.assertIn("RIVN", msg.content)
+        mock_ai.complete.assert_not_called()  # deterministic route — no AI call
         db = self.Session()
         try:
             wl = WatchlistRepository(db).get_watchlists()[0]
