@@ -365,6 +365,122 @@ def test_watchlist_semantics_route_without_model_guessing(monkeypatch) -> None:
     complete.assert_not_called()
 
 
+def test_watchlist_weakness_reports_relative_fallback_when_no_clear_bearish_name(monkeypatch) -> None:
+    complete = Mock()
+    monkeypatch.setattr("backend.ai.chat.ai_manager.complete", complete)
+
+    def execute(request):
+        return ToolResult(
+            tool_name=request.tool_name,
+            ok=True,
+            data={
+                "watchlist_name": "All active watchlists",
+                "concern": "weak",
+                "data_status": "ready",
+                "watchlist_size": 23,
+                "analyzed_symbols": 23,
+                "top_bearish": [],
+                "deteriorating": [],
+                "weakest": [
+                    {
+                        "symbol": "AAPL",
+                        "metric": 2.0,
+                        "metric_label": "directional score",
+                    }
+                ],
+            },
+            provider="MarketLens scanner cache",
+        )
+
+    monkeypatch.setattr("backend.ai.chat.default_registry.execute", execute)
+    text, grounded, _ = _generate_reply(
+        None,
+        [],
+        [],
+        None,
+        [],
+        "Which of my names look weak?",
+        None,
+        False,
+        [],
+        {},
+    )
+
+    assert grounded is True
+    assert "No clearly weak names" in text
+    assert "AAPL" in text
+    complete.assert_not_called()
+
+
+def test_watchlist_tool_persists_server_resolved_scope_for_followups(monkeypatch) -> None:
+    planner_state = {}
+
+    def execute(request):
+        return ToolResult(
+            tool_name=request.tool_name,
+            ok=True,
+            data={
+                "watchlist_name": "All active watchlists",
+                "concern": "weak",
+                "data_status": "ready",
+                "watchlist_size": 2,
+                "analyzed_symbols": 2,
+                "top_bearish": [],
+                "deteriorating": [],
+            },
+            provider="MarketLens scanner cache",
+        )
+
+    monkeypatch.setattr("backend.ai.chat.default_registry.execute", execute)
+    parsed = ChatReplyResponse(
+        reply="Verified semantic route",
+        grounded=True,
+        action="get_watchlist_intelligence",
+        action_tool_arguments={"concern": "weak"},
+    )
+
+    _run_market_tool(None, parsed, planner_state=planner_state)
+
+    assert planner_state["watchlist_scope"] == {
+        "name": "All active watchlists",
+        "aggregate": True,
+        "concern": "weak",
+    }
+
+
+def test_watchlist_scope_error_names_the_preserved_scope(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "backend.ai.chat.default_registry.execute",
+        lambda request: ToolResult(
+            tool_name=request.tool_name,
+            ok=False,
+            error="Watchlist intelligence currently supports the daily scanner timeframe only",
+            failure_kind="validation",
+        ),
+    )
+    parsed = ChatReplyResponse(
+        reply="Verified semantic route",
+        grounded=True,
+        action="get_watchlist_intelligence",
+        action_tool_arguments={"concern": "weak", "timeframe": "1wk"},
+    )
+
+    text, grounded = _run_market_tool(
+        None,
+        parsed,
+        planner_state={
+            "watchlist_scope": {
+                "name": "All active watchlists",
+                "aggregate": True,
+                "concern": "weak",
+            }
+        },
+    )
+
+    assert grounded is False
+    assert 'weekly watchlist intelligence for "All active watchlists"' in text
+
+
 def test_named_watchlist_semantics_preserves_scope(monkeypatch) -> None:
     complete = Mock()
     monkeypatch.setattr("backend.ai.chat.ai_manager.complete", complete)
@@ -406,6 +522,51 @@ def test_named_watchlist_semantics_preserves_scope(monkeypatch) -> None:
     assert "Default" in text
     assert requests[0].tool_name == "get_watchlist_intelligence"
     assert requests[0].arguments == {"concern": "weak", "name": "Default"}
+    complete.assert_not_called()
+
+
+def test_named_strong_watchlist_semantics_preserves_scope(monkeypatch) -> None:
+    complete = Mock()
+    monkeypatch.setattr("backend.ai.chat.ai_manager.complete", complete)
+    requests = []
+
+    def execute(request):
+        requests.append(request)
+        return ToolResult(
+            tool_name=request.tool_name,
+            ok=True,
+            data={
+                "watchlist_name": "Default",
+                "concern": "strong",
+                "data_status": "ready",
+                "watchlist_size": 2,
+                "analyzed_symbols": 2,
+                "top_bullish": [{"symbol": "MSFT", "change_pct": 2.1, "score": 18}],
+                "relative_strength": [],
+            },
+            provider="MarketLens scanner cache",
+            source_timestamp="2026-09-23T14:00:00-04:00",
+        )
+
+    monkeypatch.setattr("backend.ai.chat.default_registry.execute", execute)
+    text, grounded, _ = _generate_reply(
+        None,
+        [],
+        [],
+        None,
+        [],
+        "Which names look strongest in Default watchlist?",
+        None,
+        False,
+        [],
+        {},
+    )
+
+    assert grounded is True
+    assert "Default" in text
+    assert "MSFT" in text
+    assert requests[0].tool_name == "get_watchlist_intelligence"
+    assert requests[0].arguments == {"concern": "strong", "name": "Default"}
     complete.assert_not_called()
 
 

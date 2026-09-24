@@ -1206,6 +1206,23 @@ possible natural-language expression is deterministic. Unsupported or
 open-ended questions still use the bounded model planner, and any new intent
 must add a canonical route, a verified tool contract, and evidence tests.
 
+The follow-up scope-continuity gap is also closed. Bounded planner state now
+persists the server-resolved named or aggregate watchlist scope and concern,
+so a timeframe follow-up reuses the prior scope without silently broadening it
+or running unrelated baseline/model work. Unsupported weekly watchlist
+requests return a fast explanation naming the preserved scope. The focused
+semantic-router/Chat/tool/verifier regression slice passes with `163` tests;
+browser verification confirmed the aggregate `All active watchlists` scope is
+retained across the follow-up.
+
+Weak-name responses now also use a bounded relative-weakness fallback when
+coverage is complete but no name has an outright bearish daily move or
+deterioration ranking. The response labels those names as relative weakest
+scanner scores and explicitly says when no name is clearly weak.
+When cache snapshots omit composite scores but retain trend signals, the
+fallback ranks the signed multi-timeframe direction and does not render a
+misleading zero composite score.
+
 ---
 
 ## Chat review fixes (2026-09-23)

@@ -119,7 +119,8 @@ def test_market_tools_compute_from_provider_bars(monkeypatch) -> None:
     assert bars.fallback is True  # "test" != configured primary provider
     assert indicator.value == 118
     assert indicator.fallback is True  # inherited from get_bars_tool's payload
-    assert levels.support == 108
+    assert levels.current_price == 120
+    assert levels.support == 117
     assert levels.resistance == 121
     quote = get_quote_tool(SymbolRequest(symbol="AAPL"))
     assert quote.selected_provider == "webull"

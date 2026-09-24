@@ -82,6 +82,7 @@ _SYMBOL_OVERVIEW = re.compile(
     r"\b(?:tell me about|what do you think of|give me (?:a )?read on)\b)",
     re.I,
 )
+_FOLLOWUP_SYMBOL_OVERVIEW = re.compile(r"\bwhat\s+about\b", re.I)
 _KNOWN_INDICATOR = re.compile(r"\b(?P<indicator>sma|ema|rsi|change(?:\s+percent)?)\b", re.I)
 _CONFLUENCE = re.compile(r"\b(?:confluence|multi[- ]?timeframe|mtf|alignment)\b", re.I)
 _RELATIVE_STRENGTH = re.compile(r"\b(?:relative strength|outperform(?:ing|er)?|underperform(?:ing|er)?)\b", re.I)
@@ -97,6 +98,30 @@ _MARKET_OVERVIEW = re.compile(
     r"market looking)\b",
     re.I,
 )
+_WATCHLIST_TIMEFRAME = re.compile(
+    r"\b(?:daily|weekly|1d|1wk)\s*(?:timeframe|time frame|view|data)?\b",
+    re.I,
+)
+
+
+def _watchlist_scope_followup(user_content: str, planner_state: dict | None) -> SemanticRoute | None:
+    """Reuse the last verified watchlist scope for a timeframe follow-up."""
+    if not planner_state or not _WATCHLIST_TIMEFRAME.search(user_content):
+        return None
+    scope = planner_state.get("watchlist_scope")
+    if not isinstance(scope, dict):
+        return None
+    concern = str(scope.get("concern") or "all")
+    if concern not in {"weak", "strong", "deteriorating", "underperforming", "all"}:
+        concern = "all"
+    timeframe = re.search(r"\b(weekly|1wk)\b", user_content, re.I)
+    arguments: dict[str, object] = {
+        "concern": concern,
+        "timeframe": "1wk" if timeframe else "1d",
+    }
+    if not scope.get("aggregate") and isinstance(scope.get("name"), str) and scope["name"].strip():
+        arguments["name"] = scope["name"].strip()
+    return SemanticRoute(action="get_watchlist_intelligence", arguments=arguments)
 
 
 def _watchlist_route(user_content: str) -> SemanticRoute | None:
@@ -121,6 +146,10 @@ def _watchlist_route(user_content: str) -> SemanticRoute | None:
     arguments: dict[str, object] = {"concern": concern}
     if named_scope:
         arguments["name"] = named_scope.group("name").strip()
+    timeframe = re.search(r"\b(daily|daily timeframe|1d|weekly|weekly timeframe|1wk)\b", user_content, re.I)
+    if timeframe:
+        value = timeframe.group(1).lower().replace(" ", "")
+        arguments["timeframe"] = "1wk" if value in {"weekly", "weeklytimeframe", "1wk"} else "1d"
 
     return SemanticRoute(
         action="get_watchlist_intelligence",
@@ -160,6 +189,10 @@ def route_semantic_intent(
     route = _watchlist_route(text)
     if route is not None:
         return route
+    if not symbols:
+        route = _watchlist_scope_followup(text, planner_state)
+        if route is not None:
+            return route
     if not symbols and _MARKET_OVERVIEW.search(text):
         return SemanticRoute(action="get_market_context")
     if _CHANGE.search(text):
@@ -203,7 +236,7 @@ def route_semantic_intent(
         return _single_symbol_route("get_confluence", symbols)
     if _RELATIVE_STRENGTH.search(text):
         return _single_symbol_route("get_relative_strength", symbols)
-    if _SYMBOL_OVERVIEW.search(text) and len(symbols) == 1 and re.search(
+    if (_SYMBOL_OVERVIEW.search(text) or _FOLLOWUP_SYMBOL_OVERVIEW.search(text)) and len(symbols) == 1 and re.search(
         rf"\b{re.escape(symbols[0])}\b", text, re.I
     ):
         return _single_symbol_route("get_trend", symbols)

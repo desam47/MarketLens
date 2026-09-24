@@ -35,6 +35,46 @@ def test_named_watchlist_scope_is_preserved() -> None:
         assert route.arguments == {"concern": concern, "name": name}
 
 
+def test_watchlist_timeframe_scope_is_preserved() -> None:
+    route = route_semantic_intent("Which of my names are weakest on the daily timeframe?")
+
+    assert route is not None
+    assert route.arguments == {"concern": "weak", "timeframe": "1d"}
+
+
+def test_watchlist_timeframe_followup_reuses_named_scope() -> None:
+    route = route_semantic_intent(
+        "What about the weekly timeframe?",
+        planner_state={
+            "watchlist_scope": {
+                "name": "Default",
+                "aggregate": False,
+                "concern": "weak",
+            }
+        },
+    )
+
+    assert route is not None
+    assert route.action == "get_watchlist_intelligence"
+    assert route.arguments == {"concern": "weak", "timeframe": "1wk", "name": "Default"}
+
+
+def test_watchlist_timeframe_followup_reuses_aggregate_scope() -> None:
+    route = route_semantic_intent(
+        "What about the weekly timeframe?",
+        planner_state={
+            "watchlist_scope": {
+                "name": "All active watchlists",
+                "aggregate": True,
+                "concern": "weak",
+            }
+        },
+    )
+
+    assert route is not None
+    assert route.arguments == {"concern": "weak", "timeframe": "1wk"}
+
+
 def test_common_symbol_questions_map_to_existing_typed_tools() -> None:
     cases = {
         "why did AAPL move today?": "why_did_it_move",
@@ -47,6 +87,7 @@ def test_common_symbol_questions_map_to_existing_typed_tools() -> None:
         "Tell me about AAPL": "get_trend",
         "Why is AAPL weak?": "get_trend",
         "How did AAPL do today?": "get_trend",
+        "What about AAPL?": "get_trend",
     }
 
     for question, action in cases.items():

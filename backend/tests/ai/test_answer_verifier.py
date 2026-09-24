@@ -52,6 +52,29 @@ def test_generic_tool_reply_can_verify_freshness_metadata() -> None:
     assert result.issues == []
 
 
+def test_failed_scoped_action_downgrades_verification_even_with_baseline_evidence() -> None:
+    result = verify_answer(
+        'I could not retrieve that safely: Watchlist was not found or is inactive.',
+        [
+            {"tool": "get_market_context", "ok": True, "evidence_values": {"confidence": 0.8}},
+            {
+                "kind": "step",
+                "tool": "get_watchlist_intelligence",
+                "status": "failed",
+                "detail": "watchlist lookup failed",
+            },
+            {
+                "tool": "get_watchlist_intelligence",
+                "ok": False,
+                "error": "Watchlist was not found or is inactive",
+            },
+        ],
+        user_content="Which names look weak in Missing watchlist?",
+    )
+
+    assert result.status == "degraded"
+
+
 @pytest.mark.parametrize("case", load_cases()["cases"], ids=lambda case: case["id"])
 def test_phase_5_8_versioned_evaluation_case(case: dict) -> None:
     result = verify_answer(

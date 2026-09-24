@@ -325,9 +325,18 @@ def verify_answer(
         # evidence; the separate action/confirmation contract remains the
         # source of truth for whether anything executed.
         completed = any(item.get("status") == "completed" for item in action_steps)
+        incomplete = any(
+            item.get("status") != "completed"
+            for item in action_steps
+        )
         return AnswerVerification(
             version=VERIFIER_VERSION,
-            status="verified" if completed or successful or trusted_server_reply else "degraded",
+            # A server-authored clarification is trustworthy prose, but it is
+            # not market evidence. Keep it out of the VERIFIED label unless a
+            # tool actually completed without an incomplete action step. A
+            # failed scoped action must remain visibly limited even when the
+            # turn also collected unrelated baseline evidence.
+            status="degraded" if incomplete else "verified" if completed or successful else "degraded",
             issues=[],
             evidence_refs=evidence_refs,
             claim_count=0,

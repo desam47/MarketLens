@@ -72,7 +72,7 @@ from backend.ai.analyze import analyze_symbol
 from backend.ai.answer_verifier import assign_evidence_ids, verify_answer
 from backend.ai.calculator import CalculationRequest
 from backend.ai.chat_observability import build_turn_observability, sanitize_arguments
-from backend.ai.chat_symbols import resolve_turn_symbols
+from backend.ai.chat_symbols import extract_unresolved_explicit_symbols, resolve_turn_symbols
 from backend.ai.context import InsufficientDataError, build_context
 from backend.ai.manager import ai_manager
 from backend.ai.market_baseline import build_market_baseline
@@ -124,6 +124,10 @@ _MULTI_STEP_HINT = re.compile(
 )
 _AMBIGUOUS_REFERENCE = re.compile(
     r"\b(it|that stock|that ticker|the previous ticker|this one|that one)\b", re.I
+)
+_AMBIGUOUS_RANKING_REFERENCE = re.compile(
+    r"\b(?:which one|which name|who)\b.*\b(?:weakest|strongest|best|worst|laggard|leader)\b",
+    re.I,
 )
 # Per-turn budget defaults (plan 5.3.1); settings override each one.
 _MAX_TOOL_CALLS = 5
@@ -985,6 +989,15 @@ def _prepare_turn(
         else []
     )
     symbols, capped = resolve_turn_symbols(user_content, transcript, base)
+    ambiguous_ranking = bool(_AMBIGUOUS_RANKING_REFERENCE.search(user_content))
+    if ambiguous_ranking:
+        # Do not inherit the prior chart ticker for an unscoped ranking
+        # follow-up. It asks for a choice of ranking scope, not a symbol
+        # overview, and must reach the clarification path without context or
+        # model latency.
+        symbols = []
+        capped = False
+    rejected_symbols = extract_unresolved_explicit_symbols(user_content, symbols)
     remembered_watchlist = planner_state.get("watchlist")
 
     # A specific, real, named watchlist ("analyze my X watchlist") gets
@@ -1016,12 +1029,23 @@ def _prepare_turn(
 
     single = len(symbols) == 1
 
+    # Resolve a typed route before assembling optional context. Watchlist
+    # intelligence is already deterministic and scanner-backed, so it does
+    # not need the unrelated market baseline. This also keeps a scoped
+    # timeframe follow-up on the fast semantic path.
+    pre_route = route_semantic_intent(
+        user_content,
+        focus_symbols=symbols,
+        planner_state=planner_state,
+    )
+
     # What this turn actually asks for — skip the rest.
     want_news = single and bool(_NEWS_INTENT.search(user_content))
     want_funda = single and bool(_FUNDA_INTENT.search(user_content))
     want_stats = bool(_STATS_INTENT.search(user_content))
     want_baseline = (
-        (not symbols and not _CALCULATION_HINT.search(user_content))
+        (not symbols and not rejected_symbols and not ambiguous_ranking and not _CALCULATION_HINT.search(user_content)
+         and not (pre_route is not None and pre_route.action == "get_watchlist_intelligence"))
         or bool(_MARKET_INTENT.search(user_content))
         or bool(_ACTION_INTENT.search(user_content))
     )
@@ -1035,7 +1059,7 @@ def _prepare_turn(
     # The market baseline and each per-symbol context are independent
     # blocking calls (DB reads, a scan, aux-data HTTP) — fan them out.
     symbol_blocks: list[dict] = []
-    unavailable: list[str] = []
+    unavailable: list[str] = list(rejected_symbols)
     market_baseline: dict | None = None
     with ThreadPoolExecutor(max_workers=4) as ex:
         baseline_fut = ex.submit(build_market_baseline) if want_baseline else None
@@ -1088,8 +1112,12 @@ def _prepare_turn(
             effective_chart_state["session"] = regeneration_scope["session"]
     next_state = {
         "current_symbols": current_symbols,
+        "rejected_symbols": rejected_symbols,
         "previous_ticker": previous_ticker,
         "watchlist": remembered_watchlist,
+        # Carry forward only the bounded, server-resolved watchlist scope so
+        # follow-up timeframe questions cannot broaden or guess the scope.
+        "watchlist_scope": planner_state.get("watchlist_scope"),
         "date_range": turn_date_range or planner_state.get("date_range"),
         # Only a date named in this message scopes tools; the remembered
         # date_range above is context, not a silent filter on later turns.
@@ -2191,6 +2219,16 @@ def _generate_reply(
     When the AI's reply asks for ``wants_reanalysis``, runs the chat's
     one tool (see module docstring) for the named ticker instead.
     """
+    if _AMBIGUOUS_RANKING_REFERENCE.search(user_content):
+        if trace is not None:
+            trace.append({"kind": "server_reply", "trusted": True})
+        return (
+            "Do you mean the weakest name from your last watchlist result, "
+            "or the weakest name across the market? Please specify a watchlist "
+            "or say market-wide.",
+            False,
+            [],
+        )
     # Friendly degrade for a legacy single-symbol session whose only
     # ticker has no data (keeps the pre-universal wording).
     if (
@@ -2217,6 +2255,21 @@ def _generate_reply(
             if trace is not None:
                 trace.append({"kind": "server_reply", "trusted": True})
             return _watchlist_list_reply(db), True, []
+        if unavailable and (planner_state or {}).get("rejected_symbols"):
+            names = ", ".join(unavailable)
+            if trace is not None:
+                trace.append({"kind": "server_reply", "trusted": True})
+            return f"I couldn't find current verified market data for {names}. Please check the ticker and try again.", False, []
+        if _AMBIGUOUS_RANKING_REFERENCE.search(user_content):
+            if trace is not None:
+                trace.append({"kind": "server_reply", "trusted": True})
+            return (
+                "Do you mean the weakest name from your last watchlist result, "
+                "or the weakest name across the market? Please specify a watchlist "
+                "or say market-wide.",
+                False,
+                [],
+            )
         remembered = (planner_state or {}).get("current_symbols", [])
         if _AMBIGUOUS_REFERENCE.search(user_content) and len(remembered) > 1:
             return f"Which ticker do you mean: {', '.join(remembered[:settings.ai.chat_max_tickers])}?", False, []
@@ -2860,6 +2913,20 @@ def _generate_reply_streaming(
     reanalysis-tool path it differs from what was streamed, and the
     caller overwrites the bubble with it.
     """
+    if _AMBIGUOUS_RANKING_REFERENCE.search(turn.user_content):
+        if trace is not None:
+            trace.append({"kind": "server_reply", "trusted": True})
+        yield (
+            "result",
+            (
+                "Do you mean the weakest name from your last watchlist result, "
+                "or the weakest name across the market? Please specify a watchlist "
+                "or say market-wide.",
+                False,
+                [],
+            ),
+        )
+        return
     if (
         not turn.symbol_blocks
         and turn.unavailable
@@ -2901,6 +2968,15 @@ def _generate_reply_streaming(
             if trace is not None:
                 trace.append({"kind": "server_reply", "trusted": True})
             yield ("result", (_watchlist_list_reply(db), True, []))
+            return
+        if turn.unavailable and turn.planner_state.get("rejected_symbols"):
+            names = ", ".join(turn.unavailable)
+            if trace is not None:
+                trace.append({"kind": "server_reply", "trusted": True})
+            yield (
+                "result",
+                (f"I couldn't find current verified market data for {names}. Please check the ticker and try again.", False, []),
+            )
             return
         remembered = turn.planner_state.get("current_symbols", [])
         if _AMBIGUOUS_REFERENCE.search(turn.user_content) and len(remembered) > 1:
@@ -3852,10 +3928,10 @@ def _visual_trace_payload(action: str, data: dict) -> tuple[str, dict] | None:
     if action == "get_watchlist_intelligence":
         concern = str(data.get("concern") or "all")
         sections = {
-            "weak": ("top_bearish", "deteriorating"),
+            "weak": ("top_bearish", "deteriorating", "weakest"),
             "strong": ("top_bullish", "relative_strength"),
-            "deteriorating": ("deteriorating",),
-            "underperforming": ("top_bearish", "deteriorating"),
+            "deteriorating": ("deteriorating", "weakest"),
+            "underperforming": ("top_bearish", "deteriorating", "weakest"),
             "all": ("top_bearish", "top_bullish", "deteriorating"),
         }
         items: list[dict[str, object]] = []
@@ -3984,15 +4060,17 @@ def _format_watchlist_intelligence(data: dict) -> str:
         "all": "Watchlist intelligence",
     }
     sections = {
-        "weak": ("top_bearish", "deteriorating"),
+        "weak": ("top_bearish", "deteriorating", "weakest"),
         "strong": ("top_bullish", "relative_strength", "mtf_alignment"),
-        "deteriorating": ("deteriorating", "top_bearish"),
-        "underperforming": ("top_bearish", "deteriorating"),
+        "deteriorating": ("deteriorating", "top_bearish", "weakest"),
+        "underperforming": ("top_bearish", "deteriorating", "weakest"),
         "all": ("top_bearish", "top_bullish", "deteriorating", "relative_strength"),
     }
 
     rows: list[str] = []
     seen: set[str] = set()
+    used_relative_weakness = False
+    clear_weakness = False
     for section in sections.get(concern, sections["all"]):
         for item in data.get(section, []) or []:
             if not isinstance(item, dict):
@@ -4001,6 +4079,12 @@ def _format_watchlist_intelligence(data: dict) -> str:
             if not symbol or symbol in seen:
                 continue
             seen.add(symbol)
+            if section == "weakest":
+                used_relative_weakness = True
+                if isinstance(item.get("metric"), (int, float)) and item["metric"] < 0:
+                    clear_weakness = True
+            else:
+                clear_weakness = True
             evidence: list[str] = []
             change_pct = item.get("change_pct")
             if isinstance(change_pct, (int, float)):
@@ -4025,13 +4109,21 @@ def _format_watchlist_intelligence(data: dict) -> str:
     status = data.get("data_status") or "unknown"
     analyzed = data.get("analyzed_symbols")
     total = data.get("watchlist_size")
+    timeframe = str(data.get("timeframe") or "").strip().lower()
+    timeframe_label = {"1d": "daily", "1wk": "weekly"}.get(timeframe)
     coverage = f"Coverage: {analyzed} of {total} names have scanner data." if isinstance(analyzed, int) and isinstance(total, int) else None
     warnings = [str(item) for item in (data.get("warnings") or []) if item]
 
     if not rows:
         answer = f"I couldn't identify any {concern} names in \"{watchlist_name}\" from the current scanner cache."
+    elif used_relative_weakness and not clear_weakness and concern in {"weak", "underperforming"}:
+        scope = f" on the {timeframe_label} timeframe" if timeframe_label else ""
+        answer = f"No clearly weak names were found in \"{watchlist_name}\". Relative weakest scanner scores{scope}:\n" + "\n".join(rows)
     else:
-        answer = f"{labels.get(concern, labels['all'])} in \"{watchlist_name}\":\n" + "\n".join(rows)
+        scope = f" on the {timeframe_label} timeframe" if timeframe_label else ""
+        answer = f"{labels.get(concern, labels['all'])} in \"{watchlist_name}\"{scope}:\n" + "\n".join(rows)
+    if not rows and timeframe_label:
+        answer += f" Timeframe: {timeframe_label}."
     if coverage:
         answer += f"\n{coverage}"
     if status != "ready":
@@ -4112,6 +4204,19 @@ def _run_market_tool(
                 "provider_request_count": 0,
                 "fallback": result.fallback,
             })
+        if parsed.action == "get_watchlist_intelligence":
+            scope = str(
+                arguments.get("name")
+                or (planner_state or {}).get("watchlist_scope", {}).get("name")
+                or "All active watchlists"
+            )
+            timeframe = str(arguments.get("timeframe") or "1d").lower()
+            timeframe_label = {"1d": "daily", "1wk": "weekly"}.get(timeframe, timeframe)
+            return (
+                f'I couldn\'t retrieve {timeframe_label} watchlist intelligence for "{scope}": '
+                f"{result.error}",
+                False,
+            )
         return f"I couldn't retrieve that safely: {result.error}", False
     freshness = (
         f"{result.freshness_seconds:.1f}s old"
@@ -4154,6 +4259,15 @@ def _run_market_tool(
         records = result.data.get("assumptions")
         if isinstance(records, list):
             planner_state["research_assumptions"] = records[:200]
+    if parsed.action == "get_watchlist_intelligence" and planner_state is not None:
+        # Persist only the server-resolved scope and concern. The next
+        # follow-up may reuse it, but raw scanner rows never enter memory.
+        resolved_name = str(result.data.get("watchlist_name") or "").strip()
+        planner_state["watchlist_scope"] = {
+            "name": resolved_name or None,
+            "aggregate": resolved_name.lower() == "all active watchlists",
+            "concern": str(result.data.get("concern") or arguments.get("concern") or "all"),
+        }
     if parsed.action == "get_watchlist_intelligence":
         return _format_watchlist_intelligence(result.data), True
     if parsed.action == "get_market_context":
@@ -4187,6 +4301,22 @@ def _run_market_tool(
         timeframe = result.timeframe or arguments.get("timeframe") or "1d"
         return f"Verified {symbol} trend ({timeframe}): " + "; ".join(details) + ".", True
     if parsed.action == "compare_symbols" and isinstance(result.data.get("rankings"), list):
+        if isinstance(result.freshness_seconds, (int, float)) and result.freshness_seconds > 900:
+            age = f"{result.freshness_seconds / 3600:.1f} hours" if result.freshness_seconds >= 3600 else f"{result.freshness_seconds / 60:.1f} minutes"
+            # Do not persist/render the stale ranking table as if it were a
+            # usable result. Keep the failed evidence record so the UI can
+            # explain why the comparison was withheld.
+            if trace:
+                trace[-1]["ok"] = False
+                trace[-1]["error"] = "Comparison bars are stale"
+                trace[-1]["failure_kind"] = "stale"
+                trace[-1].pop("visual_type", None)
+                trace[-1].pop("visual_data", None)
+            return (
+                "I couldn't verify that comparison because the available comparison bars "
+                f"are {age} old. Refresh market data and retry.",
+                False,
+            )
         metric = str(result.data.get("metric") or arguments.get("metric") or "value")
         metric_labels = {
             "return_percent": "return",

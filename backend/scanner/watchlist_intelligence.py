@@ -111,10 +111,22 @@ def _mtf_counts(result: ScanResult) -> tuple[int, int]:
     return bullish, bearish
 
 
+def _directional_score(result: ScanResult) -> float | None:
+    """Return a comparable directional score when scanner inputs exist."""
+    scores = result.scores
+    values = [
+        float(scores[key])
+        for key in ("momentum", "macd", "rsi")
+        if isinstance(scores.get(key), (int, float))
+    ]
+    return sum(values) / len(values) if values else None
+
+
 def build_watchlist_intelligence(
     results: list[ScanResult],
     *,
     watchlist_size: int,
+    timeframe: str = "1d",
     session_scope: str = "all",
     session_snapshots: Mapping[str, Mapping[str, Any]] | None = None,
     missing_session_symbols: list[str] | None = None,
@@ -185,6 +197,54 @@ def build_watchlist_intelligence(
                 details=rank.metrics,
             ))
 
+    # A name can be relatively weakest even when every name is up on the
+    # selected day and none qualifies for the explicitly bearish or
+    # deteriorating buckets. Keep this as a separate fallback so callers can
+    # distinguish relative weakness from an outright bearish move.
+    weakest = []
+    for result in results:
+        score = _directional_score(result)
+        if score is None:
+            continue
+        weakest.append(_entry(
+            result,
+            session_snapshots,
+            session_scope=session_scope,
+            metric=score,
+            metric_label="directional score",
+            details={"directional_score": score, "relative_only": True},
+        ))
+    weakest.sort(key=lambda item: float(item.get("metric") or 0))
+    weakest = weakest[:top_n]
+
+    # API-mode/cache snapshots can carry trend signals while omitting the
+    # composite indicator scores. In that case, use the signed MTF direction
+    # as the evidence-backed fallback instead of treating full coverage as an
+    # empty answer.
+    if not weakest:
+        for result in results:
+            bullish_count, bearish_count = _mtf_counts(result)
+            if not bullish_count and not bearish_count:
+                continue
+            entry = _entry(
+                result,
+                session_snapshots,
+                session_scope=session_scope,
+                metric=float(bullish_count - bearish_count),
+                metric_label="multi-timeframe direction score",
+                details={
+                    "bullish_timeframes": bullish_count,
+                    "bearish_timeframes": bearish_count,
+                    "relative_only": True,
+                },
+            )
+            # This cache path has no composite score; do not render the
+            # zero-value placeholder beside the meaningful MTF metric.
+            entry["score"] = None
+            weakest.append(entry)
+        weakest.sort(key=lambda item: float(item.get("metric") or 0))
+        weakest = weakest[:top_n]
+
     sector_groups: dict[str, list[tuple[str, float]]] = defaultdict(list)
     unmapped_sector_symbols = 0
     for result, view in price_entries:
@@ -226,6 +286,7 @@ def build_watchlist_intelligence(
         "data_status": status,
         "watchlist_size": watchlist_size,
         "analyzed_symbols": ready_count,
+        "timeframe": timeframe,
         "session_scope": session_scope,
         "price_basis": (
             "latest scanner quote and its scanner baseline"
@@ -239,6 +300,7 @@ def build_watchlist_intelligence(
         "top_bearish": [_entry(result, session_snapshots, session_scope=session_scope, metric=view["change_pct"], metric_label="change %") for result, view in bearish],
         "breakouts": [_entry(result, session_snapshots, session_scope=session_scope, metric=_number(result.indicator_values.get("breakout_pct_20")), metric_label="20-bar breakout %") for result in breakouts[:top_n]],
         "deteriorating": deterioration,
+        "weakest": weakest,
         "volume_spikes": [_entry(result, session_snapshots, session_scope=session_scope, metric=_number(result.indicator_values.get("volume_ratio")), metric_label="volume / trailing average") for result in volume_spikes[:top_n]],
         "relative_strength": [_entry(result, session_snapshots, session_scope=session_scope, metric=value[1], metric_label=f"relative strength vs {value[0]}", details={"benchmark": value[0]}) for result, value in relative_strength[:top_n]],
         "mtf_alignment": [_entry(result, session_snapshots, session_scope=session_scope, metric=float(max(bullish_count, bearish_count)), metric_label="confirmed timeframes", details={"direction": "bullish" if bullish_count > bearish_count else "bearish", "bullish_timeframes": bullish_count, "bearish_timeframes": bearish_count}) for result, bullish_count, bearish_count in mtf_alignment[:top_n]],

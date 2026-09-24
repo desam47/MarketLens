@@ -201,6 +201,10 @@ class WatchlistIntelligenceRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=100)
     watchlist_id: int | None = Field(default=None, ge=1)
     concern: Literal["weak", "strong", "deteriorating", "underperforming", "all"] = "all"
+    # Scanner intelligence is calculated from the daily scanner snapshot. The
+    # explicit field keeps a user's timeframe scope visible in the evidence
+    # and leaves room for a future weekly scanner without silently dropping it.
+    timeframe: Literal["1d", "1wk"] = "1d"
     session_scope: Literal["all", "none"] = "all"
     limit: int = Field(default=5, ge=1, le=10)
 
@@ -705,10 +709,20 @@ def get_indicator_tool(request: IndicatorRequest) -> BaseModel:
 def get_support_resistance_tool(request: BarsRequest) -> BaseModel:
     payload = get_bars_tool(request)
     bars = payload.bars
+    closes = [float(bar["close"]) for bar in bars if bar.get("close") is not None]
+    if not closes:
+        raise ValueError(f"No closing prices available for {request.symbol.upper()}")
+    current_price = closes[-1]
+    lows = [float(bar["low"]) for bar in bars if bar.get("low") is not None and float(bar["low"]) < current_price]
+    highs = [float(bar["high"]) for bar in bars if bar.get("high") is not None and float(bar["high"]) > current_price]
     return _Payload(
         **payload.model_dump(),
-        support=min(float(bar["low"]) for bar in bars),
-        resistance=max(float(bar["high"]) for bar in bars),
+        current_price=current_price,
+        # Use the nearest observed levels around the latest close. A global
+        # min/max can put resistance below price (or support above it), which
+        # is unsafe when Chat turns the result into trader-facing prose.
+        support=max(lows) if lows else None,
+        resistance=min(highs) if highs else None,
     )
 
 
@@ -2197,6 +2211,9 @@ def get_watchlist_intelligence_tool(request: WatchlistIntelligenceRequest) -> Ba
     from backend.scanner.scanner import market_scanner
     from backend.scanner.watchlist_intelligence import build_watchlist_intelligence
 
+    if request.timeframe != "1d":
+        raise ValueError("Watchlist intelligence currently supports the daily scanner timeframe only")
+
     db = SessionLocal()
     try:
         repository = WatchlistRepository(db)
@@ -2252,12 +2269,16 @@ def get_watchlist_intelligence_tool(request: WatchlistIntelligenceRequest) -> Ba
             "All active watchlists" if is_aggregate else selected_watchlists[0].name
         )
         generated_at = datetime.now(UTC).isoformat()
-        payload = build_watchlist_intelligence(
-            results,
-            watchlist_size=len(symbols),
-            session_scope=request.session_scope,
-            top_n=request.limit,
-        )
+        briefing_kwargs = {
+            "watchlist_size": len(symbols),
+            "session_scope": request.session_scope,
+            "top_n": request.limit,
+        }
+        # Keep the existing builder call contract for the default daily
+        # scanner while still carrying a non-default explicit scope.
+        if request.timeframe != "1d":
+            briefing_kwargs["timeframe"] = request.timeframe
+        payload = build_watchlist_intelligence(results, **briefing_kwargs)
         warnings = list(payload.get("warnings") or [])
         if scan_error:
             warnings.append(scan_error)

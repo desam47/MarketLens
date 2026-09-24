@@ -64,6 +64,43 @@ def test_no_session_never_silently_falls_back_to_all_session_movers() -> None:
     assert any("No market session is selected" in warning for warning in briefing["warnings"])
 
 
+def test_weakness_has_relative_fallback_when_no_name_is_down() -> None:
+    strongest = _result("MSFT", 1.5)
+    weakest = _result("AAPL", 0.8)
+    strongest.scores = {"momentum": 8.0, "rsi": 4.0}
+    weakest.scores = {"momentum": 1.0, "rsi": 1.0}
+
+    briefing = build_watchlist_intelligence(
+        [strongest, weakest], watchlist_size=2
+    )
+
+    assert briefing["top_bearish"] == []
+    assert briefing["deteriorating"] == []
+    assert briefing["weakest"][0]["symbol"] == "AAPL"
+    assert briefing["weakest"][0]["metric"] == 1.0
+
+
+def test_weakness_falls_back_to_multi_timeframe_signals_when_scores_are_missing() -> None:
+    aapl = _result("AAPL", 0.5)
+    msft = _result("MSFT", 0.7)
+    aapl.scores = {}
+    msft.scores = {}
+    aapl.trend_signals = {
+        "ONE_DAY": {"direction": "downtrend", "confidence": 0.9},
+        "ONE_WEEK": {"direction": "downtrend", "confidence": 0.8},
+    }
+    msft.trend_signals = {
+        "ONE_DAY": {"direction": "uptrend", "confidence": 0.9},
+    }
+
+    briefing = build_watchlist_intelligence([aapl, msft], watchlist_size=2)
+
+    assert briefing["weakest"][0]["symbol"] == "AAPL"
+    assert briefing["weakest"][0]["metric_label"] == "multi-timeframe direction score"
+    assert briefing["weakest"][0]["metric"] == -2.0
+    assert briefing["weakest"][0]["score"] is None
+
+
 def test_cold_or_partial_cache_is_reported_instead_of_triggering_a_scan() -> None:
     briefing = build_watchlist_intelligence([], watchlist_size=3)
 

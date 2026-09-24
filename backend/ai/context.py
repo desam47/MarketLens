@@ -344,7 +344,7 @@ def _sector_context(
     return sector_alignment
 
 
-def _sr_context(sym: str, timeframe: str) -> dict[str, Any]:
+def _sr_context(sym: str, timeframe: str, current_price: float | None = None) -> dict[str, Any]:
     """Step 7 — Support / resistance.
 
     Found live 2026-09-10: this imported a `support_resistance_engine`
@@ -388,7 +388,17 @@ def _sr_context(sym: str, timeframe: str) -> dict[str, Any]:
                 sr_bars, symbol=sym, timeframe=timeframe, reference_bars=reference_bars
             )
             latest_close = sr_result.latest_close
-            if latest_close is not None:
+            # A live quote can move beyond the last persisted bar. Use it as
+            # the side-of-market anchor when it is plausibly the same series;
+            # ignore an obviously mismatched quote in offline/test data.
+            anchor_price = latest_close
+            if (
+                current_price is not None
+                and latest_close is not None
+                and latest_close * 0.8 <= current_price <= latest_close * 1.2
+            ):
+                anchor_price = current_price
+            if anchor_price is not None:
                 # Bucket by TYPE semantics, not by price vs close. Found
                 # live 2026-09-16: a `swing_high` is resistance by
                 # definition — price was rejected there — but NVDA's close
@@ -441,8 +451,12 @@ def _sr_context(sym: str, timeframe: str) -> dict[str, Any]:
                         bucket = supports
                     else:
                         # consolidation_zone — no structural side
-                        bucket = supports if level.price <= latest_close else resistances
+                        bucket = supports if level.price <= anchor_price else resistances
                     bucket.append(entry)
+                # Do not emit a structural level on the wrong side of the
+                # live price as current support/resistance.
+                supports = [level for level in supports if level["price"] <= anchor_price]
+                resistances = [level for level in resistances if level["price"] >= anchor_price]
                 sr = {
                     "supports": supports[:3],
                     "resistances": resistances[:3],
@@ -924,7 +938,7 @@ def build_context(
     f_regime = ex.submit(_regime_context, sym)
     f_rs = ex.submit(_rs_context, sym)
     f_sector = ex.submit(_sector_context, sym, get_trend_engine=_get_trend_engine)
-    f_sr = ex.submit(_sr_context, sym, tf)
+    f_sr = ex.submit(_sr_context, sym, tf, price)
     f_news = ex.submit(_news_context, sym, include_news)
     f_fund = ex.submit(_fundamentals_context, sym, include_fundamentals)
     f_div = ex.submit(_divergence_context, sym, tf, include_divergence)

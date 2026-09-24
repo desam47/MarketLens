@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 from collections import OrderedDict
 
 from backend.config.settings import settings
@@ -27,6 +28,10 @@ logger = logging.getLogger(__name__)
 
 _VALID_CACHE: OrderedDict[str, bool] = OrderedDict()  # token -> True (hits only)
 _VALID_CACHE_CAP = 256
+# Keep explicit unknown-ticker validation bounded below the end-to-end Chat
+# latency target. A slow provider must degrade to an unavailable symbol, not
+# consume the whole turn budget.
+_SYMBOL_VALIDATION_TIMEOUT_SECONDS = 1.25
 
 # Known-symbol set, rebuilt lazily every ~60s so a freshly added
 # watchlist ticker starts being recognised without a restart.
@@ -444,19 +449,62 @@ def _validate_unknown(tokens: list[str]) -> set[str]:
             pending.append(t)
     if not pending:
         return good
-    try:
-        from backend.market_data.services.manager import market_data_manager
+    result: list[dict] = []
+    error: list[Exception] = []
 
-        quotes = market_data_manager.get_batch_quotes(pending)
-    except Exception as e:  # noqa: BLE001
-        logger.info("chat symbol validation failed for %s: %s", pending, e)
+    def _lookup() -> None:
+        try:
+            from backend.market_data.services.manager import market_data_manager
+
+            result.append(market_data_manager.get_batch_quotes(pending))
+        except Exception as exc:  # noqa: BLE001
+            error.append(exc)
+
+    # Symbol discovery is a preflight, not the answer itself. Keep a slow or
+    # unavailable provider from consuming the entire Chat turn budget. The
+    # daemon thread may finish in the background, but the request path moves
+    # on with a safe unavailable result after the bound.
+    worker = threading.Thread(target=_lookup, name="chat-symbol-validation", daemon=True)
+    worker.start()
+    worker.join(timeout=_SYMBOL_VALIDATION_TIMEOUT_SECONDS)
+    if worker.is_alive():
+        logger.info("chat symbol validation timed out for %s", pending)
         return good
+    if error:
+        logger.info("chat symbol validation failed for %s: %s", pending, error[0])
+        return good
+    quotes = result[0] if result else {}
     for t in pending:
         q = quotes.get(t)
         if q is not None and str(getattr(q, "data_status", "")) != "ERROR" and (q.price or 0) > 0:
             good.add(t)
             _cache_put(t)
     return good
+
+
+def extract_unresolved_explicit_symbols(text: str, resolved: list[str] | None = None) -> list[str]:
+    """Return explicit bare uppercase ticker candidates rejected by validation.
+
+    This is intentionally narrower than general symbol extraction: it only
+    reports uppercase ticker-shaped tokens that are not known symbols and were
+    not resolved on this turn. Ordinary prose and lowercase company names are
+    left to the normal resolver.
+    """
+    if not text or not text.strip():
+        return []
+    masked, _ = _mask(text)
+    words = re.findall(r"[A-Za-z]+", masked)
+    if len(words) >= 4 and masked.upper() == masked:
+        return []
+    known = _known_symbols()
+    resolved_set = {str(symbol).upper() for symbol in (resolved or [])}
+    output: list[str] = []
+    for match in _RE_BARE.finditer(masked):
+        symbol = match.group(1).upper()
+        if symbol in _CHAT_STOPWORDS or symbol in known or symbol in resolved_set or symbol in output:
+            continue
+        output.append(symbol)
+    return output
 
 
 def _fuzzy1(a: str, b: str) -> bool:
@@ -736,7 +784,12 @@ def resolve_turn_symbols(
         if _RE_PRONOUN.search(user_content) or _RE_BARE_METRIC.search(user_content):
             add_all(_carry_forward(transcript))
         # Still nothing, but the message names something -> try the AI map.
-        if not resolved and settings.ai.chat_symbol_ai_fallback and _looks_like_name(user_content):
+        # An uppercase ticker-shaped candidate that just failed live
+        # validation is already a complete symbol-resolution decision. Do not
+        # spend another provider/model round trip trying to reinterpret it as
+        # a company name (e.g. ZZUIJ).
+        rejected_explicit = extract_unresolved_explicit_symbols(user_content, resolved)
+        if not resolved and not rejected_explicit and settings.ai.chat_symbol_ai_fallback and _looks_like_name(user_content):
             add_all(_ai_resolve_name(user_content))
 
     cap = settings.ai.chat_max_tickers

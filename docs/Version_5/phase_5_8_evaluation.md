@@ -137,6 +137,26 @@ metadata, rejects synthetic freshness timestamps, scopes numeric claims to
 their named symbol where possible, and covers common market, indicator, and
 portfolio phrasing.
 
+The remaining watchlist follow-up gap is now closed: successful
+`get_watchlist_intelligence` turns persist only the server-resolved bounded
+scope (`Default`, `Market Context`, `Watch`, or `All active watchlists`) and
+the concern used for the result. A follow-up such as "What about the weekly
+timeframe?" reuses that exact scope and concern through the deterministic
+route, without broadening scope or invoking unrelated market-baseline/model
+work. The unsupported weekly timeframe now returns a fast, scope-named
+explanation instead of a generic or incorrectly broadened answer. The focused
+semantic-router/Chat/tool/verifier regression slice passes with `163` tests,
+and browser verification confirmed aggregate scope is retained in the final
+response.
+
+Weak-name formatting also distinguishes outright bearish/deteriorating
+evidence from a fully covered but entirely non-negative cache: when the
+explicit bearish buckets are empty, Chat reports the lowest relative
+directional scores as secondary context and says that no names are clearly
+weak rather than returning an unhelpful empty answer. API-mode snapshots that
+retain multi-timeframe trend signals but omit composite scores use that signed
+MTF direction as the fallback evidence.
+
 ## Private-flow smoke and latency decision
 
 The sanctioned private-flow fixture in
