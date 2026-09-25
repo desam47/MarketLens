@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, HTTPException
 
 from backend.api.ttl_cache import _trend_cache, _trend_history_cache
+from backend.engines.timeframe import Timeframe
 
 from .registry import get_engine
 
@@ -27,6 +28,20 @@ router = APIRouter(prefix="/api/trend", tags=["trend"])
 # outside the server's timezone.
 _DASHBOARD_TZ = ZoneInfo("America/New_York")
 
+_REQUIRED_WARMUP_BARS = 50
+_TIMEFRAME_SECONDS = {
+    "1m": 60,
+    "2m": 120,
+    "3m": 180,
+    "5m": 300,
+    "15m": 900,
+    "30m": 1800,
+    "1h": 3600,
+    "4h": 14400,
+    "1d": 86400,
+    "1wk": 604800,
+}
+
 
 def _to_dashboard_tz(value: datetime | None) -> str | None:
     from backend.utils.timezone import format_edt_iso
@@ -34,11 +49,147 @@ def _to_dashboard_tz(value: datetime | None) -> str | None:
     return format_edt_iso(value)
 
 
+def _as_aware_timestamp(value: object | None) -> datetime | None:
+    """Return an aware UTC timestamp from engine metadata when possible."""
+    if isinstance(value, datetime):
+        timestamp = value
+    elif isinstance(value, str):
+        try:
+            timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    else:
+        return None
+    return timestamp.replace(tzinfo=UTC) if timestamp.tzinfo is None else timestamp.astimezone(UTC)
+
+
+def _normalized_data_status(value: object | None) -> str:
+    raw = getattr(value, "value", value)
+    normalized = str(raw or "unknown").strip().lower()
+    return "ok" if normalized in {"historical", "live", "ok"} else normalized
+
+
+def _bar_reference_time(timeframe: str, timestamp: datetime | None) -> datetime | None:
+    """Return the time the source data is actually as-of for display/age.
+
+    Providers commonly date daily bars at midnight. The data is nevertheless
+    as-of that session's close, so preserve the raw source timestamp separately
+    while using the normalized close reference for freshness and display.
+    """
+    if timestamp is None:
+        return None
+    if timeframe == "1d":
+        from backend.engines.market_calendar import daily_bar_reference_time
+
+        return daily_bar_reference_time(timestamp) or timestamp
+    return timestamp
+
+
+def _trend_evidence(
+    engine,
+    timeframe: str,
+    trend_signal,
+    metadata: dict,
+    *,
+    now: datetime | None = None,
+) -> dict:
+    """Build the server-owned per-timeframe evidence contract for Trend.
+
+    Signal generation time and the source bar's as-of time are not
+    interchangeable. In particular, higher timeframes must never inherit a
+    recent intraday signal timestamp and thereby look fresher than their own
+    source data. This helper intentionally reads only metadata for source
+    provenance and falls back to the signal timestamp only for legacy engines
+    that have not supplied a metadata record yet.
+    """
+    now = now or datetime.now(UTC)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=UTC)
+    else:
+        now = now.astimezone(UTC)
+
+    signal_timestamp = _as_aware_timestamp(getattr(trend_signal, "timestamp", None))
+    raw_source_timestamp = _as_aware_timestamp(metadata.get("timestamp"))
+    # A legacy engine without *any* metadata can retain its signal timestamp
+    # for backwards-compatible diagnostics, but a present metadata record
+    # without a timestamp is explicitly unavailable — guessing from the
+    # signal would conceal a broken source-evidence chain.
+    source_timestamp = raw_source_timestamp if metadata else signal_timestamp
+    source_as_of = _bar_reference_time(timeframe, source_timestamp)
+    data_status = _normalized_data_status(
+        metadata.get("data_status", getattr(trend_signal, "data_quality", None))
+    )
+    bar_closed_value = metadata.get("bar_closed")
+    bar_closed = bar_closed_value if isinstance(bar_closed_value, bool) else None
+    try:
+        warmup_bars = engine.get_bar_count(Timeframe(timeframe))
+    except (AttributeError, ValueError, TypeError):
+        warmup_bars = None
+    if not isinstance(warmup_bars, int):
+        warmup_bars = None
+
+    age_seconds = (
+        int(max(0.0, (now - source_as_of).total_seconds())) if source_as_of is not None else None
+    )
+    timeframe_seconds = _TIMEFRAME_SECONDS.get(timeframe, 0)
+    invalid_reason: str | None = None
+    if trend_signal is None:
+        freshness_state = "unavailable"
+        invalid_reason = "signal_unavailable"
+    elif source_timestamp is None:
+        freshness_state = "unavailable"
+        invalid_reason = "source_timestamp_missing"
+    elif not metadata:
+        freshness_state = "unavailable"
+        invalid_reason = "source_metadata_unavailable"
+    elif data_status != "ok":
+        freshness_state = "unavailable"
+        invalid_reason = f"data_status_{data_status}"
+    elif bar_closed is False:
+        freshness_state = "unavailable"
+        invalid_reason = "bar_forming"
+    elif warmup_bars is None:
+        freshness_state = "unavailable"
+        invalid_reason = "warmup_unknown"
+    elif warmup_bars < _REQUIRED_WARMUP_BARS:
+        freshness_state = "warming"
+        invalid_reason = "insufficient_warmup"
+    else:
+        from backend.engines.market_calendar import SessionType, us_market_calendar
+
+        if us_market_calendar.get_session_type(now) == SessionType.CLOSED:
+            freshness_state = "closed_session"
+        elif age_seconds is not None and timeframe_seconds and age_seconds <= timeframe_seconds:
+            freshness_state = "live"
+        elif age_seconds is not None and timeframe_seconds and age_seconds <= timeframe_seconds * 2:
+            freshness_state = "recent"
+        else:
+            freshness_state = "stale"
+            invalid_reason = "source_stale"
+
+    valid = freshness_state in {"live", "recent", "closed_session"}
+    return {
+        "freshness_state": freshness_state,
+        "age_seconds": age_seconds,
+        "valid": valid,
+        "invalid_reason": invalid_reason,
+        "warmup_bars": warmup_bars,
+        "required_warmup_bars": _REQUIRED_WARMUP_BARS,
+        "source_timestamp": _to_dashboard_tz(raw_source_timestamp),
+        "source_as_of": _to_dashboard_tz(source_as_of),
+        "data_status": data_status,
+        "bar_closed": bar_closed,
+        "provider": metadata.get("provider") if metadata else None,
+        "session": metadata.get("session") if metadata else None,
+    }
+
+
 def _build_trend_payload(engine, sym: str, timeframe: str, tf) -> dict:
     trend_signal = engine.get_current_trend(tf)
     metadata = engine.get_timeframe_metadata(tf)
     if not isinstance(metadata, dict):
         metadata = {}
+    evidence = _trend_evidence(engine, timeframe, trend_signal, metadata)
     if trend_signal is None:
         return {
             "symbol": sym,
@@ -49,16 +200,13 @@ def _build_trend_payload(engine, sym: str, timeframe: str, tf) -> dict:
             "score": None,
             "classification": None,
             "timestamp": None,
-            "data_age_seconds": None,
-            "data_status": metadata.get("data_status"),
-            "provider": metadata.get("provider"),
-            "session": metadata.get("session"),
-            "bar_closed": metadata.get("bar_closed"),
+            "data_age_seconds": evidence["age_seconds"],
+            "data_status": evidence["data_status"],
+            "provider": evidence["provider"],
+            "session": evidence["session"],
+            "bar_closed": evidence["bar_closed"],
+            "evidence": evidence,
         }
-    signal_ts = trend_signal.timestamp
-    if signal_ts.tzinfo is None:
-        signal_ts = signal_ts.replace(tzinfo=UTC)
-    age_seconds = int(max(0.0, (datetime.now(UTC) - signal_ts).total_seconds()))
     return {
         "symbol": trend_signal.symbol,
         "timeframe": trend_signal.timeframe.value,
@@ -69,12 +217,16 @@ def _build_trend_payload(engine, sym: str, timeframe: str, tf) -> dict:
         "classification": trend_signal.classification.value
         if hasattr(trend_signal.classification, "value")
         else trend_signal.classification,
-        "timestamp": _to_dashboard_tz(trend_signal.timestamp),
-        "data_age_seconds": age_seconds,
-        "data_status": metadata.get("data_status", trend_signal.data_quality),
-        "provider": metadata.get("provider"),
-        "session": metadata.get("session"),
-        "bar_closed": metadata.get("bar_closed"),
+        # The public timestamp is the source bar's true as-of time, not the
+        # last signal-generation timestamp. This keeps daily/weekly cards
+        # from inheriting a recent intraday display time.
+        "timestamp": evidence["source_as_of"],
+        "data_age_seconds": evidence["age_seconds"],
+        "data_status": evidence["data_status"],
+        "provider": evidence["provider"],
+        "session": evidence["session"],
+        "bar_closed": evidence["bar_closed"],
+        "evidence": evidence,
     }
 
 

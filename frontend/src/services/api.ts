@@ -61,6 +61,26 @@ export interface SectorData {
   timestamp: string | null;
 }
 
+export type TrendFreshnessState = 'live' | 'recent' | 'stale' | 'closed_session' | 'warming' | 'unavailable';
+
+/** Server-owned source, freshness, and validity contract for one Trend timeframe. */
+export interface TrendEvidence {
+  freshness_state: TrendFreshnessState;
+  age_seconds: number | null;
+  valid: boolean;
+  invalid_reason: string | null;
+  warmup_bars: number | null;
+  required_warmup_bars: number;
+  /** Raw provider timestamp, retained even when a daily bar is normalized to its close. */
+  source_timestamp: string | null;
+  /** Actual market-data as-of time used for display and freshness. */
+  source_as_of: string | null;
+  data_status: string;
+  bar_closed: boolean | null;
+  provider: string | null;
+  session: string | null;
+}
+
 export interface TrendData {
   symbol: string;
   timeframe: string;
@@ -73,6 +93,7 @@ export interface TrendData {
   provider?: string | null;
   session?: string | null;
   bar_closed?: boolean | null;
+  evidence?: TrendEvidence;
 }
 
 export interface ConfluenceData {

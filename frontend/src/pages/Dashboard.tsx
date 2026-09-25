@@ -630,7 +630,7 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
       case 'trends':
         return (
           <div className="trends-section">
-            <h2>Multi-Timeframe Trend</h2>
+            <h2>Trend by Timeframe</h2>
             {trendsLoading && trends.length === 0 ? (
               <>
                 <div className="trend-grid">{Array.from({ length: 5 }).map((_, i) => <TrendCardSkeleton key={i} />)}</div>

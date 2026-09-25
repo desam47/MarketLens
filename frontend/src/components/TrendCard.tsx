@@ -40,6 +40,34 @@ const timeframeLabels: Record<string, string> = {
   '1wk': 'Weekly',
 };
 
+const evidenceLabels: Record<string, string> = {
+  live: 'Live',
+  recent: 'Recent',
+  stale: 'Stale',
+  closed_session: 'Market closed',
+  warming: 'Warming',
+  unavailable: 'Unavailable',
+};
+
+const invalidReasonLabels: Record<string, string> = {
+  signal_unavailable: 'Signal unavailable',
+  source_timestamp_missing: 'Source timestamp unavailable',
+  source_metadata_unavailable: 'Source evidence unavailable',
+  bar_forming: 'Waiting for bar close',
+  insufficient_warmup: 'More history needed',
+  warmup_unknown: 'Warm-up status unavailable',
+  source_stale: 'Source is stale',
+};
+
+function formatAge(ageSeconds: number | null | undefined): string | null {
+  if (ageSeconds == null || !Number.isFinite(ageSeconds)) return null;
+  const seconds = Math.max(0, Math.round(ageSeconds));
+  if (seconds < 60) return `${seconds}s old`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m old`;
+  if (seconds < 86400) return `${Math.round(seconds / 3600)}h old`;
+  return `${Math.round(seconds / 86400)}d old`;
+}
+
 function signalExplanation(trend: TrendData): string {
   const timeframe = timeframeLabels[trend.timeframe] || trend.timeframe;
   const direction = trend.direction.replace(/_/g, ' ');
@@ -57,6 +85,17 @@ export const TrendCard = memo(function TrendCard({ trend }: TrendCardProps) {
   const color = directionColors[trend.direction] || '#9ca3af';
   const strengthColor = strengthColors[trend.strength] || '#9ca3af';
   const confidencePct = (trend.confidence * 100).toFixed(0);
+  const evidence = trend.evidence;
+  const freshnessState = evidence?.freshness_state;
+  const freshnessLabel = freshnessState ? evidenceLabels[freshnessState] || freshnessState.replace(/_/g, ' ') : null;
+  const evidenceAge = formatAge(evidence?.age_seconds ?? trend.data_age_seconds);
+  const warmupLabel = freshnessState === 'warming' && evidence
+    ? `${evidence.warmup_bars ?? 0} / ${evidence.required_warmup_bars} bars`
+    : null;
+  const invalidReason = evidence?.invalid_reason
+    ? invalidReasonLabels[evidence.invalid_reason] || evidence.invalid_reason.replace(/^data_status_/, '').replace(/_/g, ' ')
+    : null;
+  const sourceAsOf = evidence?.source_as_of ?? trend.timestamp;
   const sessionLabel = trend.session === 'after_hours'
     ? 'After-hours'
     : trend.session === 'premarket'
@@ -102,11 +141,22 @@ export const TrendCard = memo(function TrendCard({ trend }: TrendCardProps) {
         />
       </div>
       <p className="signal-explanation">{signalExplanation(trend)}</p>
+      {freshnessLabel && (
+        <div
+          className={`trend-evidence trend-evidence-${freshnessState}`}
+          aria-label={`Evidence: ${freshnessLabel}${evidenceAge ? `, ${evidenceAge}` : ''}`}
+        >
+          <span className="trend-evidence-label">Evidence: {freshnessLabel}</span>
+          {evidenceAge && <span>{evidenceAge}</span>}
+          {warmupLabel && <span>{warmupLabel}</span>}
+          {invalidReason && <span>{invalidReason}</span>}
+        </div>
+      )}
       <div className="trend-provenance">
         <span>{statusLabel}</span>
         <span>{sessionLabel}</span>
         {trend.provider && <span>{trend.provider}</span>}
-        {trend.timestamp && <span>{formatETDateTime(trend.timestamp)}</span>}
+        {sourceAsOf && <span>As of {formatETDateTime(sourceAsOf)}</span>}
       </div>
     </div>
   );

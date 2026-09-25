@@ -2979,6 +2979,32 @@ h4 {
   text-transform: capitalize;
 }
 
+.trend-evidence {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.5rem;
+  align-items: center;
+  margin-top: 0.55rem;
+  padding: 0.35rem 0.45rem;
+  border-left: 2px solid var(--text-muted);
+  border-radius: 0.2rem;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+  line-height: 1.35;
+}
+
+.trend-evidence-label {
+  font-weight: 700;
+}
+
+.trend-evidence-live { border-left-color: var(--success); }
+.trend-evidence-recent { border-left-color: var(--accent-primary); }
+.trend-evidence-closed_session { border-left-color: var(--text-muted); }
+.trend-evidence-warming { border-left-color: var(--warning); }
+.trend-evidence-stale,
+.trend-evidence-unavailable { border-left-color: var(--danger); }
+
 .confluence-explanation {
   padding: 0.55rem 0.7rem;
   background: rgba(15, 23, 42, 0.45);

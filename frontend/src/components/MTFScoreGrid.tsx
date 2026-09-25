@@ -57,7 +57,7 @@ export function MTFScoreGrid({ trendSignals, symbol }: MTFScoreGridProps) {
   if (entries.length === 0) {
     return (
       <div className="card analysis-card mtfs-grid-card">
-        <h2>Multi-Timeframe Trend</h2>
+        <h2>Trend by Timeframe</h2>
         <p className="empty-state">No MTF trend data for {symbol}</p>
       </div>
     );
@@ -66,7 +66,7 @@ export function MTFScoreGrid({ trendSignals, symbol }: MTFScoreGridProps) {
   return (
     <div className="card analysis-card mtfs-grid-card">
       <div className="card-header-row">
-        <h2>Multi-Timeframe Trend</h2>
+        <h2>Trend by Timeframe</h2>
         <span className="symbol-tag">{symbol}</span>
       </div>
       <div className="mtfs-grid">

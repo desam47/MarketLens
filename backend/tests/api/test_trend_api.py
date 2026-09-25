@@ -13,6 +13,7 @@ import sys
 import unittest
 from datetime import datetime
 from unittest.mock import MagicMock, patch
+from zoneinfo import ZoneInfo
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../"))
 
@@ -20,6 +21,7 @@ from fastapi.testclient import TestClient
 
 from backend.api.main import app
 from backend.api.ttl_cache import _trend_cache
+from backend.api.trend.router import _build_trend_payload, _trend_evidence
 from backend.engines.timeframe import Timeframe
 from backend.trend.trend_engine import TrendDirection, TrendSignal, TrendStrength
 
@@ -33,6 +35,9 @@ def _make_signal(symbol: str, timeframe: Timeframe, direction: TrendDirection) -
         confidence=0.75,
         timestamp=datetime(2025, 1, 1, 12, 0, 0),
     )
+
+
+ET = ZoneInfo("America/New_York")
 
 
 class TestTrendBatchAPI(unittest.TestCase):
@@ -118,6 +123,166 @@ class TestTrendBatchAPI(unittest.TestCase):
         # No additional engine reads — served from the TTL cache.
         self.assertEqual(self.mock_engine.get_current_trend.call_count, 1)
         self.assertEqual(first.json(), second.json())
+
+
+class TestTrendEvidenceContract(unittest.TestCase):
+    def setUp(self):
+        self.engine = MagicMock()
+        self.engine.get_bar_count.return_value = 50
+
+    @staticmethod
+    def _signal(timeframe: Timeframe, timestamp: datetime) -> TrendSignal:
+        return TrendSignal(
+            symbol="SPY",
+            timeframe=timeframe,
+            direction=TrendDirection.UPTREND,
+            strength=TrendStrength.MODERATE,
+            confidence=0.75,
+            timestamp=timestamp,
+        )
+
+    @staticmethod
+    def _metadata(timestamp: datetime, **overrides):
+        return {
+            "timestamp": timestamp,
+            "data_status": "HISTORICAL",
+            "provider": "webull",
+            "session": "regular",
+            "bar_closed": True,
+            **overrides,
+        }
+
+    def test_live_evidence_uses_its_own_source_bar_timestamp(self):
+        now = datetime(2026, 9, 24, 10, 0, 30, tzinfo=ET)
+        source_timestamp = datetime(2026, 9, 24, 10, 0, 0, tzinfo=ET)
+        signal = self._signal(Timeframe.ONE_MINUTE, now)
+
+        evidence = _trend_evidence(
+            self.engine,
+            "1m",
+            signal,
+            self._metadata(source_timestamp),
+            now=now,
+        )
+
+        self.assertEqual(evidence["freshness_state"], "live")
+        self.assertTrue(evidence["valid"])
+        self.assertEqual(evidence["age_seconds"], 30)
+        self.assertTrue(evidence["source_as_of"].startswith("2026-09-24T10:00:00"))
+
+    def test_daily_payload_uses_regular_close_not_later_signal_timestamp(self):
+        daily_source = datetime(2026, 9, 24, 0, 0, 0, tzinfo=ET)
+        later_signal_time = datetime(2026, 9, 24, 19, 59, 59, tzinfo=ET)
+        signal = self._signal(Timeframe.ONE_DAY, later_signal_time)
+        self.engine.get_current_trend.return_value = signal
+        self.engine.get_timeframe_metadata.return_value = self._metadata(daily_source)
+
+        payload = _build_trend_payload(self.engine, "SPY", "1d", Timeframe.ONE_DAY)
+
+        self.assertTrue(payload["timestamp"].startswith("2026-09-24T16:00:00"))
+        self.assertTrue(payload["evidence"]["source_timestamp"].startswith("2026-09-24T00:00:00"))
+        self.assertTrue(payload["evidence"]["source_as_of"].startswith("2026-09-24T16:00:00"))
+
+    def test_incomplete_derived_bar_is_unavailable_even_when_market_is_closed(self):
+        now = datetime(2026, 9, 24, 21, 0, 0, tzinfo=ET)
+        signal = self._signal(Timeframe.ONE_WEEK, datetime(2026, 9, 21, 0, 0, 0, tzinfo=ET))
+
+        evidence = _trend_evidence(
+            self.engine,
+            "1wk",
+            signal,
+            self._metadata(signal.timestamp, data_status="INCOMPLETE", provider="aggregated_from_1d"),
+            now=now,
+        )
+
+        self.assertEqual(evidence["freshness_state"], "unavailable")
+        self.assertFalse(evidence["valid"])
+        self.assertEqual(evidence["invalid_reason"], "data_status_incomplete")
+
+    def test_missing_source_timestamp_is_unavailable_not_signal_timestamp_fallback(self):
+        now = datetime(2026, 9, 24, 10, 0, 0, tzinfo=ET)
+        signal = self._signal(Timeframe.ONE_MINUTE, now)
+
+        evidence = _trend_evidence(
+            self.engine,
+            "1m",
+            signal,
+            self._metadata(None),
+            now=now,
+        )
+
+        self.assertEqual(evidence["freshness_state"], "unavailable")
+        self.assertFalse(evidence["valid"])
+        self.assertEqual(evidence["invalid_reason"], "source_timestamp_missing")
+        self.assertIsNone(evidence["source_as_of"])
+
+    def test_delayed_provider_data_is_unavailable(self):
+        now = datetime(2026, 9, 24, 10, 0, 0, tzinfo=ET)
+        signal = self._signal(Timeframe.FIVE_MINUTE, now)
+
+        evidence = _trend_evidence(
+            self.engine,
+            "5m",
+            signal,
+            self._metadata(now, data_status="DELAYED"),
+            now=now,
+        )
+
+        self.assertEqual(evidence["freshness_state"], "unavailable")
+        self.assertFalse(evidence["valid"])
+        self.assertEqual(evidence["invalid_reason"], "data_status_delayed")
+
+    def test_closed_market_last_completed_bar_is_valid_closed_session(self):
+        now = datetime(2026, 9, 24, 21, 0, 0, tzinfo=ET)
+        source_timestamp = datetime(2026, 9, 24, 19, 59, 0, tzinfo=ET)
+        signal = self._signal(Timeframe.ONE_MINUTE, source_timestamp)
+
+        evidence = _trend_evidence(
+            self.engine,
+            "1m",
+            signal,
+            self._metadata(source_timestamp, session="after_hours"),
+            now=now,
+        )
+
+        self.assertEqual(evidence["freshness_state"], "closed_session")
+        self.assertTrue(evidence["valid"])
+        self.assertIsNone(evidence["invalid_reason"])
+
+    def test_insufficient_warmup_is_warming_not_an_ordinary_valid_signal(self):
+        self.engine.get_bar_count.return_value = 12
+        now = datetime(2026, 9, 24, 10, 0, 0, tzinfo=ET)
+        signal = self._signal(Timeframe.FIVE_MINUTE, now)
+
+        evidence = _trend_evidence(
+            self.engine,
+            "5m",
+            signal,
+            self._metadata(now),
+            now=now,
+        )
+
+        self.assertEqual(evidence["freshness_state"], "warming")
+        self.assertFalse(evidence["valid"])
+        self.assertEqual(evidence["warmup_bars"], 12)
+        self.assertEqual(evidence["required_warmup_bars"], 50)
+
+    def test_open_market_old_intraday_source_is_stale(self):
+        now = datetime(2026, 9, 24, 10, 30, 0, tzinfo=ET)
+        source_timestamp = datetime(2026, 9, 24, 10, 20, 0, tzinfo=ET)
+        signal = self._signal(Timeframe.ONE_MINUTE, source_timestamp)
+
+        evidence = _trend_evidence(
+            self.engine,
+            "1m",
+            signal,
+            self._metadata(source_timestamp),
+            now=now,
+        )
+
+        self.assertEqual(evidence["freshness_state"], "stale")
+        self.assertFalse(evidence["valid"])
+        self.assertEqual(evidence["invalid_reason"], "source_stale")
 
 
 if __name__ == "__main__":
