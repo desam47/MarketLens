@@ -130,6 +130,61 @@ class ShortHorizonMomentum(StrEnum):
     PERSISTENT = "persistent"
 
 
+@dataclass(frozen=True)
+class TrendScoringProfile:
+    """The indicator stack behind a timeframe's directional score.
+
+    Scores and agreement are intentionally *not* declared comparable across
+    these profiles.  Calibration needs outcome research by timeframe and
+    session; until that exists, consumers may use a profile to explain a
+    signal but must not treat equal raw numbers as equal conviction.
+    """
+
+    id: str
+    label: str
+    components: tuple[str, ...]
+
+    @property
+    def component_count(self) -> int:
+        return len(self.components)
+
+    def to_payload(self) -> dict[str, object]:
+        return {
+            "id": self.id,
+            "label": self.label,
+            "components": list(self.components),
+            "confidence_semantics": "weighted_indicator_agreement",
+            "score_comparable_across_timeframes": False,
+            "calibration_state": "profile_specific_not_calibrated",
+        }
+
+
+_DIRECTIONAL_CORE_PROFILE = TrendScoringProfile(
+    id="directional_core",
+    label="Directional core",
+    components=("EMA", "RSI", "MACD"),
+)
+_INTRADAY_DIRECTIONAL_PROFILE = TrendScoringProfile(
+    id="intraday_directional",
+    label="Directional + ADX",
+    components=("EMA", "RSI", "MACD", "ADX/DI"),
+)
+_FULL_TECHNICAL_PROFILE = TrendScoringProfile(
+    id="full_technical",
+    label="Full technical stack",
+    components=("EMA", "RSI", "MACD", "ADX/DI", "SuperTrend", "Bollinger", "Relative volume", "ROC"),
+)
+
+
+def scoring_profile_for_timeframe(timeframe: Timeframe) -> TrendScoringProfile:
+    """Return the declared scoring profile for one Trend timeframe."""
+    if timeframe in _SHORT_HORIZON_TIMEFRAMES:
+        return _DIRECTIONAL_CORE_PROFILE
+    if timeframe == Timeframe.FIVE_MINUTE:
+        return _INTRADAY_DIRECTIONAL_PROFILE
+    return _FULL_TECHNICAL_PROFILE
+
+
 class TrendClassification(StrEnum):
     """8-class trend classification per Phase 6 spec.
 

@@ -48,6 +48,24 @@ describe('TrendCard evidence contract', () => {
     expect(screen.getByText(/persistent short-term momentum/)).toBeInTheDocument();
   });
 
+  it('labels agreement with its scoring profile instead of implying universal confidence', () => {
+    render(<TrendCard trend={trend({
+      scoring: {
+        id: 'directional_core',
+        label: 'Directional core',
+        components: ['EMA', 'RSI', 'MACD'],
+        confidence_semantics: 'weighted_indicator_agreement',
+        score_comparable_across_timeframes: false,
+        calibration_state: 'profile_specific_not_calibrated',
+      },
+    })} />);
+
+    expect(screen.getByText('Agreement')).toBeInTheDocument();
+    expect(screen.queryByText('Confidence')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Scoring profile: Directional core · 3 inputs')).toBeInTheDocument();
+    expect(screen.getAllByTitle(/not a probability.*not calibrated/i)).not.toHaveLength(0);
+  });
+
   it('does not present default Moderate as a measurement while momentum warms up', () => {
     render(<TrendCard trend={trend({
       strength: 'moderate',

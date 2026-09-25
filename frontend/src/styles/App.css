@@ -1299,6 +1299,13 @@ h4 {
 .trend-card-input { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-primary) 45%, transparent); }
 .trend-card-out_of_scope { opacity: 0.78; }
 
+.trend-scoring-profile {
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  line-height: 1.25;
+  margin-top: 0.55rem;
+}
+
 .timeframe-badge {
   background-color: var(--bg-tertiary);
   padding: 0.2rem 0.6rem;

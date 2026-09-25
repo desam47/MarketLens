@@ -403,6 +403,22 @@ class TestTrendEngineArchitecture(unittest.TestCase):
         self.assertEqual(settings.trend.timeframe_weights["1d"], 0.15)
         self.assertEqual(settings.trend.timeframe_weights["1h"], 0.25)
 
+    def test_scoring_profiles_make_cross_timeframe_noncomparability_explicit(self):
+        """A 1m score is not silently presented as the same evidence as 1h."""
+        from backend.trend.trend_engine import scoring_profile_for_timeframe
+
+        one_minute = scoring_profile_for_timeframe(Timeframe.ONE_MINUTE)
+        five_minute = scoring_profile_for_timeframe(Timeframe.FIVE_MINUTE)
+        one_hour = scoring_profile_for_timeframe(Timeframe.ONE_HOUR)
+
+        self.assertEqual(one_minute.id, "directional_core")
+        self.assertEqual(one_minute.component_count, 3)
+        self.assertEqual(five_minute.id, "intraday_directional")
+        self.assertEqual(five_minute.component_count, 4)
+        self.assertEqual(one_hour.id, "full_technical")
+        self.assertEqual(one_hour.component_count, 8)
+        self.assertFalse(one_hour.to_payload()["score_comparable_across_timeframes"])
+
 
 class TestDataQualityValidation(unittest.TestCase):
     """Phase 0 Principle 15 — data quality validated before analysis."""

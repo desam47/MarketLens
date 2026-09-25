@@ -81,6 +81,16 @@ export interface TrendEvidence {
   session: string | null;
 }
 
+/** Declares the indicator stack behind a Trend score; it is not an outcome calibration. */
+export interface TrendScoringProfile {
+  id: 'directional_core' | 'intraday_directional' | 'full_technical' | string;
+  label: string;
+  components: string[];
+  confidence_semantics: 'weighted_indicator_agreement' | string;
+  score_comparable_across_timeframes: boolean;
+  calibration_state: 'profile_specific_not_calibrated' | string;
+}
+
 export interface TrendData {
   symbol: string;
   timeframe: string;
@@ -96,6 +106,7 @@ export interface TrendData {
   provider?: string | null;
   session?: string | null;
   bar_closed?: boolean | null;
+  scoring?: TrendScoringProfile;
   evidence?: TrendEvidence;
 }
 
@@ -105,6 +116,7 @@ export interface ConfluenceTimeframeSignal {
   strength: string | number;
   confidence: number;
   score?: number | null;
+  scoring?: TrendScoringProfile;
   timestamp: string | null;
   evidence?: TrendEvidence;
 }
@@ -150,6 +162,8 @@ export interface TimeframeTrendSnapshot {
   is_warmed_up: boolean;
   valid: boolean;
   quality_weight: number;
+  directional_vote?: number;
+  scoring_profile?: string;
 }
 
 // Phase 7: multi-timeframe snapshot.

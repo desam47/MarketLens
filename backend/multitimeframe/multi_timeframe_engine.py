@@ -15,6 +15,7 @@ from ..trend.trend_engine import (
     TrendEngine,
     TrendSignal,
     TrendStrength,
+    scoring_profile_for_timeframe,
     strength_to_float,
 )
 from ..trend.evidence import build_trend_evidence
@@ -209,7 +210,12 @@ class TimeframeTrendSnapshot:
     bar_closed: bool = False
     is_warmed_up: bool = False
     valid: bool = False  # has signal + warmed up + fresh enough
-    quality_weight: float = 0.0  # confidence * freshness * warmup * (1 if closed else 0.5)
+    # Source usability only: freshness * warmup * (1 if closed else 0.5).
+    # Agreement and raw-score magnitude are profile-specific and deliberately
+    # excluded until they are calibrated across timeframes.
+    quality_weight: float = 0.0
+    directional_vote: int = 0  # -1 bearish, 0 neutral/unknown, +1 bullish
+    scoring_profile: str = "unknown"
 
 
 @dataclass
@@ -526,7 +532,9 @@ class MultiTimeframeEngine:
     ) -> float:
         """How aligned the timeframes are (0.0 = no alignment, 1.0 = perfect).
 
-        If tf_snapshots provided, uses quality-weighted alignment based on valid TFs only.
+        If tf_snapshots provided, uses quality-weighted directional votes based
+        on valid TFs only. It never compares raw score magnitude or agreement
+        between different scoring profiles.
         """
         if not signals:
             return 0.0
@@ -542,25 +550,15 @@ class MultiTimeframeEngine:
             bullish_weight = sum(
                 s.quality_weight
                 for s in valid_snaps
-                if s.direction
-                in (
-                    TrendClassification.STRONG_BULLISH,
-                    TrendClassification.BULLISH,
-                    TrendClassification.WEAK_BULLISH,
-                )
+                if s.directional_vote > 0
             )
             bearish_weight = sum(
                 s.quality_weight
                 for s in valid_snaps
-                if s.direction
-                in (
-                    TrendClassification.STRONG_BEARISH,
-                    TrendClassification.BEARISH,
-                    TrendClassification.WEAK_BEARISH,
-                )
+                if s.directional_vote < 0
             )
             neutral_weight = sum(
-                s.quality_weight for s in valid_snaps if s.direction == TrendClassification.NEUTRAL
+                s.quality_weight for s in valid_snaps if s.directional_vote == 0
             )
 
             total_weight = bullish_weight + bearish_weight + neutral_weight
@@ -743,8 +741,9 @@ class MultiTimeframeEngine:
     ) -> tuple[ConfluenceDirection, float]:
         """Calculate overall direction and strength from timeframe signals.
 
-        If tf_snapshots is provided, uses quality-weighted hierarchical aggregation
-        with raw scores (-100..+100). Otherwise falls back to legacy ternary scoring.
+        If tf_snapshots is provided, uses quality-weighted hierarchical
+        directional votes. Raw Trend scores and indicator agreement are not
+        calibrated across profiles, so they are never aggregated here.
         """
         if not signals:
             return ConfluenceDirection.NEUTRAL, 0.0
@@ -767,7 +766,7 @@ class MultiTimeframeEngine:
                 for tf, sig in signals.items()
                 if tf in tf_snapshots and tf_snapshots[tf].valid
             }
-            alignment = self._calculate_alignment(valid_signals) if valid_signals else 0.0
+            alignment = self._calculate_alignment(valid_signals, tf_snapshots) if valid_signals else 0.0
 
             # Direction from quality-weighted score with hysteresis thresholds
             if alignment > 0.6:
@@ -852,11 +851,12 @@ class MultiTimeframeEngine:
         self,
         tf_snapshots: dict[Timeframe, TimeframeTrendSnapshot],
     ) -> float:
-        """Calculate quality-weighted aggregate score using raw scores and hierarchical weights.
+        """Calculate a quality-weighted directional-vote score.
 
-        Uses quality_weight per TF (confidence * freshness * warmup * bar_closed_factor)
-        and hierarchical timeframe weights (higher TFs = bias, intermediate = structure,
-        lower = timing).
+        The output remains on the historical -100..+100 scale for API
+        compatibility, but it is now an aggregate of -1/0/+1 directional
+        votes. It does not compare profile-specific raw Trend scores or
+        agreement percentages across timeframes.
         """
         if not tf_snapshots:
             return 0.0
@@ -888,10 +888,11 @@ class MultiTimeframeEngine:
             # Combine preset weight with hierarchy weight (equal mix)
             combined_weight = (preset_weight + hierarchy_weight) / 2.0
 
-            # Quality weight already incorporates confidence, freshness, warmup, bar_closed
+            # Quality weight only measures source usability. It intentionally
+            # excludes profile-specific agreement and raw-score magnitude.
             effective_weight = combined_weight * snap.quality_weight
 
-            total_weighted_score += snap.score * effective_weight
+            total_weighted_score += snap.directional_vote * 100.0 * effective_weight
             total_quality_weight += effective_weight
 
         return total_weighted_score / total_quality_weight if total_quality_weight > 0 else 0.0
@@ -957,7 +958,15 @@ class MultiTimeframeEngine:
                 freshness_factor = 1.0
             warmup_factor = 1.0 if is_warmed_up else 0.3
             closed_factor = 1.0 if bar_closed else 0.5
-            quality_weight = sig.confidence * freshness_factor * warmup_factor * closed_factor
+            # Profile-specific agreement is useful inside a card, but it is
+            # not cross-timeframe calibrated. Confluence therefore weights
+            # only evidence usability and the explicit preset/horizon weights.
+            quality_weight = freshness_factor * warmup_factor * closed_factor
+            directional_vote = (
+                1 if sig.direction == TrendDirection.UPTREND
+                else -1 if sig.direction == TrendDirection.DOWNTREND
+                else 0
+            )
 
             tf_snapshots[tf] = TimeframeTrendSnapshot(
                 symbol=self.symbol,
@@ -974,6 +983,8 @@ class MultiTimeframeEngine:
                 is_warmed_up=is_warmed_up,
                 valid=valid,
                 quality_weight=quality_weight,
+                directional_vote=directional_vote,
+                scoring_profile=scoring_profile_for_timeframe(tf).id,
             )
 
         # Aggregate explanatory metrics from the same valid/fresh subset used

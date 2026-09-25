@@ -83,6 +83,21 @@ function evidenceLabel(state: string | undefined): string | null {
   }
 }
 
+function timeframeSignalTitle(signal: any): string | undefined {
+  const details: string[] = [];
+  if (signal.evidence?.invalid_reason) {
+    details.push(
+      `Evidence: ${evidenceLabel(signal.evidence.freshness_state) || 'Unavailable'} — ${signal.evidence.invalid_reason.replace(/_/g, ' ')}`,
+    );
+  } else if (signal.evidence?.source_as_of) {
+    details.push(`Evidence as of ${formatETDateTime(signal.evidence.source_as_of)}`);
+  }
+  if (signal.scoring?.label) {
+    details.push(`Scoring profile: ${signal.scoring.label}. Raw scores and agreement are not cross-timeframe calibrated.`);
+  }
+  return details.length > 0 ? details.join(' · ') : undefined;
+}
+
 function timingLabel(shortState: string, shortDir: string, higherDir: string): string {
   const directionSide = (direction: string): 'up' | 'down' | null => {
     if (direction.includes('up') || direction.includes('bullish')) return 'up';
@@ -232,7 +247,7 @@ export const ConfluenceCard = memo(function ConfluenceCard({ confluence, error, 
       <div className="confluence-overall">
         <span className="overall-narrative">{narrative}</span>
         <div className="overall-metrics">
-          <span className="overall-metric">Confidence: {strengthPct}%</span>
+          <span className="overall-metric">Confluence strength: {strengthPct}%</span>
           <span className="overall-metric">Valid TF: {((confluence.valid_coverage ?? 0) * 100).toFixed(0)}%</span>
         </div>
       </div>
@@ -261,7 +276,12 @@ export const ConfluenceCard = memo(function ConfluenceCard({ confluence, error, 
           <span className="metric-value">{((confluence.valid_coverage ?? 0) * 100).toFixed(0)}%</span>
         </div>
         <div className="metric">
-          <span className="metric-label">Quality Score</span>
+          <span
+            className="metric-label"
+            title="Directional votes weighted by timeframe hierarchy and evidence usability. Raw Trend scores and agreement percentages are not compared across profiles."
+          >
+            Directional Vote
+          </span>
           <span className="metric-value">
             {typeof confluence.quality_weighted_score === 'number'
               ? `${confluence.quality_weighted_score > 0 ? '+' : ''}${confluence.quality_weighted_score.toFixed(0)}`
@@ -293,11 +313,7 @@ export const ConfluenceCard = memo(function ConfluenceCard({ confluence, error, 
               <div
                 key={tf}
                 className={`signal-item signal-evidence-${signal.evidence?.freshness_state || 'unknown'}`}
-                title={signal.evidence?.invalid_reason
-                  ? `Evidence: ${evidenceLabel(signal.evidence.freshness_state) || 'Unavailable'} — ${signal.evidence.invalid_reason.replace(/_/g, ' ')}`
-                  : signal.evidence?.source_as_of
-                    ? `Evidence as of ${formatETDateTime(signal.evidence.source_as_of)}`
-                    : undefined}
+                title={timeframeSignalTitle(signal)}
               >
                 <span className="signal-tf">{tf}</span>
                 <span

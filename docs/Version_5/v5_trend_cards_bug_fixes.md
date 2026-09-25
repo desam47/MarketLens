@@ -1,9 +1,9 @@
 # Version 5 Trend Cards Bug Fixes
 
 **Created:** 2026-09-24
-**Last updated:** 2026-09-24 (TC-01, TC-03, TC-04, and TC-08 complete)
-**Status:** Re-prioritized from a trading-desk perspective: what would actually cost a trader money first, not just severity as originally filed. TC-01's shared Trend and Confluence evidence contract, TC-03's measured short-horizon momentum display, TC-04's meaningful `Very Strong` boundary, and TC-08's explicit Confluence scope are implemented and covered by focused tests. TC-01 and TC-06 describe one underlying fix — a single server-owned evidence contract — and are tracked together under TC-01.
-**Scorecard:** 4 ✅ COMPLETE, 1 ⚠️ PARTIAL, 4 ❌ NOT STARTED, 0 🟡 DEFERRED, 1 folded (TC-06 → TC-01).
+**Last updated:** 2026-09-24 (TC-01, TC-03, TC-04, TC-05, and TC-08 complete)
+**Status:** Re-prioritized from a trading-desk perspective: what would actually cost a trader money first, not just severity as originally filed. TC-01's shared Trend and Confluence evidence contract, TC-03's measured short-horizon momentum display, TC-04's meaningful `Very Strong` boundary, TC-05's profile-aware score contract, and TC-08's explicit Confluence scope are implemented and covered by focused tests. TC-01 and TC-06 describe one underlying fix — a single server-owned evidence contract — and are tracked together under TC-01.
+**Scorecard:** 5 ✅ COMPLETE, 1 ⚠️ PARTIAL, 3 ❌ NOT STARTED, 0 🟡 DEFERRED, 1 folded (TC-06 → TC-01).
 **Source:** 2026-09-24 code, API, and live-payload review of the Dashboard's **Trend by Timeframe** cards at `78a1adc`, re-prioritized the same day from a trading-desk perspective and re-verified live against SPY.
 **Related:** [Phase audit](phase_audit_v5.md), [AI Analysis fixes](v5_ai_analysis.md), [Historical Signals fixes](v5_historical_signal_bug_fixes.md), [Market Data fixes](v5_market_data_bug_fixes.md)
 
@@ -25,7 +25,7 @@ Pre-implementation line numbers refer to the code at `78a1adc`; implementation e
 | TC-01 | Critical | UI + data truth | Cards cannot prove freshness or validity — stale, warming, and invalid data all look like an ordinary closed bar (includes former TC-06) | Verified | ✅ COMPLETE |
 | TC-03 | Critical | Methodology | 1m, 2m, and 3m Strength is a fixed default rather than a measurement | Verified | ✅ COMPLETE |
 | TC-08 | High | Workflow + data truth | The all-timeframe grid and the selected Confluence preset do not share one scope | Verified | ✅ COMPLETE |
-| TC-05 | High | Methodology | Confidence and score are not comparable across short and long timeframes | Code-read | ❌ NOT STARTED |
+| TC-05 | High | Methodology | Confidence and score are not comparable across short and long timeframes | Validated | ✅ COMPLETE |
 | TC-02 | High | Provenance | Live intraday Trend cards lose their market-data provider | Verified | ❌ NOT STARTED |
 | TC-04 | High | Methodology | Per-timeframe `Very Strong` can never be emitted, and may be silently diluting `Strong` | Verified | ✅ COMPLETE |
 | TC-07 | Medium | UI + contract | Raw score and classification are available but hidden from Trend Cards | Code-read | ❌ NOT STARTED |
@@ -115,8 +115,8 @@ Raised from Medium to High in this prioritization pass: this was originally file
 
 ### TC-05 — Confidence and score are not comparable across short and long timeframes
 
-**Status:** ❌ NOT STARTED
-**Where:** timeframe-specific stacks (`backend/trend/trend_engine.py:316`) and component scoring (`:830`).
+**Status:** ✅ COMPLETE
+**Where:** scoring-profile contract (`backend/trend/trend_engine.py`), Trend and Confluence serializers, Multi-Timeframe aggregation (`backend/multitimeframe/multi_timeframe_engine.py`), and the Trend/Confluence cards.
 
 The cards share one 0–100 score and 0–100% confidence presentation, but their inputs differ:
 
@@ -126,9 +126,13 @@ The cards share one 0–100 score and 0–100% confidence presentation, but thei
 
 **Impact:** a 70% confidence or `+65` score on 1m represents much less and different evidence than the same number on 1h or daily. The uniform card design implies false comparability. This is ranked ahead of TC-02 in this pass because it is the more dangerous version of the same "which evidence actually counted" problem for anyone building an Alert or Scanner rule on top of these numbers rather than reading the dashboard by eye: a rule such as "3+ timeframes above +50" currently treats a 1m score built on three unweighted indicators as equal evidence to a daily score built on eight directional components plus ATR normalization, including ADX, SuperTrend, Bollinger, and relative volume.
 
-**Resolution:** either normalize/calibrate score distributions per timeframe with research evidence, or visibly label each card's evidence profile and avoid comparing confidence across the timing, structure, and bias horizons. MTF weighting should use the calibrated quality fields, not an assumed equal meaning for every raw score.
+**Resolution:** this uses the safer of the two proposed paths: it makes the current profiles explicit and removes uncalibrated magnitude from Confluence aggregation. Every Trend API response now declares one of three profiles: **Directional core** (1m/2m/3m: EMA, RSI, MACD), **Directional + ADX** (5m), or **Full technical stack** (15m through weekly: eight components). The contract explicitly says that card agreement is weighted indicator agreement, not win probability, and that raw score/agreement is not cross-timeframe calibrated.
 
-**Tests:** add fixtures with equivalent directional moves across timeframes and assert documented relative expectations. Add calibration / distribution checks before changing thresholds.
+Trend Cards now show **Agreement** rather than a bare Confidence label, plus the profile and number of inputs. Confluence exposes the same profile per timeframe. Its former raw-score aggregate is retained on the compatible `quality_weighted_score` field but now means a **Directional Vote**: valid timeframe direction (-1/0/+1), weighted only by preset/horizon and source usability (freshness, warm-up, completed bar). It deliberately excludes both raw score magnitude and profile-specific agreement. This prevents a `+65` 1m core-stack score from carrying the same aggregation meaning as a `+65` daily full-stack score.
+
+No outcome calibration is claimed. Historical calibration by timeframe and session remains required before scores or agreements become position-sizing, screening, or alert thresholds; that is research work, not a UI relabel.
+
+**Tests:** profile mapping and non-comparability contract; Trend batch API serialization for 1m/5m/1h; a Confluence regression proving swapping raw score magnitudes cannot change the directional-vote aggregate; direct TrendCard rendering of Agreement/profile semantics.
 
 ### TC-02 — Live intraday Trend cards lose their market-data provider
 
@@ -268,6 +272,7 @@ No code changed in this pass — re-verification and re-ranking only, ahead of i
 | 2026-09-24 | TC-03 | ✅ COMPLETE | `841baff` | `backend/trend/trend_engine.py`, `backend/api/trend/router.py`, `backend/tests/trend/test_trend_engine.py`, `backend/tests/api/test_trend_api.py`, `frontend/src/components/TrendCard.tsx`, `frontend/src/components/TrendCard.test.tsx`, `frontend/src/services/api.ts` | 189 focused Trend/MTF/AI-contract backend tests passed; 10 TrendCard/ConfluenceCard tests passed; production frontend build passed | Replaced the false short-timeframe strength display with a closed-bar, ATR-normalized momentum measure: Choppy, Developing, or Persistent. Retaining ATR for this measure does not change the existing short-timeframe directional score. TC-10 is now partial because direct card coverage exists for TC-01 and TC-03. |
 | 2026-09-24 | TC-04 | ✅ COMPLETE | `0c894f6` | `backend/trend/trend_engine.py`, `backend/tests/trend/test_trend_engine.py`, `frontend/src/components/TrendCard.test.tsx`, `docs/Version_5/v5_trend_cards_bug_fixes.md` | 191 focused Trend/MTF/AI-contract backend tests passed; 11 TrendCard/ConfluenceCard tests passed; production frontend build passed | Made `Very Strong` reachable only for ADX > 50 plus DI-balance and composite-score confirmation, using the active-watchlist distribution to select the boundary. |
 | 2026-09-24 | TC-08 | ✅ COMPLETE | pending | `frontend/src/pages/Dashboard.tsx`, `frontend/src/pages/Dashboard.test.tsx`, `frontend/src/components/TrendCard.tsx`, `frontend/src/styles/App.css`, `docs/Version_5/v5_trend_cards_bug_fixes.md` | 15 focused Dashboard/TrendCard/ConfluenceCard tests passed; production frontend build passed; live browser verified Day Trading scope and Show all roles | Made the actual backend Confluence input set visible and filterable, with explicit roles for all inspected cards. |
+| 2026-09-24 | TC-05 | ✅ COMPLETE | pending | `backend/trend/trend_engine.py`, `backend/api/trend/router.py`, `backend/multitimeframe/multi_timeframe_engine.py`, `backend/api/multitimeframe/router.py`, focused backend tests, `frontend/src/components/TrendCard.tsx`, `frontend/src/components/ConfluenceCard.tsx`, frontend API types/styles/tests, `docs/Version_5/v5_trend_cards_bug_fixes.md` | 99 focused backend tests passed; 16 focused frontend tests passed; production frontend build passed | Declared profile-specific score semantics, rendered them, and changed Confluence from raw-score/agreement aggregation to source-quality-weighted directional votes. Local live API check was unavailable because port 5001 was not listening; API behavior is covered by FastAPI contract tests. |
 
 ---
 

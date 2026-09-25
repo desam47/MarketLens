@@ -81,17 +81,17 @@ function signalExplanation(trend: TrendData): string {
   const isShortHorizon = ['1m', '2m', '3m'].includes(trend.timeframe);
   const strength = trend.strength.replace(/_/g, ' ');
   const momentum = trend.short_horizon_momentum?.replace(/_/g, ' ');
-  const confidence = `${Math.round(trend.confidence * 100)}%`;
+  const agreement = `${Math.round(trend.confidence * 100)}%`;
 
   if (trend.direction === 'unknown') {
     return `${timeframe} has insufficient data for a directional signal.`;
   }
   if (isShortHorizon) {
     return momentum
-      ? `${timeframe} is ${direction} with ${momentum} short-term momentum and ${confidence} confidence.`
+      ? `${timeframe} is ${direction} with ${momentum} short-term momentum and ${agreement} indicator agreement.`
       : `${timeframe} is ${direction}; short-term momentum is awaiting enough closed-bar evidence.`;
   }
-  return `${timeframe} is ${direction} with ${strength} strength and ${confidence} confidence.`;
+  return `${timeframe} is ${direction} with ${strength} strength and ${agreement} indicator agreement.`;
 }
 
 export const TrendCard = memo(function TrendCard({ trend, confluenceRole }: TrendCardProps) {
@@ -102,6 +102,13 @@ export const TrendCard = memo(function TrendCard({ trend, confluenceRole }: Tren
   const momentum = trend.short_horizon_momentum;
   const momentumColor = momentum ? momentumColors[momentum] || '#9ca3af' : '#9ca3af';
   const confidencePct = (trend.confidence * 100).toFixed(0);
+  const scoring = trend.scoring;
+  const scoringProfileText = scoring
+    ? `${scoring.label} · ${scoring.components.length} inputs`
+    : 'Scoring profile unavailable';
+  const agreementTitle = scoring
+    ? 'Weighted indicator agreement within this profile. It is not a probability and is not calibrated for comparison with other timeframe profiles.'
+    : 'Agreement semantics unavailable for this signal.';
   const evidence = trend.evidence;
   const freshnessState = evidence?.freshness_state;
   const freshnessLabel = freshnessState ? evidenceLabels[freshnessState] || freshnessState.replace(/_/g, ' ') : null;
@@ -154,9 +161,12 @@ export const TrendCard = memo(function TrendCard({ trend, confluenceRole }: Tren
           </span>
         </div>
         <div className="trend-detail">
-          <span className="detail-label">Confidence</span>
-          <span className="detail-value">{confidencePct}%</span>
+          <span className="detail-label" title={agreementTitle}>Agreement</span>
+          <span className="detail-value" title={agreementTitle}>{confidencePct}%</span>
         </div>
+      </div>
+      <div className="trend-scoring-profile" title={agreementTitle} aria-label={`Scoring profile: ${scoringProfileText}`}>
+        Profile: {scoringProfileText}
       </div>
       <div className="confidence-bar">
         <div

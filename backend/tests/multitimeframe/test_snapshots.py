@@ -76,6 +76,44 @@ class TestTimeframeTrendSnapshotFields(unittest.TestCase):
         )
         self.assertIsInstance(snap.score, float)
 
+    def test_directional_vote_ignores_raw_score_magnitude(self):
+        """Confluence must not treat equal-looking raw scores as calibrated evidence."""
+        engine = MultiTimeframeEngine("AAPL", preset="day_trading")
+        common = {
+            "symbol": "AAPL",
+            "timestamp": datetime.now(),
+            "direction": TrendClassification.BULLISH,
+            "strength": 0.5,
+            "confidence": 0.99,
+            "data_quality": "ok",
+            "strategy_version": "v1.0",
+            "valid": True,
+            "quality_weight": 1.0,
+            "directional_vote": 1,
+        }
+        baseline = {
+            Timeframe.ONE_MINUTE: TimeframeTrendSnapshot(
+                timeframe=Timeframe.ONE_MINUTE, score=11.0, **common
+            ),
+            Timeframe.ONE_HOUR: TimeframeTrendSnapshot(
+                timeframe=Timeframe.ONE_HOUR, score=99.0, **common
+            ),
+        }
+        distorted = {
+            Timeframe.ONE_MINUTE: TimeframeTrendSnapshot(
+                timeframe=Timeframe.ONE_MINUTE, score=99.0, **common
+            ),
+            Timeframe.ONE_HOUR: TimeframeTrendSnapshot(
+                timeframe=Timeframe.ONE_HOUR, score=11.0, **common
+            ),
+        }
+
+        self.assertEqual(
+            engine._calculate_quality_weighted_score(baseline),
+            engine._calculate_quality_weighted_score(distorted),
+        )
+        self.assertAlmostEqual(engine._calculate_quality_weighted_score(baseline), 100.0)
+
 
 class TestMultiTimeframeSnapshotFields(unittest.TestCase):
     """All 14 spec fields exist with correct types."""

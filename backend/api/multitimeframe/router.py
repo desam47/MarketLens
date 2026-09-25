@@ -123,6 +123,8 @@ def _serialize_timeframe_snapshot(snap: TimeframeTrendSnapshot) -> dict:
         "is_warmed_up": snap.is_warmed_up,
         "valid": snap.valid,
         "quality_weight": snap.quality_weight,
+        "directional_vote": snap.directional_vote,
+        "scoring_profile": snap.scoring_profile,
     }
 
 
@@ -221,6 +223,7 @@ def build_confluence_payload(engine: MultiTimeframeEngine, symbol: str) -> dict:
             "strength": trend_payload["strength"],
             "confidence": trend_payload["confidence"],
             "score": trend_payload["score"],
+            "scoring": trend_payload["scoring"],
             "timestamp": trend_payload["timestamp"],
             "evidence": trend_payload["evidence"],
         }

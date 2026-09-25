@@ -76,6 +76,25 @@ class TestTrendBatchAPI(unittest.TestCase):
         # One shared engine lookup, not one per timeframe.
         self.mock_get_engine.assert_called_once_with("AAPL")
 
+    def test_batch_declares_each_timeframe_scoring_profile(self):
+        signals = {
+            Timeframe.ONE_MINUTE: _make_signal("AAPL", Timeframe.ONE_MINUTE, TrendDirection.UPTREND),
+            Timeframe.FIVE_MINUTE: _make_signal("AAPL", Timeframe.FIVE_MINUTE, TrendDirection.UPTREND),
+            Timeframe.ONE_HOUR: _make_signal("AAPL", Timeframe.ONE_HOUR, TrendDirection.UPTREND),
+        }
+        self.mock_engine.get_current_trend.side_effect = lambda tf: signals[tf]
+
+        response = self.client.get("/api/trend/AAPL/batch?timeframes=1m,5m,1h")
+
+        self.assertEqual(response.status_code, 200)
+        profiles = [row["scoring"] for row in response.json()]
+        self.assertEqual(
+            [profile["id"] for profile in profiles],
+            ["directional_core", "intraday_directional", "full_technical"],
+        )
+        self.assertEqual([len(profile["components"]) for profile in profiles], [3, 4, 8])
+        self.assertTrue(all(not profile["score_comparable_across_timeframes"] for profile in profiles))
+
     def test_batch_matches_single_timeframe_endpoint(self):
         """The batch and single-timeframe endpoints must agree — the batch
         endpoint reuses the same cache-and-build path."""

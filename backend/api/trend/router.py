@@ -16,6 +16,7 @@ from fastapi import APIRouter, HTTPException
 from backend.api.ttl_cache import _trend_cache, _trend_history_cache
 from backend.engines.timeframe import Timeframe
 from backend.trend.evidence import build_trend_evidence
+from backend.trend.trend_engine import scoring_profile_for_timeframe
 
 from .registry import get_engine
 
@@ -58,6 +59,7 @@ def _build_trend_payload(engine, sym: str, timeframe: str, tf) -> dict:
     if not isinstance(metadata, dict):
         metadata = {}
     evidence = _trend_evidence(engine, timeframe, trend_signal, metadata)
+    scoring = scoring_profile_for_timeframe(tf).to_payload()
     if trend_signal is None:
         return {
             "symbol": sym,
@@ -67,6 +69,7 @@ def _build_trend_payload(engine, sym: str, timeframe: str, tf) -> dict:
             "confidence": 0.0,
             "score": None,
             "classification": None,
+            "scoring": scoring,
             "timestamp": None,
             "data_age_seconds": evidence["age_seconds"],
             "data_status": evidence["data_status"],
@@ -91,6 +94,7 @@ def _build_trend_payload(engine, sym: str, timeframe: str, tf) -> dict:
         "classification": trend_signal.classification.value
         if hasattr(trend_signal.classification, "value")
         else trend_signal.classification,
+        "scoring": scoring,
         # The public timestamp is the source bar's true as-of time, not the
         # last signal-generation timestamp. This keeps daily/weekly cards
         # from inheriting a recent intraday display time.
