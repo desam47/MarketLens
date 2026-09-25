@@ -171,7 +171,7 @@ class TestTrendEngine(unittest.TestCase):
         self.assertIsInstance(history, list)
 
     def test_short_tf_indicators_update_once_per_closed_candle_not_per_tick(self):
-        """Regression: live 2026-09-16, DVLT's 1m Multi-Timeframe Trend cell
+        """Regression: live 2026-09-16, DVLT's 1m Trend by Timeframe cell
         flipped between "downtrend" and "sideways" within two minutes while
         every closed 1m bar in that window was higher than the last. Root
         cause: 1m/2m/3m indicators were fed the in-progress (still-forming)
@@ -340,9 +340,9 @@ class TestTrendEngine(unittest.TestCase):
         history = self.engine.get_trend_history(tf)
         self.assertEqual(history, [])
 
-    def test_get_multi_timeframe_trend(self):
-        """Getting multi-timeframe trend"""
-        trends = self.engine.get_multi_timeframe_trend()
+    def test_get_trend_by_timeframe(self):
+        """Getting Trend by Timeframe data"""
+        trends = self.engine.get_trend_by_timeframe()
         self.assertIsInstance(trends, dict)
         # Should be empty initially
         self.assertEqual(len(trends), 0)

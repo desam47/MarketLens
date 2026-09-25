@@ -174,7 +174,7 @@ async def get_trend_batch(symbol: str, timeframes: str):
     """Get current trend for multiple timeframes in a single request.
 
     Replaces N separate ``GET /current/{tf}`` calls with one round trip —
-    the dashboard's Multi-Timeframe Trend section fetches up to 10
+    the dashboard's Trend by Timeframe section fetches up to 10
     timeframes per load, which used to mean 10 separate GETs.
     ``timeframes`` is a comma-separated list (e.g. ``1m,5m,1h``). Each
     entry is read through the same 30s TTL cache as the single-timeframe

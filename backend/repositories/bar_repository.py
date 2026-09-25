@@ -137,7 +137,7 @@ def upsert_bars(db: Session, bars: list[Bar]) -> int:
     # bucket like 08:00-12:00 genuinely straddles premarket and regular.
     # Classifying from the bucket-start timestamp alone mislabeled the
     # whole bar "premarket" hours after the open (found live 2026-09-23:
-    # the 4h Multi-Timeframe Trend card showed "Premarket" during regular
+    # the 4h Trend by Timeframe card showed "Premarket" during regular
     # hours). Their builders (_resample_1h_from_1m_and_upsert,
     # _resample_1h_to_4h_and_upsert) now compute a spanning-aware session
     # via aggregate_bar_session() from their own members' real sessions —

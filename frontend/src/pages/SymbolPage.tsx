@@ -17,7 +17,7 @@ import api, {
 import { formatETDate, formatETDateTime, parseET } from '../components/chartMath';
 import { CandlestickChart } from '../components/CandlestickChart';
 import { MultiTimeframeChartGrid } from '../components/MultiTimeframeChartGrid';
-// import { MTFScoreGrid, TrendSignalsMap } from '../components/MTFScoreGrid';
+// import { TrendByTimeframeGrid, TrendSignalsMap } from '../components/TrendByTimeframeGrid';
 import { ConfluenceCard } from '../components/ConfluenceCard';
 import { ScoreDetailPanel } from '../components/ScoreDetailPanel';
 import { SignalExplanationPanel } from '../components/SignalExplanationPanel';
@@ -684,7 +684,7 @@ export function SymbolPage({ symbol, onSymbolChange, initialTimeframe, initialSe
   // stale-response guard as tapeRequestSymbolRef below.
   const scanRequestSymbolRef = useRef<string>(symbol);
 
-  // MTF Confluence (replaces MTFScoreGrid - uses same snapshot as Dashboard)
+  // MTF Confluence (replaces TrendByTimeframeGrid - uses same snapshot as Dashboard)
   const [mtfPreset, setMtfPreset] = useState<string>('day_trading');
   const [mtfConfluence, setMtfConfluence] = useState<any>(null);
   const [mtfLoading, setMtfLoading] = useState(true);

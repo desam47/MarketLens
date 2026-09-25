@@ -969,7 +969,7 @@ def _availability(ctx: dict) -> dict:
         if warm
         else (
             "not in your watchlist — live price / indicators only, "
-            "no multi-timeframe trend or confidence"
+            "no Trend by Timeframe or confidence data"
         ),
     }
 

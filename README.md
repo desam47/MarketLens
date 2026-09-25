@@ -929,7 +929,7 @@ Event-driven backtester. Replays historical bars and scanner signals. Computes e
 | `TopMoversCard` | Bullish/bearish movers from watchlist |
 | `WatchlistTable` | Virtualized watchlist table with inline scanning |
 | `CandlestickChart` | TradingView Lightweight Charts integration |
-| `MTFScoreGrid` | Per-timeframe score heatmap |
+| `TrendByTimeframeGrid` | Per-timeframe score heatmap |
 | `AIAnalysisPanel` | LLM-powered market commentary |
 | `ChatPanel` | Grounded chat with typed response blocks, provenance, feedback, notebooks, and safe action confirmations |
 | `ChangeInbox` | Browser-checkpointed local activity feed for watchlists, alerts, signals, catalysts, and provider health |

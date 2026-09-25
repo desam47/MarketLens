@@ -5311,18 +5311,18 @@ div.td-trend {
   border-radius: 9999px;
 }
 
-/* --- MTF Score Grid --- */
-.mtfs-grid-card {
+/* --- Trend by Timeframe Grid --- */
+.trend-by-tf-grid-card {
   grid-column: 1 / -1;
 }
 
-.mtfs-grid {
+.trend-by-tf-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
   gap: 10px;
 }
 
-.mtfs-cell {
+.trend-by-tf-cell {
   background: var(--bg-secondary);
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -5333,7 +5333,7 @@ div.td-trend {
   font-size: 12px;
 }
 
-.mtfs-tf-label {
+.trend-by-tf-tf-label {
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -5341,20 +5341,20 @@ div.td-trend {
   font-weight: 600;
 }
 
-.mtfs-direction {
+.trend-by-tf-direction {
   font-size: 14px;
   font-weight: 700;
   text-transform: capitalize;
 }
 
-.mtfs-strength {
+.trend-by-tf-strength {
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.04em;
   opacity: 0.9;
 }
 
-.mtfs-conf-bar {
+.trend-by-tf-conf-bar {
   width: 100%;
   height: 4px;
   background: var(--bg-tertiary);
@@ -5363,13 +5363,13 @@ div.td-trend {
   margin-top: 2px;
 }
 
-.mtfs-conf-fill {
+.trend-by-tf-conf-fill {
   height: 100%;
   border-radius: 9999px;
   transition: width 0.3s ease;
 }
 
-.mtfs-conf-label {
+.trend-by-tf-conf-label {
   font-size: 11px;
   color: var(--text-muted);
   font-family: 'SF Mono', Monaco, monospace;

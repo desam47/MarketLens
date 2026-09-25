@@ -86,7 +86,7 @@ const SECTION_LABELS: Record<DashboardSectionId, string> = {
   market_context: 'Market context',
   confluence: 'Multi-timeframe confluence',
   strategy: 'Strategy guidance',
-  trends: 'Multi-timeframe trends',
+  trends: 'Trend by Timeframe',
   movers: 'Top movers',
   search: 'Natural-language search',
   digest: 'Market digest',

@@ -1601,7 +1601,7 @@ function ProvenanceRow({ message }: { message: ChatMessage }) {
         <span
           key={s}
           className="chat-pill partial"
-          title={`Partial data for ${s}: live price / RSI / support-resistance only — not in your watchlist, so no multi-timeframe trend or confidence`}
+          title={`Partial data for ${s}: live price / RSI / support-resistance only — not in your watchlist, so no Trend by Timeframe or confidence data`}
         >
           {s} ◐ partial
         </span>

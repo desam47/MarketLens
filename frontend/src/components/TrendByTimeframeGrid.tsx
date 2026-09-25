@@ -10,7 +10,7 @@ export interface TrendSignalsMap {
   [timeframe: string]: TrendSignalEntry;
 }
 
-interface MTFScoreGridProps {
+interface TrendByTimeframeGridProps {
   trendSignals: TrendSignalsMap;
   symbol: string;
 }
@@ -48,7 +48,7 @@ const STR_COLORS: Record<string, string> = {
   unknown: '#9ca3af',
 };
 
-export function MTFScoreGrid({ trendSignals, symbol }: MTFScoreGridProps) {
+export function TrendByTimeframeGrid({ trendSignals, symbol }: TrendByTimeframeGridProps) {
   // Build ordered list of timeframes present in the data.
   const entries = TIMEFRAME_ORDER
     .filter(([key]) => key in trendSignals)
@@ -56,41 +56,41 @@ export function MTFScoreGrid({ trendSignals, symbol }: MTFScoreGridProps) {
 
   if (entries.length === 0) {
     return (
-      <div className="card analysis-card mtfs-grid-card">
+      <div className="card analysis-card trend-by-tf-grid-card">
         <h2>Trend by Timeframe</h2>
-        <p className="empty-state">No MTF trend data for {symbol}</p>
+        <p className="empty-state">No trend data for {symbol}</p>
       </div>
     );
   }
 
   return (
-    <div className="card analysis-card mtfs-grid-card">
+    <div className="card analysis-card trend-by-tf-grid-card">
       <div className="card-header-row">
         <h2>Trend by Timeframe</h2>
         <span className="symbol-tag">{symbol}</span>
       </div>
-      <div className="mtfs-grid">
+      <div className="trend-by-tf-grid">
         {entries.map(({ key, label, signal }) => {
           const color = DIR_COLORS[signal.direction] ?? '#9ca3af';
           const icon = DIR_ICONS[signal.direction] ?? '?';
           const strColor = STR_COLORS[signal.strength] ?? '#9ca3af';
           const confPct = Math.round((signal.confidence ?? 0) * 100);
           return (
-            <div key={key} className="mtfs-cell" style={{ borderTop: `3px solid ${color}` }}>
-              <div className="mtfs-tf-label">{label}</div>
-              <div className="mtfs-direction" style={{ color }}>
+            <div key={key} className="trend-by-tf-cell" style={{ borderTop: `3px solid ${color}` }}>
+              <div className="trend-by-tf-tf-label">{label}</div>
+              <div className="trend-by-tf-direction" style={{ color }}>
                 {icon} {signal.direction.replace(/_/g, ' ')}
               </div>
-              <div className="mtfs-strength" style={{ color: strColor }}>
+              <div className="trend-by-tf-strength" style={{ color: strColor }}>
                 {signal.strength.replace(/_/g, ' ').toUpperCase()}
               </div>
-              <div className="mtfs-conf-bar">
+              <div className="trend-by-tf-conf-bar">
                 <div
-                  className="mtfs-conf-fill"
+                  className="trend-by-tf-conf-fill"
                   style={{ width: `${confPct}%`, backgroundColor: color }}
                 />
               </div>
-              <div className="mtfs-conf-label">{confPct}% conf</div>
+              <div className="trend-by-tf-conf-label">{confPct}% conf</div>
             </div>
           );
         })}
@@ -99,4 +99,4 @@ export function MTFScoreGrid({ trendSignals, symbol }: MTFScoreGridProps) {
   );
 }
 
-export default MTFScoreGrid;
+export default TrendByTimeframeGrid;

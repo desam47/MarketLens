@@ -939,10 +939,10 @@ def build_context(
     if price is None:
         raise InsufficientDataError(f"no price available for {sym}")
 
-    # --- 2. MTF trend signals (cheap derivation from the scan) ---
-    mtf = scan.trend_signals or {}
+    # --- 2. Trend by Timeframe signals (cheap derivation from the scan) ---
+    trend_by_tf = scan.trend_signals or {}
     timeframe_scores: dict[str, Any] = {}
-    for raw_tf_key, tsig in mtf.items():
+    for raw_tf_key, tsig in trend_by_tf.items():
         tf_key = _canonical_timeframe_key(raw_tf_key)
         # trend_signals is a dict-of-dicts in the scanner API
         if hasattr(tsig, "direction"):
@@ -959,11 +959,11 @@ def build_context(
             }
 
     # Primary signal for the requested timeframe. Do not substitute the first
-    # available MTF result when the requested window is unavailable: that used
-    # to make a Daily analysis use the scanner's first-inserted ONE_MINUTE
-    # signal while presenting it as Daily.
+    # available Trend by Timeframe result when the requested window is
+    # unavailable: that used to make a Daily analysis use the scanner's
+    # first-inserted ONE_MINUTE signal while presenting it as Daily.
     primary_sig = None
-    for raw_tf_key, candidate in mtf.items():
+    for raw_tf_key, candidate in trend_by_tf.items():
         if _canonical_timeframe_key(raw_tf_key) == tf:
             primary_sig = candidate
             break

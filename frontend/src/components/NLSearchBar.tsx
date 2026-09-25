@@ -61,7 +61,7 @@ function signalChipClass(sig: string): string {
 }
 
 // Matches the app-wide trend-direction convention used everywhere
-// else (TrendCard, MTFScoreGrid, ConfluenceCard, ScannerPage's
+// else (TrendCard, TrendByTimeframeGrid, ConfluenceCard, ScannerPage's
 // .cell-trend badges): green = up, red = down, yellow = neutral.
 const DIRECTION_COLOR: Record<string, string> = {
   uptrend: '#22c55e',

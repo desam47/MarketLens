@@ -937,7 +937,7 @@ class TestUpsertBarsSessionRecompute(unittest.TestCase):
         bucket like 08:00-12:00 (4h) or 09:00-10:00 (1h) genuinely spans
         two sessions. Classifying from the bucket-start timestamp alone
         mislabeled a whole straddling bar with only its first sub-session
-        (found live 2026-09-23: the 4h Multi-Timeframe Trend card showed
+        (found live 2026-09-23: the 4h Trend by Timeframe card showed
         "Premarket" during regular hours). Only the resample builders
         (backend.market_data.services.ingestion_service) have the member
         bars needed to compute this correctly via aggregate_bar_session(),

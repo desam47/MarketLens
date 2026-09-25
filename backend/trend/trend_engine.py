@@ -795,7 +795,7 @@ class TrendEngine:
         Each timeframe is updated at its own cadence:
           - Short TFs (1m/2m/3m): update once per CLOSED candle, not on
             every tick. These feed the "1m" (etc.) cell on the
-            Multi-Timeframe Trend panel, which users compare directly
+            Trend by Timeframe panel, which users compare directly
             against the 1m bar chart — that chart only ever shows closed
             candles. Feeding the in-progress candle instead meant two
             problems: the signal could visually contradict the chart
@@ -1305,7 +1305,7 @@ class TrendEngine:
             "witnessed_change": witnessed_change,
         }
 
-    def get_multi_timeframe_trend(self) -> dict[Timeframe, TrendSignal]:
+    def get_trend_by_timeframe(self) -> dict[Timeframe, TrendSignal]:
         """Get current trend for all timeframes"""
         trends = {}
         for timeframe in Timeframe:
@@ -1374,7 +1374,7 @@ class TrendEngine:
             if v in (tf.value for tf in Timeframe)
         }
 
-        trends = self.get_multi_timeframe_trend()
+        trends = self.get_trend_by_timeframe()
         if not trends:
             return None
 
