@@ -278,6 +278,9 @@ class TrendSignal:
         short_horizon_momentum_score: float | None = None,
         attribution: list[dict[str, Any]] | None = None,
         key_levels: dict[str, Any] | None = None,
+        maturity: str | None = None,
+        stop_distance_atr: float | None = None,
+        htf_bias: dict[str, Any] | None = None,
     ):
         self.symbol = symbol
         self.timeframe = timeframe
@@ -316,6 +319,14 @@ class TrendSignal:
         # construct a signal without the engine's scoring internals.
         self.attribution: list[dict[str, Any]] = attribution or []
         self.key_levels: dict[str, Any] = key_levels or {}
+        # E5: trend maturity label (Fresh/Developing/Healthy/Extended) derived
+        # from SuperTrend band_distance_atr. Tells how far price sits from the
+        # stop and whether the move is fresh or extended.
+        self.maturity: str | None = maturity
+        self.stop_distance_atr: float | None = stop_distance_atr
+        # E4: compact higher-timeframe bias tag so each card is actionable
+        # standalone — e.g. {"timeframe": "1h", "direction": "uptrend", "score": 25.1}
+        self.htf_bias: dict[str, Any] | None = htf_bias
         self.indicators: dict[str, Any] = {}
 
     def __repr__(self):
@@ -475,10 +486,15 @@ class TrendEngine:
             # (SuperTrend) and regime gate (ADX) have data to work with.
             if timeframe in _SHORT_HORIZON_TIMEFRAMES:
                 if _settings.trend.signal_v2:
+                    # V2 full fast-TF stack: direction gate (ST), regime gate (ADX),
+                    # conviction (MACD+EMA+RSI), volume (E1), momentum (E1).
                     self.indicators[timeframe] = {
                         k: v
                         for k, v in stack.items()
-                        if k in ("ema_fast", "ema_slow", "rsi", "macd", "atr", "supertrend", "adx")
+                        if k in (
+                            "ema_fast", "ema_slow", "rsi", "macd", "atr",
+                            "supertrend", "adx", "relative_volume", "roc",
+                        )
                     }
                 else:
                     self.indicators[timeframe] = {
@@ -488,11 +504,14 @@ class TrendEngine:
                     }
             elif timeframe == Timeframe.FIVE_MINUTE:
                 if _settings.trend.signal_v2:
-                    # ADX already in 5m stack; add SuperTrend + ATR for gated scoring
+                    # V2: ADX already in 5m stack; add ST + ATR + volume + momentum (E1)
                     self.indicators[timeframe] = {
                         k: v
                         for k, v in stack.items()
-                        if k in ("ema_fast", "ema_slow", "rsi", "macd", "adx", "supertrend", "atr")
+                        if k in (
+                            "ema_fast", "ema_slow", "rsi", "macd", "adx",
+                            "supertrend", "atr", "relative_volume", "roc",
+                        )
                     }
                 else:
                     self.indicators[timeframe] = {
@@ -973,6 +992,29 @@ class TrendEngine:
         )
         key_levels = self._extract_key_levels(supertrend_ind, bollinger_ind)
 
+        # E5: maturity label + stop distance from SuperTrend band_distance_atr.
+        band_dist_raw = (
+            getattr(supertrend_ind, "band_distance_atr", None) if supertrend_ind else None
+        )
+        ch = self.get_trend_change_history(timeframe)
+        held_bars = ch.get("bars_in_state") if ch else None
+        maturity, stop_distance_atr = self._compute_maturity(band_dist_raw, held_bars)
+
+        # E4: higher-TF bias tag — read last completed signal from the anchor TF.
+        # One-bar lag on the higher TF is acceptable; the engine holds all TFs.
+        htf_bias: dict[str, Any] | None = None
+        htf_tf = self._htf_anchor(timeframe)
+        if htf_tf is not None:
+            htf_history = self.trend_history.get(htf_tf)
+            if htf_history:
+                htf_sig = htf_history[-1]
+                htf_bias = {
+                    "timeframe": htf_tf.value,
+                    "direction": htf_sig.direction.value,
+                    "score": round(htf_sig.score, 1) if htf_sig.score is not None else None,
+                    "classification": htf_sig.classification.value if htf_sig.classification else None,
+                }
+
         return TrendSignal(
             symbol=self.symbol,
             timeframe=timeframe,
@@ -987,6 +1029,9 @@ class TrendEngine:
             short_horizon_momentum_score=short_momentum_score,
             attribution=attribution,
             key_levels=key_levels,
+            maturity=maturity,
+            stop_distance_atr=stop_distance_atr,
+            htf_bias=htf_bias,
         )
 
     @staticmethod
@@ -1023,6 +1068,63 @@ class TrendEngine:
                     "lower": round(float(lower[-1]), 4),
                 }
         return levels
+
+    @staticmethod
+    def _compute_maturity(
+        band_distance_atr: float | None,
+        held_bars: int | None,
+    ) -> tuple[str | None, float | None]:
+        """Derive trend maturity label and stop distance from SuperTrend band distance.
+
+        Returns (maturity_label, stop_distance_atr).
+
+        Maturity buckets (E5):
+          band_dist < 0        → "just_flipped"  (price crossed ST this bar)
+          0 ≤ dist < 0.5       → "fresh"          tight stop, high R:R entry
+          0.5 ≤ dist < 2.0     → "developing"     move confirmed, normal stop
+          2.0 ≤ dist < 4.0     → "healthy"        trend well established
+          dist ≥ 4.0           → "extended"       caution — wide stop, late entry
+        """
+        if band_distance_atr is None:
+            return None, None
+        dist = float(band_distance_atr)
+        stop_dist = round(dist, 3)
+        if dist < 0:
+            label = "just_flipped"
+        elif dist < 0.5:
+            label = "fresh"
+        elif dist < 2.0:
+            label = "developing"
+        elif dist < 4.0:
+            label = "healthy"
+        else:
+            label = "extended"
+        # If held only 1-2 bars and dist is low, keep "fresh" even if dist
+        # would say "developing" — the flip hasn't aged yet.
+        if held_bars is not None and held_bars <= 2 and dist < 1.5:
+            label = "fresh"
+        return label, stop_dist
+
+    # Higher-TF bias map (E4): each TF reads its designated anchor's last signal.
+    _HTF_FOR_TIMEFRAME: dict["Timeframe", "Timeframe"] = {}  # populated lazily below
+
+    @classmethod
+    def _htf_anchor(cls, timeframe: "Timeframe") -> "Timeframe | None":
+        """Return the designated higher-TF anchor for a given timeframe (E4)."""
+        if not cls._HTF_FOR_TIMEFRAME:
+            cls._HTF_FOR_TIMEFRAME = {
+                Timeframe.ONE_MINUTE: Timeframe.FIFTEEN_MINUTE,
+                Timeframe.TWO_MINUTE: Timeframe.FIFTEEN_MINUTE,
+                Timeframe.THREE_MINUTE: Timeframe.FIFTEEN_MINUTE,
+                Timeframe.FIVE_MINUTE: Timeframe.FIFTEEN_MINUTE,
+                Timeframe.FIFTEEN_MINUTE: Timeframe.ONE_HOUR,
+                Timeframe.THIRTY_MINUTE: Timeframe.ONE_HOUR,
+                Timeframe.ONE_HOUR: Timeframe.FOUR_HOUR,
+                Timeframe.TWO_HOUR: Timeframe.FOUR_HOUR,
+                Timeframe.FOUR_HOUR: Timeframe.ONE_DAY,
+                Timeframe.ONE_DAY: Timeframe.ONE_WEEK,
+            }
+        return cls._HTF_FOR_TIMEFRAME.get(timeframe)
 
     @staticmethod
     def _classify_short_horizon_momentum(

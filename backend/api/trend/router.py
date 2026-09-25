@@ -93,6 +93,9 @@ def _build_trend_payload(engine, sym: str, timeframe: str, tf) -> dict:
             "change_history": change_history,
             "attribution": [],
             "key_levels": {},
+            "maturity": None,
+            "stop_distance_atr": None,
+            "htf_bias": None,
         }
     return {
         "symbol": trend_signal.symbol,
@@ -124,6 +127,9 @@ def _build_trend_payload(engine, sym: str, timeframe: str, tf) -> dict:
         "change_history": change_history,
         "attribution": getattr(trend_signal, "attribution", None) or [],
         "key_levels": getattr(trend_signal, "key_levels", None) or {},
+        "maturity": getattr(trend_signal, "maturity", None),
+        "stop_distance_atr": getattr(trend_signal, "stop_distance_atr", None),
+        "htf_bias": getattr(trend_signal, "htf_bias", None),
     }
 
 

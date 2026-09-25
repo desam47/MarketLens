@@ -140,6 +140,12 @@ export interface TrendData {
   change_history?: TrendChangeHistory | null;
   attribution?: TrendComponentContribution[];
   key_levels?: TrendKeyLevels;
+  /** E5: trend maturity label — 'just_flipped' | 'fresh' | 'developing' | 'healthy' | 'extended' */
+  maturity?: 'just_flipped' | 'fresh' | 'developing' | 'healthy' | 'extended' | null;
+  /** E5: distance from the SuperTrend stop in ATR units (tight = fresh, wide = extended) */
+  stop_distance_atr?: number | null;
+  /** E4: designated higher-timeframe bias — direction, score, and classification */
+  htf_bias?: { timeframe: string; direction: string; score: number | null; classification: string | null } | null;
 }
 
 export interface ConfluenceTimeframeSignal {

@@ -130,6 +130,46 @@ function formatKeyLevels(levels: TrendKeyLevels | undefined): string[] {
   return parts;
 }
 
+const maturityLabels: Record<string, string> = {
+  just_flipped: 'Just flipped',
+  fresh: 'Fresh',
+  developing: 'Developing',
+  healthy: 'Healthy',
+  extended: 'Extended',
+};
+
+const maturityTitles: Record<string, string> = {
+  just_flipped: 'Price crossed the SuperTrend line this bar — very tight stop, highest R:R but unconfirmed.',
+  fresh: 'Price is less than 0.5 ATR from the SuperTrend stop — tight risk, high R:R entry.',
+  developing: '0.5–2 ATR from stop — trend confirmed, normal stop placement.',
+  healthy: '2–4 ATR from stop — well-established trend, wider stop.',
+  extended: '4+ ATR from stop — mature/extended move. Caution: wide stop, late entry.',
+};
+
+function formatMaturity(
+  maturity: string | null | undefined,
+  stopDist: number | null | undefined,
+): { label: string; title: string; stopText: string | null } | null {
+  if (!maturity) return null;
+  const label = maturityLabels[maturity] || maturity.replace(/_/g, ' ');
+  const title = maturityTitles[maturity] || '';
+  const stopText = stopDist != null ? `stop ${stopDist.toFixed(2)} ATR` : null;
+  return { label, title, stopText };
+}
+
+function formatHtfBias(
+  bias: TrendData['htf_bias'],
+): { text: string; aligned: boolean } | null {
+  if (!bias || !bias.direction) return null;
+  const tfLabel: Record<string, string> = {
+    '15m': '15m', '30m': '30m', '1h': '1h', '2h': '2h',
+    '4h': '4h', '1d': '1d', '1wk': '1wk',
+  };
+  const dirArrow = bias.direction === 'uptrend' ? '↑' : bias.direction === 'downtrend' ? '↓' : '◆';
+  const tfStr = tfLabel[bias.timeframe] || bias.timeframe;
+  return { text: `${tfStr} ${dirArrow}`, aligned: bias.direction !== 'downtrend' && bias.direction !== 'unknown' };
+}
+
 function formatSignedScore(score: number | null | undefined): string | null {
   if (score == null || !Number.isFinite(score)) return null;
   const rounded = Math.round(score);
@@ -203,6 +243,8 @@ export const TrendCard = memo(function TrendCard({ trend, confluenceRole, onOpen
     : null;
   const sourceAsOf = evidence?.source_as_of ?? trend.timestamp;
   const providerLabel = formatProvider(evidence?.provider ?? trend.provider);
+  const maturityInfo = formatMaturity(trend.maturity, trend.stop_distance_atr);
+  const htfBiasInfo = formatHtfBias(trend.htf_bias);
   const sessionLabel = trend.session === 'after_hours'
     ? 'After-hours'
     : trend.session === 'premarket'
@@ -283,6 +325,22 @@ export const TrendCard = memo(function TrendCard({ trend, confluenceRole, onOpen
       {changeHistoryLabel && (
         <div className="trend-change-history" title="Direction persistence measured in closed bars for this timeframe.">
           {changeHistoryLabel}
+        </div>
+      )}
+      {maturityInfo && (
+        <div className="trend-maturity" title={maturityInfo.title}>
+          <span className={`trend-maturity-label trend-maturity-${trend.maturity}`}>{maturityInfo.label}</span>
+          {maturityInfo.stopText && (
+            <span className="trend-stop-distance">{maturityInfo.stopText}</span>
+          )}
+        </div>
+      )}
+      {htfBiasInfo && (
+        <div
+          className={`trend-htf-bias trend-htf-bias-${trend.htf_bias?.direction?.replace('trend', '') || 'neutral'}`}
+          title={`Higher-timeframe bias from ${trend.htf_bias?.timeframe}`}
+        >
+          {htfBiasInfo.text}
         </div>
       )}
       {keyLevelParts.length > 0 && (
