@@ -146,6 +146,8 @@ export interface TrendData {
   stop_distance_atr?: number | null;
   /** E4: designated higher-timeframe bias — direction, score, and classification */
   htf_bias?: { timeframe: string; direction: string; score: number | null; classification: string | null } | null;
+  /** E3: ADX slope direction — 'strengthening' | 'fading' | 'flat'; null when ADX not in stack or insufficient history */
+  adx_slope?: 'strengthening' | 'fading' | 'flat' | null;
 }
 
 export interface ConfluenceTimeframeSignal {

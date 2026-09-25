@@ -892,6 +892,46 @@ class TestGatedHybridV2Flag(unittest.TestCase):
         self.assertIsNotNone(signal)
 
 
+class TestADXSlope(unittest.TestCase):
+    """E3: ADX slope label derived from a rolling 8-bar buffer."""
+
+    def _slope(self, values):
+        from collections import deque
+        from backend.trend.trend_engine import TrendEngine
+        buf = deque(values, maxlen=8)
+        return TrendEngine._compute_adx_slope(buf)
+
+    def test_returns_none_with_fewer_than_6_readings(self):
+        self.assertIsNone(self._slope([20, 22, 24, 25, 26]))
+
+    def test_strengthening_when_recent_clearly_higher(self):
+        # older=[18,19,20] avg=19, recent=[24,25,26] avg=25 → delta=+6
+        result = self._slope([18, 19, 20, 24, 25, 26])
+        self.assertEqual(result, "strengthening")
+
+    def test_fading_when_recent_clearly_lower(self):
+        # older=[30,28,26] avg=28, recent=[22,20,18] avg=20 → delta=-8
+        result = self._slope([30, 28, 26, 22, 20, 18])
+        self.assertEqual(result, "fading")
+
+    def test_flat_within_threshold(self):
+        # older=[20,21,20] avg≈20.3, recent=[21,22,21] avg≈21.3 → delta=+1 (within ±2)
+        result = self._slope([20, 21, 20, 21, 22, 21])
+        self.assertEqual(result, "flat")
+
+    def test_uses_last_6_of_8_readings(self):
+        # First 2 readings are old noise; slope should be based on positions -6..-1
+        # positions [-6,-5,-4] = [18,19,20] avg=19, [-3,-2,-1] = [24,25,26] avg=25
+        result = self._slope([99, 99, 18, 19, 20, 24, 25, 26])
+        self.assertEqual(result, "strengthening")
+
+    def test_exact_boundary_is_flat(self):
+        # delta exactly 2.0 → flat (boundary is exclusive >2)
+        # older=[20,20,20] avg=20, recent=[22,22,22] avg=22 → delta=2.0 exactly
+        result = self._slope([20, 20, 20, 22, 22, 22])
+        self.assertEqual(result, "flat")
+
+
 class TestTrendChangeHistory(unittest.TestCase):
     """TC-09: change history counts CLOSED bars, not polling-frequency updates."""
 

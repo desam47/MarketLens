@@ -96,6 +96,7 @@ def _build_trend_payload(engine, sym: str, timeframe: str, tf) -> dict:
             "maturity": None,
             "stop_distance_atr": None,
             "htf_bias": None,
+            "adx_slope": None,
         }
     return {
         "symbol": trend_signal.symbol,
@@ -130,6 +131,7 @@ def _build_trend_payload(engine, sym: str, timeframe: str, tf) -> dict:
         "maturity": getattr(trend_signal, "maturity", None),
         "stop_distance_atr": getattr(trend_signal, "stop_distance_atr", None),
         "htf_bias": getattr(trend_signal, "htf_bias", None),
+        "adx_slope": getattr(trend_signal, "adx_slope", None),
     }
 
 

@@ -1390,6 +1390,22 @@ h4 {
   font-size: 0.68rem;
 }
 
+/* E3: ADX slope */
+.trend-adx-slope {
+  font-size: 0.7rem;
+  margin-bottom: 0.25rem;
+  font-weight: 500;
+  cursor: help;
+}
+
+.trend-adx-slope-strengthening { color: #16a34a; }
+.trend-adx-slope-fading         { color: #dc2626; }
+
+@media (prefers-color-scheme: dark) {
+  .trend-adx-slope-strengthening { color: #4ade80; }
+  .trend-adx-slope-fading         { color: #f87171; }
+}
+
 /* E4: higher-TF bias tag */
 .trend-htf-bias {
   font-size: 0.7rem;

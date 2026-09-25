@@ -281,6 +281,7 @@ class TrendSignal:
         maturity: str | None = None,
         stop_distance_atr: float | None = None,
         htf_bias: dict[str, Any] | None = None,
+        adx_slope: str | None = None,
     ):
         self.symbol = symbol
         self.timeframe = timeframe
@@ -324,6 +325,9 @@ class TrendSignal:
         # stop and whether the move is fresh or extended.
         self.maturity: str | None = maturity
         self.stop_distance_atr: float | None = stop_distance_atr
+        # E3: ADX slope label — 'strengthening', 'fading', or 'flat'.
+        # Derived from a rolling 8-bar ADX buffer; None when ADX isn't in the stack.
+        self.adx_slope: str | None = adx_slope
         # E4: compact higher-timeframe bias tag so each card is actionable
         # standalone — e.g. {"timeframe": "1h", "direction": "uptrend", "score": 25.1}
         self.htf_bias: dict[str, Any] | None = htf_bias
@@ -408,6 +412,9 @@ class TrendEngine:
             timeframe: deque(maxlen=_SHORT_MOMENTUM_BAR_COUNT)
             for timeframe in _SHORT_HORIZON_TIMEFRAMES
         }
+        # E3: rolling ADX buffer — last 8 closed-bar ADX readings per timeframe.
+        # Used to derive "strengthening" vs "fading" for the card.
+        self._adx_history: dict[Timeframe, deque[float]] = {}
 
         # Initialize indicators for each timeframe
         self.indicators: dict[Timeframe, dict[str, Any]] = {}
@@ -1000,6 +1007,15 @@ class TrendEngine:
         held_bars = ch.get("bars_in_state") if ch else None
         maturity, stop_distance_atr = self._compute_maturity(band_dist_raw, held_bars)
 
+        # E3: update the rolling ADX buffer and derive the slope label.
+        adx_value_for_slope = indicator_values.get("adx")
+        if adx_value_for_slope is not None:
+            buf = self._adx_history.setdefault(timeframe, deque(maxlen=8))
+            buf.append(float(adx_value_for_slope))
+        else:
+            buf = self._adx_history.get(timeframe, deque())
+        adx_slope = self._compute_adx_slope(buf)
+
         # E4: higher-TF bias tag — read last completed signal from the anchor TF.
         # One-bar lag on the higher TF is acceptable; the engine holds all TFs.
         htf_bias: dict[str, Any] | None = None
@@ -1032,6 +1048,7 @@ class TrendEngine:
             maturity=maturity,
             stop_distance_atr=stop_distance_atr,
             htf_bias=htf_bias,
+            adx_slope=adx_slope,
         )
 
     @staticmethod
@@ -1104,6 +1121,29 @@ class TrendEngine:
         if held_bars is not None and held_bars <= 2 and dist < 1.5:
             label = "fresh"
         return label, stop_dist
+
+    @staticmethod
+    def _compute_adx_slope(history: "deque[float]") -> str | None:
+        """Derive ADX slope label from a rolling buffer (E3).
+
+        Compares the mean of the 3 most-recent readings against the mean of
+        the 3 readings before those. Returns:
+          'strengthening'  — ADX rising  (delta >  2.0)
+          'fading'         — ADX falling (delta < -2.0)
+          'flat'           — delta within ±2.0
+          None             — fewer than 6 readings (not enough history)
+        """
+        if len(history) < 6:
+            return None
+        vals = list(history)
+        recent = sum(vals[-3:]) / 3.0
+        older = sum(vals[-6:-3]) / 3.0
+        delta = recent - older
+        if delta > 2.0:
+            return "strengthening"
+        if delta < -2.0:
+            return "fading"
+        return "flat"
 
     # Higher-TF bias map (E4): each TF reads its designated anchor's last signal.
     _HTF_FOR_TIMEFRAME: dict["Timeframe", "Timeframe"] = {}  # populated lazily below

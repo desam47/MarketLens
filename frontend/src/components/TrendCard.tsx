@@ -245,6 +245,9 @@ export const TrendCard = memo(function TrendCard({ trend, confluenceRole, onOpen
   const providerLabel = formatProvider(evidence?.provider ?? trend.provider);
   const maturityInfo = formatMaturity(trend.maturity, trend.stop_distance_atr);
   const htfBiasInfo = formatHtfBias(trend.htf_bias);
+  const adxSlopeLabel = trend.adx_slope === 'strengthening' ? '↗ ADX strengthening'
+    : trend.adx_slope === 'fading' ? '↘ ADX fading'
+    : null; // 'flat' and null both render nothing — flat is expected/boring
   const sessionLabel = trend.session === 'after_hours'
     ? 'After-hours'
     : trend.session === 'premarket'
@@ -333,6 +336,14 @@ export const TrendCard = memo(function TrendCard({ trend, confluenceRole, onOpen
           {maturityInfo.stopText && (
             <span className="trend-stop-distance">{maturityInfo.stopText}</span>
           )}
+        </div>
+      )}
+      {adxSlopeLabel && (
+        <div
+          className={`trend-adx-slope trend-adx-slope-${trend.adx_slope}`}
+          title="ADX slope: compares the last 3 closed-bar ADX readings against the 3 before those."
+        >
+          {adxSlopeLabel}
         </div>
       )}
       {htfBiasInfo && (
