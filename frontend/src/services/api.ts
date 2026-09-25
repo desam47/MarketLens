@@ -1704,6 +1704,143 @@ const DEFAULT_TIMEOUT_MS = 30000;
 // this would need this constant raised too.
 const AI_TIMEOUT_MS = 150000;
 
+// ── Trade planning ────────────────────────────────────────────────────
+
+export interface ExcursionPercentiles {
+  p25: number;
+  p50: number;
+  p75: number;
+  p90: number;
+}
+
+export interface ExcursionFilters {
+  symbol: string | null;
+  timeframe: string;
+  trend_state: string;
+  strength_min: number | null;
+  strength_max: number | null;
+  start_date: string | null;
+  end_date: string | null;
+}
+
+/** Excursion distribution of comparable past signals. Every statistic is null
+ * when `sufficient` is false — the slice was too thin to act on. */
+export interface ExcursionMetrics {
+  sample_size: number;
+  min_sample: number;
+  sufficient: boolean;
+  confidence: 'high' | 'moderate' | 'insufficient';
+  units: string;
+  win_rate: number | null;
+  avg_return_5b: number | null;
+  avg_return_10b: number | null;
+  avg_return_20b: number | null;
+  median_return_5b: number | null;
+  median_return_10b: number | null;
+  median_return_20b: number | null;
+  /** Positive magnitudes: p75 is the distance a stop must clear. */
+  adverse_excursion_pct: ExcursionPercentiles | null;
+  /** Signed: p50 is the median run in favour. */
+  favorable_excursion_pct: ExcursionPercentiles | null;
+  notes: string[];
+}
+
+export interface ExcursionRelaxation extends ExcursionMetrics {
+  level: string;
+  label: string;
+  filters: ExcursionFilters;
+}
+
+export interface ExcursionResponse extends ExcursionMetrics {
+  symbol: string;
+  timeframe: string;
+  direction: TradeDirection;
+  filters: ExcursionFilters;
+  /** Wider slices, populated only when the requested one was too thin. */
+  relaxation: ExcursionRelaxation[];
+}
+
+export type TradeDirection = 'long' | 'short';
+
+export interface PriceCandidate {
+  source: string;
+  price: number;
+  distance_pct: number;
+  rationale: string;
+}
+
+export interface SelectedLevels {
+  entry_zone_low: number;
+  entry_zone_high: number;
+  stop_price: number;
+  stop_source: string;
+  targets: number[];
+  target_sources: string[];
+}
+
+export interface TradePlanTarget {
+  price: number;
+  risk: number;
+  reward: number;
+  risk_reward: number;
+}
+
+export interface TradePlanPositionSize {
+  per_share_risk: number | null;
+  risk_dollars: number | null;
+  shares: number | null;
+  position_value: number | null;
+  portfolio_risk_percent: number | null;
+}
+
+/** Output of the backend plan builder. Distinct from `TradePlan`, which is
+ * the AI advisory layer's recommendation shape. */
+export interface BuiltTradePlan {
+  available: boolean;
+  symbol: string;
+  direction: TradeDirection;
+  entry_zone: { low: number; high: number } | null;
+  entry_reference: number | null;
+  stop_price: number;
+  targets: TradePlanTarget[];
+  position_size: TradePlanPositionSize | null;
+  position_size_reason: string | null;
+  invalidation: string | null;
+  timeframe: string | null;
+  formulas: string[];
+  assumptions: string[];
+}
+
+export interface TradePlanDraft {
+  symbol: string;
+  timeframe: string;
+  direction: TradeDirection;
+  current_price: number | null;
+  latest_bar_timestamp: string | null;
+  latest_bar_data_status: string | null;
+  latest_bar_source: string | null;
+  bars_used: number | null;
+  /** Per-source `{available, error}` envelopes plus that source's payload. */
+  sources: Record<string, any>;
+  candidate_stops: PriceCandidate[];
+  candidate_targets: PriceCandidate[];
+  best_reward_risk: number | null;
+  min_reward_risk: number | null;
+  /** Null when no stop/target pairing pays for its own risk. */
+  selected: SelectedLevels | null;
+  plan: BuiltTradePlan | null;
+  warnings: string[];
+}
+
+export interface TradePlanDraftParams {
+  symbol: string;
+  timeframe: string;
+  direction: TradeDirection;
+  accountValue?: number | null;
+  riskPercent?: number | null;
+  includeOptions?: boolean;
+}
+
 class ApiService {
   private baseUrl: string;
   private inFlightOptionsRequests = new Map<string, Promise<OptionsResponse>>();
@@ -2621,6 +2758,36 @@ class ApiService {
         this.inFlightOptionsRequests.delete(requestKey);
       }
     }
+  }
+
+  // ── Trade planning ────────────────────────────────────────────────────
+
+  /** Draft plan: candidate stops/targets from every source plus one selection. */
+  async getTradePlanDraft(params: TradePlanDraftParams): Promise<TradePlanDraft> {
+    const query = new URLSearchParams({
+      timeframe: params.timeframe,
+      direction: params.direction,
+    });
+    if (params.accountValue != null) query.set('account_value', String(params.accountValue));
+    if (params.riskPercent != null) query.set('risk_percent', String(params.riskPercent));
+    if (params.includeOptions === false) query.set('include_options', 'false');
+    return this.fetch<TradePlanDraft>(
+      `/trade-plan/${encodeURIComponent(params.symbol.toUpperCase())}/draft?${query}`,
+    );
+  }
+
+  /** Excursion distribution for one symbol/timeframe/direction slice. */
+  async getSignalExcursions(
+    symbol: string,
+    timeframe: string,
+    direction: TradeDirection,
+  ): Promise<ExcursionResponse> {
+    const query = new URLSearchParams({
+      symbol: symbol.toUpperCase(),
+      timeframe,
+      direction,
+    });
+    return this.fetch<ExcursionResponse>(`/signals/research/excursions?${query}`);
   }
 
   // ── Phase 2.3.4: custom indicators ──────────────────────────────────

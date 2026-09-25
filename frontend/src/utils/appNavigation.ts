@@ -11,7 +11,8 @@ export type AppPage =
   | 'risk'
   | 'journal'
   | 'calendar'
-  | 'options';
+  | 'options'
+  | 'tradeplan';
 
 
 export interface NavigationState {
@@ -36,6 +37,7 @@ const HASH_BY_PAGE: Record<AppPage, string> = {
   journal: '#journal',
   calendar: '#calendar',
   options: '#options',
+  tradeplan: '#trade-plan',
 };
 
 const PAGE_BY_HASH: Record<string, AppPage> = {
@@ -53,6 +55,7 @@ const PAGE_BY_HASH: Record<string, AppPage> = {
   '#journal': 'journal',
   '#calendar': 'calendar',
   '#options': 'options',
+  '#trade-plan': 'tradeplan',
 };
 
 export function pageForHash(hash: string): AppPage {

@@ -8836,6 +8836,22 @@ a.news-headline:hover {
   .risk-summary-grid, .risk-correlation-list { grid-template-columns: 1fr; }
 }
 
+/* Trade planning */
+.trade-planning-page { padding: 24px; width: 100%; }
+.trade-planning-page .card { margin-bottom: 1rem; }
+.trade-planning-page textarea {
+  display: block;
+  width: 100%;
+  margin-top: 0.35rem;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 0.35rem;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-family: inherit;
+  resize: vertical;
+}
+
 /* Trade journal */
 .trade-journal-page { width: 100%; }
 

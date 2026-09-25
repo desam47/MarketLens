@@ -644,6 +644,19 @@ missing-sizing-inputs honest-unavailable path, default and caller-supplied
 invalidation text, and both required-field and direction-consistency
 rejections.
 
+**Trade Planning page integration complete (2026-09-25).** The new
+`/api/trade-plan/{symbol}/draft` route and `TradePlanningPage` assemble
+structural, ATR/Supertrend, empirical-excursion, and options-implied
+stop/target candidates, then call the verified calculator for reward/risk and
+optional sizing. The UI is read-only for market actions: saved plans remain
+browser-local, unsized plans cannot be saved, and changing any setup input
+clears the prior draft and ignores stale responses. Drafts expose the latest
+bar timestamp, data status, and source so the page labels the value as a
+latest bar close rather than implying a live quote. The Symbol page links into
+Trade Planning with symbol/timeframe context. Focused builder, excursion, API,
+and page tests cover source selection, refusal, sizing, freshness, and stale
+draft behavior.
+
 Wiring `build_trade_plan` into Chat surfaced a real, pre-existing bug
 affecting Phase 5.2 tools, not just this one: `ChatReplyResponse.action`
 (`backend/ai/prompt.py`) is a strict Pydantic `Literal` gating every value

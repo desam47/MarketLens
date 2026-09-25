@@ -22,6 +22,7 @@ const RiskDashboardPage = lazy(() => import('./pages/RiskDashboardPage').then(m 
 const TradeJournalPage = lazy(() => import('./pages/TradeJournalPage').then(m => ({ default: m.TradeJournalPage })));
 const CalendarPage = lazy(() => import('./pages/CalendarPage').then(m => ({ default: m.CalendarPage })));
 const OptionsPage = lazy(() => import('./pages/OptionsPage').then(m => ({ default: m.OptionsPage })));
+const TradePlanningPage = lazy(() => import('./pages/TradePlanningPage').then(m => ({ default: m.TradePlanningPage })));
 
 // Loading skeleton while the chunk downloads — keeps the layout stable.
 const PageLoader = () => (
@@ -106,7 +107,7 @@ export default function App() {
       case 'watchlist':
         return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="Watchlist"><WatchlistPage onSelectSymbol={(s) => { setSymbol(s); navigateTo('symbol'); }} /></PageErrorBoundary></Suspense>;
       case 'symbol':
-        return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="Symbol"><SymbolPage symbol={symbol} onSymbolChange={setSymbol} initialTimeframe={symbolNavigation.timeframe} initialSession={symbolNavigation.session as any} /></PageErrorBoundary></Suspense>;
+        return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="Symbol"><SymbolPage symbol={symbol} onSymbolChange={setSymbol} initialTimeframe={symbolNavigation.timeframe} initialSession={symbolNavigation.session as any} onPlanTrade={(s, tf) => navigateTo('tradeplan', { symbol: s, timeframe: tf })} /></PageErrorBoundary></Suspense>;
       case 'hub':
         return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="AI Hub"><AIHubPage symbol={hubSymbol} onSymbolChange={setHubSymbol} onNavigate={(page, targetSymbol, navigation) => { if (targetSymbol) { setSymbol(targetSymbol); setHubSymbol(targetSymbol); } navigateTo(page, { ...navigation, ...(targetSymbol ? { symbol: targetSymbol } : {}) }); }} /></PageErrorBoundary></Suspense>;
       case 'alerts':
@@ -125,6 +126,8 @@ export default function App() {
         return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="Risk Dashboard"><RiskDashboardPage navigation={pageNavigation.risk} /></PageErrorBoundary></Suspense>;
       case 'journal':
         return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="Trade Journal"><TradeJournalPage navigation={pageNavigation.journal} /></PageErrorBoundary></Suspense>;
+      case 'tradeplan':
+        return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="Trade Planning"><TradePlanningPage navigation={pageNavigation.tradeplan} /></PageErrorBoundary></Suspense>;
       case 'calendar':
         return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="Earnings & Events"><CalendarPage navigation={pageNavigation.calendar} /></PageErrorBoundary></Suspense>;
       default:
@@ -157,6 +160,9 @@ export default function App() {
           </li>
           <li>
             <button className={currentPage === 'calendar' ? 'active' : ''} onClick={() => navigateTo('calendar')}><span className="nav-icon">🗓️</span>Earnings &amp; Events</button>
+          </li>
+          <li>
+            <button className={currentPage === 'tradeplan' ? 'active' : ''} onClick={() => navigateTo('tradeplan')}><span className="nav-icon">🎯</span>Trade Planning</button>
           </li>
           <li>
             <button className={currentPage === 'risk' ? 'active' : ''} onClick={() => navigateTo('risk')}><span className="nav-icon">🛡️</span>Risk Dashboard</button>

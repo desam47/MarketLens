@@ -454,6 +454,49 @@ class SignalRepository:
             for r in rows
         ]
 
+    def fetch_excursion_rows(
+        self,
+        *,
+        timeframe: str,
+        trend_state: str,
+        symbol: str | None = None,
+        strength_min: float | None = None,
+        strength_max: float | None = None,
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+    ) -> list[Any]:
+        """Outcome-complete rows for one conditioned slice, for excursion stats.
+
+        Only the columns the distribution needs are selected -- a slice can run
+        to six figures when ``symbol`` is omitted, and the percentile math
+        (``backend.services.excursion_stats``) reads nothing else. SQLite has no
+        ``percentile_cont``, so the quantiles are computed in Python over this
+        result rather than in SQL.
+        """
+        q = self._history_query(
+            symbol=symbol,
+            timeframe=timeframe,
+            start_time=start_time,
+            end_time=end_time,
+            completed_only=True,
+        ).filter(HistoricalSignal.trend_state == trend_state)
+        if strength_min is not None:
+            q = q.filter(HistoricalSignal.strength >= strength_min)
+        if strength_max is not None:
+            q = q.filter(HistoricalSignal.strength <= strength_max)
+        return (
+            q.order_by(None)
+            .with_entities(
+                HistoricalSignal.trend_state,
+                HistoricalSignal.mae,
+                HistoricalSignal.mfe,
+                HistoricalSignal.return_5b,
+                HistoricalSignal.return_10b,
+                HistoricalSignal.return_20b,
+            )
+            .all()
+        )
+
     def get_signals_by_trend_state(
         self, trend_state: str, limit: int = 100
     ) -> list[HistoricalSignal]:

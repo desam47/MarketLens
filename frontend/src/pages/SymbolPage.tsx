@@ -61,6 +61,8 @@ interface SymbolPageProps {
   onSymbolChange: (symbol: string) => void;
   initialTimeframe?: string;
   initialSession?: SessionFilter;
+  /** Open the Trade Planning page with this symbol/timeframe prefilled. */
+  onPlanTrade?: (symbol: string, timeframe: string) => void;
 }
 
 // Color maps
@@ -664,7 +666,7 @@ function TrendCardSkeleton() {
 }
 
 // --- Main page ---
-export function SymbolPage({ symbol, onSymbolChange, initialTimeframe, initialSession }: SymbolPageProps) {
+export function SymbolPage({ symbol, onSymbolChange, initialTimeframe, initialSession, onPlanTrade }: SymbolPageProps) {
   const [quote, setQuote] = useState<MarketQuote | null>(null);
   const [liveQuote, setLiveQuote] = useState<LiveQuoteUpdateData | null>(null);
   const [quoteConnectionStatus, setQuoteConnectionStatus] = useState<RealtimeConnectionStatus>('closed');
@@ -734,7 +736,6 @@ export function SymbolPage({ symbol, onSymbolChange, initialTimeframe, initialSe
   const [regimeLoading, setRegimeLoading] = useState(true);
   const [regimeError, setRegimeError] = useState<string | null>(null);
   const [sectorData, setSectorData] = useState<SectorData | null>(null);
-  const [sectorLoading, setSectorLoading] = useState(true);
 
   const [strategy, setStrategy] = useState<StrategyData | null>(null);
   const [strategyLoading, setStrategyLoading] = useState(true);
@@ -1124,7 +1125,6 @@ const fetchBars = useCallback(async () => {
 
   const fetchSector = useCallback(async () => {
     const requestedSymbol = symbol;
-    setSectorLoading(true);
     try {
       const data = await api.getSector(requestedSymbol);
       if (currentSymbolRef.current !== requestedSymbol) return;
@@ -1132,8 +1132,6 @@ const fetchBars = useCallback(async () => {
     } catch {
       if (currentSymbolRef.current !== requestedSymbol) return;
       setSectorData(null);
-    } finally {
-      if (currentSymbolRef.current === requestedSymbol) setSectorLoading(false);
     }
   }, [symbol]);
 
@@ -1491,6 +1489,15 @@ const fetchBars = useCallback(async () => {
             onSubmit={handleRefresh}
           />
           <button className="btn" onClick={handleRefresh}>↻ Refresh</button>
+          {onPlanTrade && (
+            <button
+              className="btn"
+              onClick={() => onPlanTrade(symbol, timeframe)}
+              title="Open Trade Planning with this symbol and timeframe"
+            >
+              🎯 Plan this trade
+            </button>
+          )}
         </div>
       </div>
       {Object.entries(loadErrors).map(([source, message]) => (

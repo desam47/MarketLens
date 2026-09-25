@@ -32,6 +32,7 @@ from sqlalchemy.orm import Session
 from backend.market_data.services.ingestion_service import ingestion_service
 from backend.models import BarModel
 from backend.repositories.signal_repository import SignalRepository, directional_outcome
+from backend.services.excursion_stats import DEFAULT_MIN_SAMPLE, excursion_distribution
 from backend.services.signal_recorder import signal_recorder
 from backend.utils.timezone import format_edt_iso
 
@@ -199,6 +200,66 @@ class SignalResearchSummary(BaseModel):
     regime_coverage: RegimeCoverage
     performance: ResearchPerformance | None
     performance_note: str | None
+
+
+class ExcursionPercentiles(BaseModel):
+    p25: float
+    p50: float
+    p75: float
+    p90: float
+
+
+class ExcursionFilters(BaseModel):
+    symbol: str | None
+    timeframe: str
+    trend_state: str
+    strength_min: float | None
+    strength_max: float | None
+    start_date: date | None
+    end_date: date | None
+
+
+class ExcursionMetrics(BaseModel):
+    """Distribution of one conditioned slice of outcome-complete signals.
+
+    ``adverse_excursion_pct`` is a positive magnitude, so ``p75`` is the
+    distance a stop must clear to sit outside the heat three quarters of
+    comparable signals took. ``favorable_excursion_pct`` is signed; its
+    ``p50`` is the median run in favour. Both are percent of entry price.
+    Every statistic is ``None`` when ``sufficient`` is false.
+    """
+
+    sample_size: int
+    min_sample: int
+    sufficient: bool
+    confidence: str
+    units: str
+    win_rate: float | None
+    avg_return_5b: float | None
+    avg_return_10b: float | None
+    avg_return_20b: float | None
+    median_return_5b: float | None
+    median_return_10b: float | None
+    median_return_20b: float | None
+    adverse_excursion_pct: ExcursionPercentiles | None
+    favorable_excursion_pct: ExcursionPercentiles | None
+    notes: list[str]
+
+
+class ExcursionRelaxation(ExcursionMetrics):
+    """A wider slice, offered only when the requested one was too thin."""
+
+    level: str
+    label: str
+    filters: ExcursionFilters
+
+
+class ExcursionResponse(ExcursionMetrics):
+    symbol: str
+    timeframe: str
+    direction: str
+    filters: ExcursionFilters
+    relaxation: list[ExcursionRelaxation]
 
 
 def _resolve_signal_scope(
@@ -455,6 +516,104 @@ def export_signal_research(
         generate(),
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": "attachment; filename=marketlens-signal-research.csv"},
+    )
+
+
+_DIRECTION_TREND_STATE = {"long": "bullish", "short": "bearish"}
+
+
+@router.get("/research/excursions", response_model=ExcursionResponse)
+def get_signal_excursions(
+    symbol: str = Query(..., description="Ticker to condition on"),
+    timeframe: str = Query(..., description="Signal timeframe; horizons differ across timeframes"),
+    direction: Literal["long", "short"] = Query(..., description="Trade direction being planned"),
+    strength_min: float | None = Query(None, ge=0.0, le=1.0),
+    strength_max: float | None = Query(None, ge=0.0, le=1.0),
+    start_date: date | None = Query(None),
+    end_date: date | None = Query(None),
+    min_sample: int = Query(DEFAULT_MIN_SAMPLE, ge=1, description="Below this, statistics are withheld"),
+    db: Session = Depends(get_db),
+):
+    """Empirical excursion distribution for a planned trade.
+
+    Answers "how far has this setup normally moved against the call before it
+    worked, and how far did it run?" -- the adverse ``p75`` is an empirical stop
+    distance and the favorable ``p50`` an empirical target, both grounded in
+    what actually happened rather than in an indicator.
+
+    Slices are often thin (many symbol/timeframe/direction combinations hold
+    fewer than ``min_sample`` rows), so a too-thin request returns 200 with
+    every statistic ``None`` plus a ``relaxation`` ladder -- strength band
+    dropped, then dates, then pooled across symbols -- stopping at the first
+    rung that clears ``min_sample``. Relaxed numbers never leak into the
+    primary fields; the caller must read them from ``relaxation`` and say so.
+    """
+    if strength_min is not None and strength_max is not None and strength_min > strength_max:
+        raise HTTPException(status_code=422, detail="strength_min must not exceed strength_max")
+    sym = symbol.upper()
+    trend_state = _DIRECTION_TREND_STATE[direction]
+    start_time, end_time = _research_time_range(start_date, end_date)
+    repo = SignalRepository(db)
+
+    def measure(
+        *,
+        use_symbol: bool,
+        use_strength: bool,
+        use_dates: bool,
+    ) -> tuple[dict, ExcursionFilters]:
+        rows = repo.fetch_excursion_rows(
+            symbol=sym if use_symbol else None,
+            timeframe=timeframe,
+            trend_state=trend_state,
+            strength_min=strength_min if use_strength else None,
+            strength_max=strength_max if use_strength else None,
+            start_time=start_time if use_dates else None,
+            end_time=end_time if use_dates else None,
+        )
+        filters = ExcursionFilters(
+            symbol=sym if use_symbol else None,
+            timeframe=timeframe,
+            trend_state=trend_state,
+            strength_min=strength_min if use_strength else None,
+            strength_max=strength_max if use_strength else None,
+            start_date=start_date if use_dates else None,
+            end_date=end_date if use_dates else None,
+        )
+        return excursion_distribution(rows, min_sample=min_sample), filters
+
+    primary, primary_filters = measure(use_symbol=True, use_strength=True, use_dates=True)
+
+    relaxation: list[ExcursionRelaxation] = []
+    if not primary["sufficient"]:
+        has_strength = strength_min is not None or strength_max is not None
+        has_dates = start_time is not None or end_time is not None
+        # Widen one dimension at a time, cheapest signal loss first, and stop as
+        # soon as a rung is trustworthy -- a rung that is still too thin is
+        # reported so the caller can see the ladder was tried.
+        rungs = [
+            ("no_strength_band", f"{sym} {timeframe} {direction}, any strength", True, False, True, has_strength),
+            ("no_date_range", f"{sym} {timeframe} {direction}, full history", True, False, False, has_dates or has_strength),
+            ("all_symbols", f"all symbols, {timeframe} {direction}", False, False, False, True),
+        ]
+        for level, label, use_symbol, use_strength, use_dates, applicable in rungs:
+            if not applicable:
+                continue
+            stats, filters = measure(
+                use_symbol=use_symbol, use_strength=use_strength, use_dates=use_dates
+            )
+            relaxation.append(
+                ExcursionRelaxation(level=level, label=label, filters=filters, **stats)
+            )
+            if stats["sufficient"]:
+                break
+
+    return ExcursionResponse(
+        symbol=sym,
+        timeframe=timeframe,
+        direction=direction,
+        filters=primary_filters,
+        relaxation=relaxation,
+        **primary,
     )
 
 
