@@ -24,6 +24,7 @@ are separately thread-safe and are called directly.
 
 from __future__ import annotations
 
+import functools
 import logging
 
 from backend.market_data.services.engine_seeder import _ensure_aware, engine_registry
@@ -49,6 +50,12 @@ def _dispatch_on_loop(fn, /, *args, **kwargs) -> None:
     Falls back to a direct call when no loop has been captured yet (e.g. a
     test that drives bridge.py without the app lifespan) — that path only
     runs single-threaded, so a direct call is safe there.
+
+    NOTE: ``asyncio.loop.call_soon_threadsafe`` only accepts positional args
+    (its signature is ``call_soon_threadsafe(callback, *args, context=None)``).
+    When kwargs are present we wrap with ``functools.partial`` so they are
+    captured in the closure rather than passed as keyword args to
+    ``call_soon_threadsafe`` itself (which would raise TypeError).
     """
     from backend.api.realtime.ws_router import get_realtime_loop
 
@@ -57,7 +64,10 @@ def _dispatch_on_loop(fn, /, *args, **kwargs) -> None:
         fn(*args, **kwargs)
         return
     try:
-        loop.call_soon_threadsafe(fn, *args, **kwargs)
+        if kwargs:
+            loop.call_soon_threadsafe(functools.partial(fn, *args, **kwargs))
+        else:
+            loop.call_soon_threadsafe(fn, *args)
     except RuntimeError:
         pass
 

@@ -7,18 +7,25 @@ import api, {
   PriceHistoryItem,
   TapeSnapshot,
   Transition,
+  TrendData,
   MarketQuote,
   CalendarEvent,
   BarUpdateData,
   RealtimeEvent,
   RealtimeConnectionStatus,
   LiveQuoteUpdateData,
+  RegimeData,
+  StrategyData,
+  SectorData,
 } from '../services/api';
 import { formatETDate, formatETDateTime, parseET } from '../components/chartMath';
 import { CandlestickChart } from '../components/CandlestickChart';
 import { MultiTimeframeChartGrid } from '../components/MultiTimeframeChartGrid';
 // import { TrendByTimeframeGrid, TrendSignalsMap } from '../components/TrendByTimeframeGrid';
 import { ConfluenceCard } from '../components/ConfluenceCard';
+import { TrendCard } from '../components/TrendCard';
+import { RegimeCard } from '../components/RegimeCard';
+import { StrategyCard } from '../components/StrategyCard';
 import { ScoreDetailPanel } from '../components/ScoreDetailPanel';
 import { SignalExplanationPanel } from '../components/SignalExplanationPanel';
 import { TapePressureCard } from '../components/TapePressureCard';
@@ -638,6 +645,24 @@ function mergeLiveBarIntoMinuteBars(bars: Bar[], update: BarUpdateData): Bar[] {
   );
 }
 
+const TREND_TIMEFRAME_GROUPS: Array<{ label: string; timeframes: string[] }> = [
+  { label: 'Timing · 1m–5m', timeframes: ['1m', '2m', '3m', '5m'] },
+  { label: 'Structure · 15m–1h', timeframes: ['15m', '30m', '1h'] },
+  { label: 'Bias · 4h–Weekly', timeframes: ['4h', '1d', '1wk'] },
+];
+
+function TrendCardSkeleton() {
+  return (
+    <div className="card trend-card">
+      <div className="trend-header">
+        <div style={{ width: '45%', height: '0.9rem', background: 'var(--skeleton-bg, #e2e8f0)', borderRadius: 4 }} />
+        <div style={{ width: '1.1rem', height: '1.1rem', background: 'var(--skeleton-bg, #e2e8f0)', borderRadius: 999 }} />
+      </div>
+      <div style={{ width: '65%', height: '1rem', background: 'var(--skeleton-bg, #e2e8f0)', borderRadius: 4, marginTop: 8 }} />
+    </div>
+  );
+}
+
 // --- Main page ---
 export function SymbolPage({ symbol, onSymbolChange, initialTimeframe, initialSession }: SymbolPageProps) {
   const [quote, setQuote] = useState<MarketQuote | null>(null);
@@ -675,6 +700,9 @@ export function SymbolPage({ symbol, onSymbolChange, initialTimeframe, initialSe
   // while the displayed distance follows the live quote immediately.
   const lastSrBarTimestampRef = useRef<string | null>(null);
   const srRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Stable ref so the subscriber effect doesn't need fetchSR in its dep array.
+  // Without this, every timeframe change recreates fetchSR → tears down the WS.
+  const fetchSRRef = useRef<() => Promise<void>>(() => Promise.resolve());
 
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
   const [scanLoading, setScanLoading] = useState(true);
@@ -694,9 +722,23 @@ export function SymbolPage({ symbol, onSymbolChange, initialTimeframe, initialSe
   const mtfPresetRef = useRef<string>('day_trading');
   mtfPresetRef.current = mtfPreset;
 
+  const [trends, setTrends] = useState<TrendData[]>([]);
+  const [trendsLoading, setTrendsLoading] = useState(true);
+  const [trendsError, setTrendsError] = useState<string | null>(null);
+
   const [tape, setTape] = useState<TapeSnapshot | null>(null);
   const [tapeDisabled, setTapeDisabled] = useState(false);
   const [tapeError, setTapeError] = useState<string | null>(null);
+
+  const [regime, setRegime] = useState<RegimeData | null>(null);
+  const [regimeLoading, setRegimeLoading] = useState(true);
+  const [regimeError, setRegimeError] = useState<string | null>(null);
+  const [sectorData, setSectorData] = useState<SectorData | null>(null);
+  const [sectorLoading, setSectorLoading] = useState(true);
+
+  const [strategy, setStrategy] = useState<StrategyData | null>(null);
+  const [strategyLoading, setStrategyLoading] = useState(true);
+  const [strategyError, setStrategyError] = useState<string | null>(null);
   // Tracks the symbol a fetchTape call was issued for, so a slow response
   // for a symbol the user has since navigated away from can't overwrite
   // the currently-displayed symbol's tape data.
@@ -841,6 +883,7 @@ export function SymbolPage({ symbol, onSymbolChange, initialTimeframe, initialSe
       }
     }
   }, [symbol, timeframe, clearLoadError, setLoadError]);
+  fetchSRRef.current = fetchSR;
 
   const fetchDivergences = useCallback(async () => {
     const requestedSymbol = symbol;
@@ -1047,6 +1090,69 @@ const fetchBars = useCallback(async () => {
     }
   }, [symbol, mtfPreset, clearLoadError, setLoadError]);
 
+  const fetchTrends = useCallback(async () => {
+    const requestedSymbol = symbol;
+    setTrendsLoading(true);
+    setTrendsError(null);
+    try {
+      const data = await api.getTrends(requestedSymbol, ['1m', '2m', '3m', '5m', '15m', '30m', '1h', '4h', '1d', '1wk']);
+      if (requestedSymbol !== symbol) return;
+      setTrends(data);
+    } catch (err: any) {
+      if (requestedSymbol !== symbol) return;
+      setTrendsError(err?.message || 'Failed to load trends');
+    } finally {
+      if (requestedSymbol === symbol) setTrendsLoading(false);
+    }
+  }, [symbol]);
+
+  const fetchRegime = useCallback(async () => {
+    const requestedSymbol = symbol;
+    setRegimeLoading(true);
+    setRegimeError(null);
+    try {
+      const data = await api.getRegime(requestedSymbol);
+      if (currentSymbolRef.current !== requestedSymbol) return;
+      setRegime(data);
+    } catch (err: any) {
+      if (currentSymbolRef.current !== requestedSymbol) return;
+      setRegimeError(err?.message || 'Failed to load regime');
+    } finally {
+      if (currentSymbolRef.current === requestedSymbol) setRegimeLoading(false);
+    }
+  }, [symbol]);
+
+  const fetchSector = useCallback(async () => {
+    const requestedSymbol = symbol;
+    setSectorLoading(true);
+    try {
+      const data = await api.getSector(requestedSymbol);
+      if (currentSymbolRef.current !== requestedSymbol) return;
+      setSectorData(data);
+    } catch {
+      if (currentSymbolRef.current !== requestedSymbol) return;
+      setSectorData(null);
+    } finally {
+      if (currentSymbolRef.current === requestedSymbol) setSectorLoading(false);
+    }
+  }, [symbol]);
+
+  const fetchStrategy = useCallback(async () => {
+    const requestedSymbol = symbol;
+    setStrategyLoading(true);
+    setStrategyError(null);
+    try {
+      const data = await api.getStrategy(requestedSymbol);
+      if (currentSymbolRef.current !== requestedSymbol) return;
+      setStrategy(data);
+    } catch (err: any) {
+      if (currentSymbolRef.current !== requestedSymbol) return;
+      setStrategyError(err?.message || 'Failed to load strategy');
+    } finally {
+      if (currentSymbolRef.current === requestedSymbol) setStrategyLoading(false);
+    }
+  }, [symbol]);
+
   const handleRefresh = useCallback(() => {
     fetchQuote();
     fetchTransitions();
@@ -1056,7 +1162,11 @@ const fetchBars = useCallback(async () => {
     fetchScan();
     fetchTape();
     fetchMTF();
-  }, [fetchQuote, fetchTransitions, fetchSR, fetchDivergences, fetchBars, fetchScan, fetchTape, fetchMTF]);
+    fetchTrends();
+    fetchRegime();
+    fetchSector();
+    fetchStrategy();
+  }, [fetchQuote, fetchTransitions, fetchSR, fetchDivergences, fetchBars, fetchScan, fetchTape, fetchMTF, fetchTrends, fetchRegime, fetchSector, fetchStrategy]);
 
   const retryLoad = useCallback((source: string) => {
     const retries: Record<string, () => void> = {
@@ -1068,9 +1178,12 @@ const fetchBars = useCallback(async () => {
       scanner: fetchScan,
       tape: fetchTape,
       'multi-timeframe analysis': fetchMTF,
+      trends: fetchTrends,
+      regime: fetchRegime,
+      strategy: fetchStrategy,
     };
     retries[source]?.();
-  }, [fetchQuote, fetchTransitions, fetchSR, fetchDivergences, fetchBars, fetchScan, fetchTape, fetchMTF]);
+  }, [fetchQuote, fetchTransitions, fetchSR, fetchDivergences, fetchBars, fetchScan, fetchTape, fetchMTF, fetchTrends, fetchRegime, fetchStrategy]);
 
   // Do not render the previous selection's values under a newly-selected
   // symbol/timeframe while the replacement requests are in flight.
@@ -1083,6 +1196,13 @@ const fetchBars = useCallback(async () => {
     setTapeError(null);
     setMtfConfluence(null);
     setMtfError(null);
+    setTrends([]);
+    setTrendsError(null);
+    setRegime(null);
+    setRegimeError(null);
+    setStrategy(null);
+    setStrategyError(null);
+    setSectorData(null);
     setLoadErrors({});
   }, [symbol]);
 
@@ -1127,7 +1247,7 @@ const fetchBars = useCallback(async () => {
           // completed candle before re-reading the price-range analysis.
           srRefreshTimerRef.current = setTimeout(() => {
             srRefreshTimerRef.current = null;
-            void fetchSR();
+            void fetchSRRef.current();
           }, 750);
         }
         if (
@@ -1182,7 +1302,7 @@ const fetchBars = useCallback(async () => {
       subscriber.unsubscribe(symbol, '1m');
       subscriber.disconnect();
     };
-  }, [fetchQuote, fetchSR, symbol]);
+  }, [fetchQuote, symbol]);
 
   useEffect(() => {
     fetchTransitions();
@@ -1207,6 +1327,22 @@ const fetchBars = useCallback(async () => {
   useEffect(() => {
     fetchMTF();
   }, [fetchMTF]);
+
+  useEffect(() => {
+    fetchTrends();
+  }, [fetchTrends]);
+
+  useEffect(() => {
+    fetchRegime();
+  }, [fetchRegime]);
+
+  useEffect(() => {
+    fetchSector();
+  }, [fetchSector]);
+
+  useEffect(() => {
+    fetchStrategy();
+  }, [fetchStrategy]);
 
   // Refresh confluence after the shared realtime pipeline closes a new
   // 1-minute bucket. The snapshot is computed from in-memory trend state, so
@@ -1367,6 +1503,14 @@ const fetchBars = useCallback(async () => {
       ))}
 
       <div className="symbol-grid">
+
+        {/* ── 1. Spatial awareness: where is price relative to structure ── */}
+        <div className={srLoading && srLevels.length === 0 ? 'card-loading-skeleton' : ''}>
+          <SRPanel
+            levels={srLevels}
+            latestClose={srDisplayClose}
+          />
+        </div>
         <PriceHistoryPanel
           history={priceHistory}
           latestClose={latestClose}
@@ -1375,61 +1519,8 @@ const fetchBars = useCallback(async () => {
           change={barsChange}
           changePercent={barsChangePct}
         />
-        <div className={srLoading && srLevels.length === 0 ? 'card-loading-skeleton' : ''}>
-          <SRPanel
-            levels={srLevels}
-            latestClose={srDisplayClose}
-          />
-        </div>
-        <div className={transitionsLoading && transitions.length === 0 ? 'card-loading-skeleton' : ''}>
-          <TransitionsPanel
-            transitions={transitions}
-            latestScore={latestScore}
-            latestTimestamp={latestTimestamp}
-            symbol={symbol}
-            timeframe={timeframe}
-          />
-        </div>
-        <div className={divergencesLoading && divergences.length === 0 ? 'card-loading-skeleton' : ''}>
-          <DivergencesPanel divergences={divergences} />
-        </div>
-        <div className="symbol-grid-pair-panel">
-          <Suspense fallback={<div className="panel-skeleton">Loading catalyst timeline…</div>}>
-            <CatalystTimelinePanel symbol={symbol} scanResult={scanResult} />
-          </Suspense>
-        </div>
-        <div className={`symbol-grid-pair-panel${scanLoading && !scanResult ? ' card-loading-skeleton' : ''}`}>
-          <SignalExplanationPanel
-            symbol={symbol}
-            explanation={scanResult?.explanation}
-            liveQuote={liveQuote}
-            tape={tape}
-          />
-        </div>
-        <div className={scanLoading && !scanResult ? 'card-loading-skeleton' : ''}>
-          <ScoreDetailPanel
-            totalScore={scanResult?.total_score ?? 0}
-            scores={scanResult?.scores ?? {}}
-            signals={scanResult?.signals}
-            confidence={scanResult?.explanation?.confidence}
-            symbol={symbol}
-          />
-        </div>
-        <TapePressureCard tape={tape} disabled={tapeDisabled} error={tapeError} />
-        <Suspense fallback={<div className="panel-skeleton">Loading AI analysis…</div>}>
-          <AIAnalysisPanel symbol={symbol} timeframe={timeframe} />
-        </Suspense>
-        <Suspense fallback={<div className="panel-skeleton">Loading indicators…</div>}>
-          <CustomIndicatorsPanel symbol={symbol} timeframe={timeframe} />
-        </Suspense>
-        <div className={mtfLoading && !mtfConfluence ? 'card-loading-skeleton' : ''}>
-          <ConfluenceCard
-            confluence={mtfConfluence}
-            error={mtfError}
-            selectedPreset={mtfPreset}
-            onPresetChange={setMtfPreset}
-          />
-        </div>
+
+        {/* ── 2. Primary visual: chart with session controls directly above ── */}
         <div className="session-filter-bar" aria-label="Market session filter">
           <label htmlFor="symbol-session-filter"><strong>Market session:</strong></label>
           <select id="symbol-session-filter" value={sessionFilter} onChange={event => { const value = event.target.value as SessionFilter; setSessionFilter(value); window.localStorage.setItem(SESSION_PREFERENCE_KEY, value); }}>
@@ -1491,13 +1582,118 @@ const fetchBars = useCallback(async () => {
             )}
           />
         )}
+
+        {/* ── 3. Directional bias: regime → MTF confluence → trend per TF ── */}
+        <div className={regimeLoading && !regime ? 'card-loading-skeleton' : ''}>
+          <RegimeCard regime={regime} sectorData={sectorData} error={regimeError} onRetry={fetchRegime} />
+        </div>
+        <div className={mtfLoading && !mtfConfluence ? 'card-loading-skeleton' : ''}>
+          <ConfluenceCard
+            confluence={mtfConfluence}
+            error={mtfError}
+            selectedPreset={mtfPreset}
+            onPresetChange={setMtfPreset}
+          />
+        </div>
+        <div className="trends-section">
+          <div className="trends-section-header">
+            <h2>Trend by Timeframe</h2>
+          </div>
+          {trendsLoading && trends.length === 0 ? (
+            <div className="trend-grid">
+              {Array.from({ length: 5 }).map((_, i) => <TrendCardSkeleton key={i} />)}
+            </div>
+          ) : (
+            <div className="trend-timeframe-groups">
+              {TREND_TIMEFRAME_GROUPS.map(group => {
+                const groupTrends = trends.filter(t => group.timeframes.includes(t.timeframe));
+                if (groupTrends.length === 0) return null;
+                return (
+                  <section className="trend-timeframe-group" key={group.label} aria-label={group.label}>
+                    <h3>{group.label}</h3>
+                    <div className="trend-grid">
+                      {groupTrends.map(trend => (
+                        <TrendCard
+                          key={trend.timeframe}
+                          trend={trend}
+                          confluenceRole={mtfConfluence?.timeframe_signals && trend.timeframe in mtfConfluence.timeframe_signals ? 'input' : 'out_of_scope'}
+                          onOpenChart={() => setTimeframe(trend.timeframe)}
+                        />
+                      ))}
+                    </div>
+                  </section>
+                );
+              })}
+            </div>
+          )}
+          {trends.length === 0 && !trendsLoading && !trendsError && (
+            <p className="empty-state">No trend data available</p>
+          )}
+          {trendsError && (
+            <div className="empty-state">
+              <p>Failed to load trends: {trendsError}</p>
+              <button className="btn btn-small" onClick={fetchTrends}>Retry</button>
+            </div>
+          )}
+        </div>
+
+        {/* ── 4. Order flow: tape pressure + momentum transitions ── */}
+        <TapePressureCard tape={tape} disabled={tapeDisabled} error={tapeError} />
+        <div className={transitionsLoading && transitions.length === 0 ? 'card-loading-skeleton' : ''}>
+          <TransitionsPanel
+            transitions={transitions}
+            latestScore={latestScore}
+            latestTimestamp={latestTimestamp}
+            symbol={symbol}
+            timeframe={timeframe}
+          />
+        </div>
+
+        {/* ── 5. Signal & strategy: what the scan says and what to do ── */}
+        <div className={`symbol-grid-pair-panel${scanLoading && !scanResult ? ' card-loading-skeleton' : ''}`}>
+          <SignalExplanationPanel
+            symbol={symbol}
+            explanation={scanResult?.explanation}
+            liveQuote={liveQuote}
+            tape={tape}
+          />
+        </div>
+        <div className={scanLoading && !scanResult ? 'card-loading-skeleton' : ''}>
+          <ScoreDetailPanel
+            totalScore={scanResult?.total_score ?? 0}
+            scores={scanResult?.scores ?? {}}
+            signals={scanResult?.signals}
+            confidence={scanResult?.explanation?.confidence}
+            symbol={symbol}
+          />
+        </div>
+        <div className={strategyLoading && !strategy ? 'card-loading-skeleton' : ''}>
+          <StrategyCard strategy={strategy} error={strategyError} onRetry={fetchStrategy} />
+        </div>
+
+        {/* ── 6. Context: catalysts + divergences ── */}
+        <div className="symbol-grid-pair-panel">
+          <Suspense fallback={<div className="panel-skeleton">Loading catalyst timeline…</div>}>
+            <CatalystTimelinePanel symbol={symbol} scanResult={scanResult} />
+          </Suspense>
+        </div>
+        <div className={divergencesLoading && divergences.length === 0 ? 'card-loading-skeleton' : ''}>
+          <DivergencesPanel divergences={divergences} />
+        </div>
+
+        {/* ── 7. Deep research: AI, indicators, options ── */}
+        <Suspense fallback={<div className="panel-skeleton">Loading AI analysis…</div>}>
+          <AIAnalysisPanel symbol={symbol} timeframe={timeframe} />
+        </Suspense>
+        <Suspense fallback={<div className="panel-skeleton">Loading indicators…</div>}>
+          <CustomIndicatorsPanel symbol={symbol} timeframe={timeframe} />
+        </Suspense>
         <Suspense fallback={<div className="panel-skeleton">Loading options snapshot…</div>}>
           <OptionsPanel symbol={symbol} underlyingPrice={quote?.price ?? scanResult?.quote?.price} />
         </Suspense>
+
+        {/* ── 8. Raw data reference ── */}
         <div className={barsLoading && bars.length === 0 ? 'card-loading-skeleton' : ''}>
-          {/* Table stays bounded to the most recent 1,000 rows (plain HTML
-              table, not virtualized) — the chart above gets the full
-              `bars` fetched by fetchBars. */}
           <BarsTable
             bars={bars.filter(bar => sessionMatchesPreference(bar, sessionFilter)).slice(0, 1000)}
             sessionFilter={sessionFilter}

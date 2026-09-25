@@ -96,7 +96,10 @@ export function MarketDataFreshnessBadge({
   }, [timestamp, showAge]);
   const computedAge = ageSeconds ?? (timestamp ? (now - Date.parse(timestamp)) / 1000 : null);
   const sourceState = stateFromDataStatus(dataStatus) ?? stateFromFreshness(freshness);
-  const connectionState: BadgeState | null = connectionStatus === 'reconnecting' || connectionStatus === 'connecting'
+  // Only flag an actual dropout ('reconnecting') as a problem.
+  // The initial 'connecting' state is normal on page load — showing
+  // "Reconnecting" there alarms the user before anything has gone wrong.
+  const connectionState: BadgeState | null = connectionStatus === 'reconnecting'
     ? 'reconnecting'
     : connectionStatus === 'closed'
     ? 'stale'
