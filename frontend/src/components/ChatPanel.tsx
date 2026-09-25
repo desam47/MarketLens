@@ -181,7 +181,7 @@ function persistJournalBlocks(blocks: ChatResponseBlock[] | undefined): void {
 }
 
 const EXAMPLES = [
-  "How's NVDA looking?",
+  "How's SPY looking?",
   "What's the market doing today?",
   'Which of my names look weak?',
   'Compare AAPL and MSFT',

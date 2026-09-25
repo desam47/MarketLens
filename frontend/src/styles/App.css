@@ -6402,12 +6402,16 @@ div.td-trend {
 
 .chat-bubble {
   max-width: 75%;
+  width: fit-content;
+  min-width: 0;
   padding: 0.5rem 0.75rem;
   border-radius: 0.75rem;
   font-size: 0.88rem;
   line-height: 1.4;
   white-space: pre-wrap;
   word-break: break-word;
+  overflow: hidden;
+  box-sizing: border-box;
 }
 
 .chat-bubble.user {
@@ -6487,8 +6491,8 @@ div.td-trend {
 
 /* Phase 5.7 typed Chat response blocks.  These remain readable without
    color: quality state is written as text and carried in aria labels. */
-.chat-typed-blocks { display: grid; gap: 0.45rem; margin-top: 0.55rem; }
-.chat-typed-card { border: 1px solid var(--border); border-radius: 0.45rem; padding: 0.5rem 0.6rem; background: var(--bg-secondary); font-size: 0.78rem; }
+.chat-typed-blocks { display: grid; gap: 0.45rem; margin-top: 0.55rem; width: 100%; min-width: 0; overflow: hidden; }
+.chat-typed-card { border: 1px solid var(--border); border-radius: 0.45rem; padding: 0.5rem 0.6rem; background: var(--bg-secondary); font-size: 0.78rem; min-width: 0; overflow: hidden; word-break: break-word; }
 .chat-typed-card-heading { display: flex; align-items: center; gap: 0.45rem; font-weight: 700; margin-bottom: 0.35rem; }
 .chat-collapsible-heading { width: 100%; background: none; border: none; padding: 0; cursor: pointer; color: inherit; text-align: left; font-size: inherit; margin-bottom: 0; }
 .chat-collapsible-heading[aria-expanded="true"] { margin-bottom: 0.35rem; }
@@ -6526,6 +6530,7 @@ div.td-trend {
 .chat-evidence-symbol.partial { color: var(--warning); }
 .chat-evidence-symbol.unavailable { color: var(--danger); }
 .chat-typed-card ul, .chat-typed-warning ul { margin: 0.25rem 0 0 1rem; padding: 0; }
+.chat-typed-card ol { margin: 0.25rem 0 0 0; padding-inline-start: 1.25rem; }
 .chat-typed-warning { display: flex; gap: 0.4rem; align-items: flex-start; border-left: 3px solid var(--warning); padding: 0.35rem 0.5rem; color: var(--text-muted); font-size: 0.76rem; }
 .chat-verification-card { border-left: 3px solid var(--success); }
 .chat-verification-card.degraded, .chat-verification-card.blocked { border-left-color: var(--warning); }
