@@ -928,6 +928,7 @@ class TrendEngine:
         components: list[tuple[float, float]] = []
         trend_strength = TrendStrength.MODERATE
         adx_value: float | None = indicator_values.get("adx")
+        di_directional_balance: float | None = None
 
         # --- Component 1: EMA crossover ---
         ema_fast = indicator_values.get("ema_fast")
@@ -962,6 +963,7 @@ class TrendEngine:
                 if di_sum > 0:
                     di_signal = (di_plus_vals - di_minus_vals) / di_sum
                     di_signal = max(-1.0, min(1.0, di_signal))
+                    di_directional_balance = abs(di_signal)
                     components.append((di_signal, weights_cfg.adx))
 
             if adx_value is not None:
@@ -1063,13 +1065,28 @@ class TrendEngine:
             else:
                 confidence = 0.5 * (abs_signal / threshold)
             confidence = min(confidence, 1.0)
-            if trend_strength == TrendStrength.STRONG:
+            raw_score = max(-100.0, min(100.0, avg_signal * 100.0))
+            classification = classify_score(raw_score)
+
+            # ADX measures movement, not direction. An exceptional trend
+            # needs a decisive DI imbalance and a confirming composite score
+            # before it can be labeled Very Strong. The thresholds were set
+            # from the enabled-watchlist distribution on 2026-09-24.
+            if (
+                adx_value is not None
+                and adx_value > 50
+                and di_directional_balance is not None
+                and di_directional_balance >= 0.50
+                and abs(raw_score) >= 60
+            ):
+                trend_strength = TrendStrength.VERY_STRONG
+
+            if trend_strength == TrendStrength.VERY_STRONG:
+                confidence = min(confidence * 1.3, 1.0)
+            elif trend_strength == TrendStrength.STRONG:
                 confidence = min(confidence * 1.2, 1.0)
             elif trend_strength == TrendStrength.WEAK:
                 confidence = confidence * 0.8
-
-            raw_score = max(-100.0, min(100.0, avg_signal * 100.0))
-            classification = classify_score(raw_score)
         else:
             direction = TrendDirection.UNKNOWN
             confidence = 0.0

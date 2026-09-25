@@ -1,9 +1,9 @@
 # Version 5 Trend Cards Bug Fixes
 
 **Created:** 2026-09-24
-**Last updated:** 2026-09-24 (TC-01 and TC-03 complete)
-**Status:** Re-prioritized from a trading-desk perspective: what would actually cost a trader money first, not just severity as originally filed. TC-01's shared Trend and Confluence evidence contract and TC-03's measured short-horizon momentum display are implemented and covered by focused API and component tests. TC-01 and TC-06 describe one underlying fix — a single server-owned evidence contract — and are tracked together under TC-01. TC-08 remains High because it is a silent scope-mismatch bug, not a workflow nicety.
-**Scorecard:** 2 ✅ COMPLETE, 1 ⚠️ PARTIAL, 6 ❌ NOT STARTED, 0 🟡 DEFERRED, 1 folded (TC-06 → TC-01).
+**Last updated:** 2026-09-24 (TC-01, TC-03, and TC-04 complete)
+**Status:** Re-prioritized from a trading-desk perspective: what would actually cost a trader money first, not just severity as originally filed. TC-01's shared Trend and Confluence evidence contract, TC-03's measured short-horizon momentum display, and TC-04's meaningful `Very Strong` boundary are implemented and covered by focused engine and component tests. TC-01 and TC-06 describe one underlying fix — a single server-owned evidence contract — and are tracked together under TC-01. TC-08 remains High because it is a silent scope-mismatch bug, not a workflow nicety.
+**Scorecard:** 3 ✅ COMPLETE, 1 ⚠️ PARTIAL, 5 ❌ NOT STARTED, 0 🟡 DEFERRED, 1 folded (TC-06 → TC-01).
 **Source:** 2026-09-24 code, API, and live-payload review of the Dashboard's **Trend by Timeframe** cards at `78a1adc`, re-prioritized the same day from a trading-desk perspective and re-verified live against SPY.
 **Related:** [Phase audit](phase_audit_v5.md), [AI Analysis fixes](v5_ai_analysis.md), [Historical Signals fixes](v5_historical_signal_bug_fixes.md), [Market Data fixes](v5_market_data_bug_fixes.md)
 
@@ -27,7 +27,7 @@ Pre-implementation line numbers refer to the code at `78a1adc`; implementation e
 | TC-08 | High | Workflow + data truth | The all-timeframe grid and the selected Confluence preset do not share one scope | Code-read | ❌ NOT STARTED |
 | TC-05 | High | Methodology | Confidence and score are not comparable across short and long timeframes | Code-read | ❌ NOT STARTED |
 | TC-02 | High | Provenance | Live intraday Trend cards lose their market-data provider | Verified | ❌ NOT STARTED |
-| TC-04 | High | Methodology | Per-timeframe `Very Strong` can never be emitted, and may be silently diluting `Strong` | Code-read | ❌ NOT STARTED |
+| TC-04 | High | Methodology | Per-timeframe `Very Strong` can never be emitted, and may be silently diluting `Strong` | Verified | ✅ COMPLETE |
 | TC-07 | Medium | UI + contract | Raw score and classification are available but hidden from Trend Cards | Code-read | ❌ NOT STARTED |
 | TC-09 | Medium | Workflow | Cards lack change history, indicator attribution, key-level context, and chart handoff | Code-read | ❌ NOT STARTED |
 | TC-10 | Medium | Tests | Direct TrendCard regressions are incomplete | Code-read | ⚠️ PARTIAL |
@@ -146,9 +146,9 @@ The ingestion and streaming dispatch path forwards OHLCV, timestamp, data status
 
 **Tests:** dispatch a live provider-tagged 1m bar, a resampled 5m bar, and a derived weekly bar; assert each API payload and card label preserves the correct source.
 
-### TC-04 — Per-timeframe `Very Strong` can never be emitted, and may be silently diluting `Strong`
+### TC-04 — Per-timeframe `Very Strong` was unreachable and could silently dilute `Strong`
 
-**Status:** ❌ NOT STARTED
+**Status:** ✅ COMPLETE
 **Where:** `TrendStrength` enum (`backend/trend/trend_engine.py:110`) and ADX thresholds (`:885`).
 
 The model and UI expose Weak, Moderate, Strong, and Very Strong. The per-timeframe algorithm only emits Weak, Moderate, or Strong: ADX above 40 is Strong, and there is no branch that assigns Very Strong. Very Strong currently occurs only in the separate legacy overall-trend aggregate, not on an individual Dashboard card.
@@ -157,9 +157,13 @@ A second, more concrete risk than "advertises a state no one sees": if the top b
 
 **Impact:** the product advertises a state traders will never see, and the strongest established trends are indistinguishable from merely strong ones — a trader cannot tell "this move just started to qualify as strong" from "this is the strongest trend this symbol has had in months."
 
-**Resolution:** either remove `Very Strong` from the per-timeframe UI and type contract, or define a documented criterion such as ADX above 50 plus high directional score and closed-bar confirmation. Before choosing, pull the live ADX distribution for currently `Strong`-classified cards across the watchlist to check whether it is in fact bimodal — i.e., whether `Strong` is quietly absorbing what should be two buckets. That finding should drive the threshold choice, not a guess.
+**Resolution:** define a documented `Very Strong` criterion: ADX > 50, DI directional balance ≥ 0.50, and absolute composite score ≥ 60 on a closed, valid source bar. This prevents high ADX alone from being mistaken for an exceptional directional move.
 
-**Tests:** pin the chosen boundaries, including exact threshold values and the no-ADX short-timeframe case. If the distribution check confirms dilution, add a regression against the real sample that motivated the fix.
+**Live distribution used (2026-09-24):** the 23 enabled active-watchlist symbols produced 10 ADX-`Strong` cards. Their ADX range was 40.27–52.94 (median 42.47); only one exceeded 50. The sole candidate, META 4h, also had DI balance 0.52 and composite score +63.28. This supports a narrow exceptional bucket rather than arbitrary re-labelling of ordinary `Strong` cards.
+
+**Implementation (2026-09-24):** the engine now emits `Very Strong` only when all three gates pass. Its confidence multiplier is 1.30 (versus 1.20 for `Strong`), capped at 100%. Existing card UI renders the state directly; 1m–3m remain governed by TC-03's distinct Momentum field because they have no ADX.
+
+**Tests:** engine tests prove that a qualifying directional breakout reaches `Very Strong`, while high ADX with insufficient DI balance remains `Strong`; a card test renders `Very Strong` on a 4h card. TC-03 separately protects the no-ADX short-timeframe path.
 
 ---
 
@@ -260,6 +264,7 @@ No code changed in this pass — re-verification and re-ranking only, ahead of i
 | 2026-09-24 | TC-01 | ⚠️ PARTIAL | pending | `backend/api/trend/router.py`, `backend/tests/api/test_trend_api.py`, `frontend/src/components/TrendCard.tsx`, `frontend/src/components/TrendCard.test.tsx`, `frontend/src/services/api.ts`, `frontend/src/styles/App.css` | 119 focused backend tests passed; 5 TrendCard tests passed; production frontend build passed | Added the server-owned Trend evidence contract and rendered it directly. API as-of time now comes from each timeframe's own metadata; daily midnight source stamps normalize to the regular close while retaining their raw timestamp. Confluence adoption remains. |
 | 2026-09-24 | TC-01 | ✅ COMPLETE | `03e5b3a` | `backend/trend/evidence.py`, `backend/multitimeframe/multi_timeframe_engine.py`, `backend/api/multitimeframe/router.py`, `backend/tests/api/test_mtf_api.py`, `backend/tests/api/test_trend_api.py`, `frontend/src/components/ConfluenceCard.tsx`, `frontend/src/components/ConfluenceCard.test.tsx` | 140 focused Trend/MTF/AI-contract backend tests passed; 8 TrendCard/ConfluenceCard tests passed; production frontend build passed | Moved the contract into a shared backend module. Confluence now uses it for validity/quality weighting, serializes the identical per-timeframe payload, and visibly labels each contributing timeframe's evidence state. Completed weekly derived bars now use their final trading-session close as the trader-facing as-of time, while retaining the raw Monday bucket key. |
 | 2026-09-24 | TC-03 | ✅ COMPLETE | pending | `backend/trend/trend_engine.py`, `backend/api/trend/router.py`, `backend/tests/trend/test_trend_engine.py`, `backend/tests/api/test_trend_api.py`, `frontend/src/components/TrendCard.tsx`, `frontend/src/components/TrendCard.test.tsx`, `frontend/src/services/api.ts` | 189 focused Trend/MTF/AI-contract backend tests passed; 10 TrendCard/ConfluenceCard tests passed; production frontend build passed | Replaced the false short-timeframe strength display with a closed-bar, ATR-normalized momentum measure: Choppy, Developing, or Persistent. Retaining ATR for this measure does not change the existing short-timeframe directional score. TC-10 is now partial because direct card coverage exists for TC-01 and TC-03. |
+| 2026-09-24 | TC-04 | ✅ COMPLETE | pending | `backend/trend/trend_engine.py`, `backend/tests/trend/test_trend_engine.py`, `frontend/src/components/TrendCard.test.tsx`, `docs/Version_5/v5_trend_cards_bug_fixes.md` | 191 focused Trend/MTF/AI-contract backend tests passed; 11 TrendCard/ConfluenceCard tests passed; production frontend build passed | Made `Very Strong` reachable only for ADX > 50 plus DI-balance and composite-score confirmation, using the active-watchlist distribution to select the boundary. |
 
 ---
 

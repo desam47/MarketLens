@@ -104,6 +104,50 @@ class TestTrendEngine(unittest.TestCase):
         self.assertIsNone(no_atr_state)
         self.assertIsNone(no_atr_score)
 
+    def test_very_strong_requires_adx_di_balance_and_confirming_score(self):
+        adx = MagicMock()
+        adx.get_latest.return_value = 55.0
+        adx._di_plus = 75.0
+        adx._di_minus = 25.0
+        atr = MagicMock()
+        atr.get_latest.return_value = 1.0
+        values = {
+            "ema_fast": 102.0,
+            "ema_slow": 100.0,
+            "rsi": 85.0,
+            "macd": 8.0,
+            "adx": 55.0,
+        }
+
+        _, strength, _, score, _ = self.engine._calculate_trend(
+            Timeframe.FIFTEEN_MINUTE, values, atr, adx
+        )
+
+        self.assertGreaterEqual(abs(score), 60.0)
+        self.assertEqual(strength, TrendStrength.VERY_STRONG)
+
+    def test_very_strong_rejects_high_adx_without_directional_balance(self):
+        adx = MagicMock()
+        adx.get_latest.return_value = 55.0
+        adx._di_plus = 60.0
+        adx._di_minus = 40.0
+        atr = MagicMock()
+        atr.get_latest.return_value = 1.0
+        values = {
+            "ema_fast": 102.0,
+            "ema_slow": 100.0,
+            "rsi": 85.0,
+            "macd": 8.0,
+            "adx": 55.0,
+        }
+
+        _, strength, _, score, _ = self.engine._calculate_trend(
+            Timeframe.FIFTEEN_MINUTE, values, atr, adx
+        )
+
+        self.assertGreaterEqual(abs(score), 60.0)
+        self.assertEqual(strength, TrendStrength.STRONG)
+
     def test_engine_update_with_data(self):
         """Test updating the engine with market data"""
         base_time = datetime.now()

@@ -59,6 +59,17 @@ describe('TrendCard evidence contract', () => {
     expect(screen.queryByText('MODERATE')).not.toBeInTheDocument();
   });
 
+  it('renders the measured Very Strong state on ADX-capable timeframes', () => {
+    render(<TrendCard trend={trend({
+      timeframe: '4h',
+      strength: 'very_strong',
+      short_horizon_momentum: null,
+    })} />);
+
+    expect(screen.getByText('Strength')).toBeInTheDocument();
+    expect(screen.getByText('VERY STRONG')).toBeInTheDocument();
+  });
+
   it('shows server-owned live evidence and its age separately from bar completion', () => {
     render(<TrendCard trend={trend()} />);
 
