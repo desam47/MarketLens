@@ -17,6 +17,7 @@ from ..trend.trend_engine import (
     TrendStrength,
     strength_to_float,
 )
+from ..trend.evidence import build_trend_evidence
 
 logger = logging.getLogger(__name__)
 
@@ -923,28 +924,37 @@ class MultiTimeframeEngine:
         # Per-TF snapshots with quality metrics
         tf_snapshots: dict[Timeframe, TimeframeTrendSnapshot] = {}
         for tf, sig in timeframe_signals.items():
-            # Compute quality metrics
-            data_age_seconds = (ts - sig.timestamp).total_seconds() if sig.timestamp else 0.0
-
-            # Production trend ingestion tracks exact per-timeframe bars on
-            # the shared TrendEngine. Reading that metadata avoids deriving
-            # quality from the legacy tick fan-out candle store, where bars
-            # from one timeframe could inflate another timeframe's count.
             trend_engine = self.trend_engines[tf]
             metadata = trend_engine.get_timeframe_metadata(tf)
-            bar_closed = bool(metadata.get("bar_closed", False))
-            is_warmed_up = trend_engine.get_bar_count(tf) >= 50
-
-            # Valid if: has signal + data_quality ok + warmed up + fresh (< 2x timeframe period)
-            tf_seconds = _timeframe_seconds(tf)
-            fresh_enough = data_age_seconds <= (tf_seconds * 2) if tf_seconds > 0 else True
-            valid = sig.data_quality == "ok" and is_warmed_up and fresh_enough
-
-            # Quality weight: confidence * freshness * warmup * (1.0 if closed else 0.5)
-            freshness_factor = (
-                max(0.1, 1.0 - (data_age_seconds / (tf_seconds * 4))) if tf_seconds > 0 else 1.0
+            evidence = build_trend_evidence(
+                trend_engine,
+                tf.value,
+                sig,
+                metadata,
+                now=ts,
             )
-            freshness_factor = min(1.0, freshness_factor)
+            data_age_seconds = float(evidence["age_seconds"] or 0.0)
+            bar_closed = bool(evidence["bar_closed"])
+            is_warmed_up = bool(
+                evidence["warmup_bars"] is not None
+                and evidence["warmup_bars"] >= evidence["required_warmup_bars"]
+            )
+            valid = bool(evidence["valid"])
+
+            # Keep the established quality-weighting shape, but use the same
+            # freshness truth state that Trend Cards render. A closed market's
+            # last valid bar is expected evidence, not an ever-decaying stale
+            # one; warming/unavailable/stale data remains de-emphasized.
+            tf_seconds = _timeframe_seconds(tf)
+            if evidence["freshness_state"] == "closed_session":
+                freshness_factor = 1.0
+            elif tf_seconds > 0:
+                freshness_factor = min(
+                    1.0,
+                    max(0.1, 1.0 - (data_age_seconds / (tf_seconds * 4))),
+                )
+            else:
+                freshness_factor = 1.0
             warmup_factor = 1.0 if is_warmed_up else 0.3
             closed_factor = 1.0 if bar_closed else 0.5
             quality_weight = sig.confidence * freshness_factor * warmup_factor * closed_factor
@@ -952,12 +962,12 @@ class MultiTimeframeEngine:
             tf_snapshots[tf] = TimeframeTrendSnapshot(
                 symbol=self.symbol,
                 timeframe=tf,
-                timestamp=sig.timestamp,
+                timestamp=evidence["source_as_of"] or sig.timestamp,
                 direction=sig.classification,
                 score=sig.score,
                 strength=strength_to_float(sig.strength),
                 confidence=sig.confidence,
-                data_quality=sig.data_quality,
+                data_quality=evidence["data_status"],
                 strategy_version=settings.trend.strategy_version,
                 data_age_seconds=data_age_seconds,
                 bar_closed=bar_closed,

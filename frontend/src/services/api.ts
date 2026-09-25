@@ -96,12 +96,22 @@ export interface TrendData {
   evidence?: TrendEvidence;
 }
 
+export interface ConfluenceTimeframeSignal {
+  direction: string;
+  /** Live confluence uses Trend's label; snapshot fallback retains its numeric value. */
+  strength: string | number;
+  confidence: number;
+  score?: number | null;
+  timestamp: string | null;
+  evidence?: TrendEvidence;
+}
+
 export interface ConfluenceData {
   symbol: string;
   direction: string;
   strength: number;
   alignment_score: number;
-  timeframe_signals: Record<string, any>;
+  timeframe_signals: Record<string, ConfluenceTimeframeSignal>;
   timestamp: string | null;
   // Phase 7: alignment breakdown + horizon directions + preset.
   bullish_alignment?: number;

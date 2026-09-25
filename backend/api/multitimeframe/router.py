@@ -202,14 +202,27 @@ def build_confluence_payload(engine: MultiTimeframeEngine, symbol: str) -> dict:
             "quality_weighted_score": 0.0,
         }
 
-    # Convert timeframe signals to serializable format
+    # Reuse the Trend payload builder for every contributing timeframe. This
+    # keeps Confluence's source timestamp, validity, warm-up and freshness
+    # contract byte-for-byte aligned with the adjacent Trend by Timeframe
+    # cards instead of serializing a second, weaker version of that state.
+    from backend.api.trend.router import _build_trend_payload
+
     timeframe_signals = {}
-    for tf, signal in confluence_signal.timeframe_signals.items():
+    for tf in confluence_signal.timeframe_signals:
+        trend_payload = _build_trend_payload(
+            engine.trend_engines[tf],
+            symbol.upper(),
+            tf.value,
+            tf,
+        )
         timeframe_signals[tf.value] = {
-            "direction": signal.direction.value,
-            "strength": signal.strength.value,
-            "confidence": signal.confidence,
-            "timestamp": _to_dashboard_tz(signal.timestamp),
+            "direction": trend_payload["direction"],
+            "strength": trend_payload["strength"],
+            "confidence": trend_payload["confidence"],
+            "score": trend_payload["score"],
+            "timestamp": trend_payload["timestamp"],
+            "evidence": trend_payload["evidence"],
         }
     return {
         "symbol": confluence_signal.symbol,

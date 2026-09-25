@@ -1368,6 +1368,22 @@ h4 {
   text-shadow: 0 0 10px currentColor;
 }
 
+.signal-evidence-state {
+  margin-top: 0.25rem;
+  color: var(--text-muted);
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.signal-evidence-live { border-color: color-mix(in srgb, var(--success) 45%, transparent); }
+.signal-evidence-recent { border-color: color-mix(in srgb, var(--accent-primary) 45%, transparent); }
+.signal-evidence-closed_session { border-color: color-mix(in srgb, var(--text-muted) 45%, transparent); }
+.signal-evidence-warming { border-color: color-mix(in srgb, var(--warning) 55%, transparent); }
+.signal-evidence-stale,
+.signal-evidence-unavailable { border-color: color-mix(in srgb, var(--danger) 55%, transparent); }
+
 /* Phase 7: alignment breakdown + horizon directions + preset badge. */
 .confluence-card-header {
   display: flex;

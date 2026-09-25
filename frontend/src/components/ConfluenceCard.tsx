@@ -71,6 +71,18 @@ function structureLabel(state: string): string {
   return state.replace(/_/g, ' ').toUpperCase();
 }
 
+function evidenceLabel(state: string | undefined): string | null {
+  switch (state) {
+    case 'live': return 'Live';
+    case 'recent': return 'Recent';
+    case 'stale': return 'Stale';
+    case 'closed_session': return 'Closed';
+    case 'warming': return 'Warming';
+    case 'unavailable': return 'Unavailable';
+    default: return null;
+  }
+}
+
 function timingLabel(shortState: string, shortDir: string, higherDir: string): string {
   const directionSide = (direction: string): 'up' | 'down' | null => {
     if (direction.includes('up') || direction.includes('bullish')) return 'up';
@@ -278,7 +290,15 @@ export const ConfluenceCard = memo(function ConfluenceCard({ confluence, error, 
           <h4>Timeframe Signals</h4>
           <div className="signal-grid">
             {signalEntries.map(([tf, signal]: [string, any]) => (
-              <div key={tf} className="signal-item">
+              <div
+                key={tf}
+                className={`signal-item signal-evidence-${signal.evidence?.freshness_state || 'unknown'}`}
+                title={signal.evidence?.invalid_reason
+                  ? `Evidence: ${evidenceLabel(signal.evidence.freshness_state) || 'Unavailable'} — ${signal.evidence.invalid_reason.replace(/_/g, ' ')}`
+                  : signal.evidence?.source_as_of
+                    ? `Evidence as of ${formatETDateTime(signal.evidence.source_as_of)}`
+                    : undefined}
+              >
                 <span className="signal-tf">{tf}</span>
                 <span
                   className="signal-dir"
@@ -288,6 +308,9 @@ export const ConfluenceCard = memo(function ConfluenceCard({ confluence, error, 
                 </span>
                 {typeof signal.score === 'number' && (
                   <span className="signal-score">{signal.score > 0 ? '+' : ''}{signal.score.toFixed(0)}</span>
+                )}
+                {evidenceLabel(signal.evidence?.freshness_state) && (
+                  <span className="signal-evidence-state">{evidenceLabel(signal.evidence.freshness_state)}</span>
                 )}
               </div>
             ))}

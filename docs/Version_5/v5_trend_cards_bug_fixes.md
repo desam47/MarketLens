@@ -1,9 +1,9 @@
 # Version 5 Trend Cards Bug Fixes
 
 **Created:** 2026-09-24
-**Last updated:** 2026-09-24 (TC-01 Trend implementation)
-**Status:** Re-prioritized from a trading-desk perspective: what would actually cost a trader money first, not just severity as originally filed. TC-01's Trend API and card contract are implemented and covered by focused tests; Confluence still needs to consume that same contract, so TC-01 remains partial. TC-01 and TC-06 describe one underlying fix — a single server-owned evidence contract — and are tracked together under TC-01. TC-08 remains High because it is a silent scope-mismatch bug, not a workflow nicety.
-**Scorecard:** 0 ✅ COMPLETE, 1 ⚠️ PARTIAL, 8 ❌ NOT STARTED, 0 🟡 DEFERRED, 1 folded (TC-06 → TC-01).
+**Last updated:** 2026-09-24 (TC-01 complete)
+**Status:** Re-prioritized from a trading-desk perspective: what would actually cost a trader money first, not just severity as originally filed. TC-01's shared Trend and Confluence evidence contract is implemented and covered by focused API and component tests. TC-01 and TC-06 describe one underlying fix — a single server-owned evidence contract — and are tracked together under TC-01. TC-08 remains High because it is a silent scope-mismatch bug, not a workflow nicety.
+**Scorecard:** 1 ✅ COMPLETE, 0 ⚠️ PARTIAL, 8 ❌ NOT STARTED, 0 🟡 DEFERRED, 1 folded (TC-06 → TC-01).
 **Source:** 2026-09-24 code, API, and live-payload review of the Dashboard's **Trend by Timeframe** cards at `78a1adc`, re-prioritized the same day from a trading-desk perspective and re-verified live against SPY.
 **Related:** [Phase audit](phase_audit_v5.md), [AI Analysis fixes](v5_ai_analysis.md), [Historical Signals fixes](v5_historical_signal_bug_fixes.md), [Market Data fixes](v5_market_data_bug_fixes.md)
 
@@ -22,7 +22,7 @@ Pre-implementation line numbers refer to the code at `78a1adc`; implementation e
 
 | ID | Severity | Area | Title | Evidence | Status |
 |---|---|---|---|---|---|
-| TC-01 | Critical | UI + data truth | Cards cannot prove freshness or validity — stale, warming, and invalid data all look like an ordinary closed bar (includes former TC-06) | Verified | ⚠️ PARTIAL |
+| TC-01 | Critical | UI + data truth | Cards cannot prove freshness or validity — stale, warming, and invalid data all look like an ordinary closed bar (includes former TC-06) | Verified | ✅ COMPLETE |
 | TC-03 | Critical | Methodology | 1m, 2m, and 3m Strength is a fixed default rather than a measurement | Verified | ❌ NOT STARTED |
 | TC-08 | High | Workflow + data truth | The all-timeframe grid and the selected Confluence preset do not share one scope | Code-read | ❌ NOT STARTED |
 | TC-05 | High | Methodology | Confidence and score are not comparable across short and long timeframes | Code-read | ❌ NOT STARTED |
@@ -45,7 +45,7 @@ Pre-implementation line numbers refer to the code at `78a1adc`; implementation e
 
 ### TC-01 — Cards cannot prove freshness or validity: stale, warming, and invalid data all look like an ordinary closed bar
 
-**Status:** ⚠️ PARTIAL — the Trend API/card path now has the evidence contract; Confluence adoption remains.
+**Status:** ✅ COMPLETE
 **Where:** `TrendCard` (`frontend/src/components/TrendCard.tsx:60`), the Trend payload builder (`backend/api/trend/router.py:37` and `:42`), and the richer Multi-Timeframe snapshot's bar-count / warm-up / validity fields, which already exist but are not exposed to this card.
 
 This entry merges the original TC-01 ("stale data presented as an ordinary closed bar") and TC-06 ("cards cannot explain warming, invalid, delayed, or unavailable evidence"). Both need the same fix: one server-owned per-card evidence contract. Filing them as two tickets risked building the freshness state and the validity reason on two different schedules when they are one design decision.
@@ -70,9 +70,9 @@ The bug is therefore broader than a missing closed-session label: the card has n
 - `valid` / `invalid_reason`, `warmup_bars` / `required_warmup_bars`, so a cold engine, an incomplete derived bar, a stale provider, and a genuinely low-confidence flat signal never look alike.
 - Closed-market data presented with its actual per-timeframe source as-of and applicable session-close reference — not as stale live data or a generic shared timestamp.
 
-**Implementation (2026-09-24):** `backend/api/trend/router.py` now constructs one per-timeframe `evidence` envelope from the engine's source metadata, rather than using the signal-generation timestamp as the public as-of time. It emits `freshness_state`, age, source timestamp/as-of, validity, reason, warm-up counts, provider, session, data status, and bar completion. Daily bars dated at midnight are normalized to their regular-session close for freshness/display while preserving the raw source timestamp. `TrendCard` renders the server-owned state and age separately from `Bar closed`; it does not infer freshness in the browser. **Remaining under this ticket:** Confluence must consume the same evidence envelope rather than its parallel snapshot fields, then receive a contract-alignment regression test.
+**Implementation (2026-09-24):** `backend/trend/evidence.py` owns one per-timeframe `evidence` contract from the engine's source metadata, rather than using the signal-generation timestamp as the public as-of time. It emits `freshness_state`, age, source timestamp/as-of, validity, reason, warm-up counts, provider, session, data status, and bar completion. Daily bars dated at midnight are normalized to their regular-session close, and completed bars derived from the weekly Monday bucket are normalized to that week's final trading-session close, while preserving the raw source timestamp. Trend and Confluence both consume this module: `TrendCard` renders the server-owned state and age separately from `Bar closed`, while Confluence uses it for snapshot validity/weighting and renders each input's evidence state. The browser does not infer freshness.
 
-**Tests:** added alongside the fix in `backend/tests/api/test_trend_api.py` and `frontend/src/components/TrendCard.test.tsx`. They cover open-market stale, closed-market last completed bar, delayed provider data, missing timestamp, incomplete weekly-derived data, cold warm-up, and current live evidence. They assert the API contract plus visible state and age badge, not only internal fields.
+**Tests:** added alongside the fix in `backend/tests/api/test_trend_api.py`, `backend/tests/api/test_mtf_api.py`, `frontend/src/components/TrendCard.test.tsx`, and `frontend/src/components/ConfluenceCard.test.tsx`. They cover open-market stale, closed-market last completed bar, delayed provider data, missing timestamp, incomplete weekly-derived data, completed-week close normalization, cold warm-up, current live evidence, and Trend/Confluence daily source-as-of alignment. They assert the API contract plus visible state and age badge, not only internal fields.
 
 ### TC-03 — 1m, 2m, and 3m Strength is a fixed default rather than a measurement
 
@@ -256,6 +256,7 @@ No code changed in this pass — re-verification and re-ranking only, ahead of i
 | 2026-09-24 | TC-01 to TC-10 | ❌ NOT STARTED | — | `docs/Version_5/v5_trend_cards_bug_fixes.md` | — | Trading-desk prioritization pass: TC-06 folded into TC-01; TC-08 raised to High; TC-04 dilution risk added; TC-10 sequencing contradiction corrected; TC-01/TC-03/TC-02 re-verified live. No code changed. |
 | 2026-09-24 | TC-01 | ❌ NOT STARTED | — | `docs/Version_5/v5_trend_cards_bug_fixes.md` | — | Correction: both initial batch probes ran after the 20:00 ET extended-session close, so neither reproduced an open-market stale-feed event. Follow-up direct source probes also showed that the batch's shared 19:59 timestamp / `ok` status cannot be treated as universally correct for daily and incomplete weekly evidence. TC-01 now covers the required per-timeframe evidence contract. No code changed. |
 | 2026-09-24 | TC-01 | ⚠️ PARTIAL | pending | `backend/api/trend/router.py`, `backend/tests/api/test_trend_api.py`, `frontend/src/components/TrendCard.tsx`, `frontend/src/components/TrendCard.test.tsx`, `frontend/src/services/api.ts`, `frontend/src/styles/App.css` | 119 focused backend tests passed; 5 TrendCard tests passed; production frontend build passed | Added the server-owned Trend evidence contract and rendered it directly. API as-of time now comes from each timeframe's own metadata; daily midnight source stamps normalize to the regular close while retaining their raw timestamp. Confluence adoption remains. |
+| 2026-09-24 | TC-01 | ✅ COMPLETE | pending | `backend/trend/evidence.py`, `backend/multitimeframe/multi_timeframe_engine.py`, `backend/api/multitimeframe/router.py`, `backend/tests/api/test_mtf_api.py`, `backend/tests/api/test_trend_api.py`, `frontend/src/components/ConfluenceCard.tsx`, `frontend/src/components/ConfluenceCard.test.tsx` | 140 focused Trend/MTF/AI-contract backend tests passed; 8 TrendCard/ConfluenceCard tests passed; production frontend build passed | Moved the contract into a shared backend module. Confluence now uses it for validity/quality weighting, serializes the identical per-timeframe payload, and visibly labels each contributing timeframe's evidence state. Completed weekly derived bars now use their final trading-session close as the trader-facing as-of time, while retaining the raw Monday bucket key. |
 
 ---
 

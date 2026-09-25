@@ -5,21 +5,29 @@ Tests for the multi-timeframe API router.
 import logging
 import os
 import sys
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../"))
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from backend.api.multitimeframe.router import router
+from backend.api.multitimeframe.router import build_confluence_payload, router
+from backend.engines.timeframe import Timeframe
 from backend.multitimeframe.multi_timeframe_engine import (
+    ConfluenceDirection,
+    ConfluenceSignal,
     PRESET_DAY_TRADING,
     PRESET_SCALPER,
     PRESET_SWING,
 )
+from backend.trend.trend_engine import TrendDirection, TrendSignal, TrendStrength
 
 # Disable data-quality log noise during tests.
 logging.getLogger("backend.data_quality").setLevel(logging.CRITICAL)
+
+ET = ZoneInfo("America/New_York")
 
 
 def _client():
@@ -59,6 +67,70 @@ class TestMTFConfluenceEndpoint:
         resp = client.get("/api/multitimeframe/NOSUCHTICKER/confluence")
         assert resp.status_code == 200
         assert isinstance(resp.json()["preset"], str)
+
+    def test_confluence_timeframe_evidence_matches_trend_source_as_of_contract(self):
+        """Confluence must not reintroduce a later signal timestamp for daily data."""
+        daily_source = datetime(2026, 9, 24, 0, 0, tzinfo=ET)
+        later_signal_time = datetime(2026, 9, 24, 19, 59, tzinfo=ET)
+        signal = TrendSignal(
+            symbol="SPY",
+            timeframe=Timeframe.ONE_DAY,
+            direction=TrendDirection.UPTREND,
+            strength=TrendStrength.MODERATE,
+            confidence=0.75,
+            timestamp=later_signal_time,
+        )
+
+        class SharedTrendEngine:
+            trend_history = {Timeframe.ONE_DAY: []}
+
+            @staticmethod
+            def get_current_trend(timeframe):
+                assert timeframe == Timeframe.ONE_DAY
+                return signal
+
+            @staticmethod
+            def get_timeframe_metadata(timeframe):
+                assert timeframe == Timeframe.ONE_DAY
+                return {
+                    "timestamp": daily_source,
+                    "data_status": "HISTORICAL",
+                    "provider": "webull",
+                    "session": "regular",
+                    "bar_closed": True,
+                }
+
+            @staticmethod
+            def get_bar_count(timeframe):
+                assert timeframe == Timeframe.ONE_DAY
+                return 50
+
+        confluence = ConfluenceSignal(
+            symbol="SPY",
+            direction=ConfluenceDirection.UPTREND,
+            strength=0.75,
+            alignment_score=1.0,
+            timeframe_signals={Timeframe.ONE_DAY: signal},
+            timestamp=later_signal_time,
+            short_term_direction=TrendDirection.UPTREND,
+            intermediate_direction=TrendDirection.UPTREND,
+            higher_direction=TrendDirection.UPTREND,
+        )
+
+        class FakeMTFEngine:
+            preset_name = "day_trading"
+            trend_engines = {Timeframe.ONE_DAY: SharedTrendEngine()}
+
+            @staticmethod
+            def get_current_confluence():
+                return confluence
+
+        payload = build_confluence_payload(FakeMTFEngine(), "SPY")
+        daily = payload["timeframe_signals"]["1d"]
+
+        assert daily["timestamp"].startswith("2026-09-24T16:00:00")
+        assert daily["evidence"]["source_timestamp"].startswith("2026-09-24T00:00:00")
+        assert daily["evidence"]["source_as_of"] == daily["timestamp"]
 
 
 class TestMTFSnapshotEndpoint:

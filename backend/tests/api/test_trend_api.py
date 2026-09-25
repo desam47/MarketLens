@@ -183,6 +183,23 @@ class TestTrendEvidenceContract(unittest.TestCase):
         self.assertTrue(payload["evidence"]["source_timestamp"].startswith("2026-09-24T00:00:00"))
         self.assertTrue(payload["evidence"]["source_as_of"].startswith("2026-09-24T16:00:00"))
 
+    def test_derived_weekly_payload_uses_week_close_not_bucket_start(self):
+        # The stored weekly key is Monday 00:00 UTC.  Its decision-useful
+        # as-of time is the completed Friday regular-session close.
+        weekly_bucket = datetime(2026, 9, 14, 0, 0, 0, tzinfo=ZoneInfo("UTC"))
+        signal = self._signal(Timeframe.ONE_WEEK, datetime(2026, 9, 19, 20, 0, tzinfo=ZoneInfo("UTC")))
+        self.engine.get_current_trend.return_value = signal
+        self.engine.get_timeframe_metadata.return_value = self._metadata(
+            weekly_bucket,
+            provider="aggregated_from_1d",
+        )
+
+        payload = _build_trend_payload(self.engine, "SPY", "1wk", Timeframe.ONE_WEEK)
+
+        self.assertTrue(payload["timestamp"].startswith("2026-09-18T16:00:00"))
+        self.assertTrue(payload["evidence"]["source_timestamp"].startswith("2026-09-13T20:00:00"))
+        self.assertTrue(payload["evidence"]["source_as_of"].startswith("2026-09-18T16:00:00"))
+
     def test_incomplete_derived_bar_is_unavailable_even_when_market_is_closed(self):
         now = datetime(2026, 9, 24, 21, 0, 0, tzinfo=ET)
         signal = self._signal(Timeframe.ONE_WEEK, datetime(2026, 9, 21, 0, 0, 0, tzinfo=ET))
