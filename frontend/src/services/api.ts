@@ -81,6 +81,17 @@ export interface TrendEvidence {
   session: string | null;
 }
 
+/** Closed-bar change history for one timeframe (TC-09). Counts bars, not polling updates. */
+export interface TrendChangeHistory {
+  direction: string;
+  /** Consecutive closed bars the current direction has held, inclusive of its first bar. */
+  bars_in_state: number;
+  previous_direction: string | null;
+  changed_at: string | null;
+  /** True only when this engine observed the transition into the current state. */
+  witnessed_change: boolean;
+}
+
 /** Declares the indicator stack behind a Trend score; it is not an outcome calibration. */
 export interface TrendScoringProfile {
   id: 'directional_core' | 'intraday_directional' | 'full_technical' | string;
@@ -112,6 +123,7 @@ export interface TrendData {
   bar_closed?: boolean | null;
   scoring?: TrendScoringProfile;
   evidence?: TrendEvidence;
+  change_history?: TrendChangeHistory | null;
 }
 
 export interface ConfluenceTimeframeSignal {

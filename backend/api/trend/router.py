@@ -36,6 +36,17 @@ def _to_dashboard_tz(value: datetime | None) -> str | None:
     return format_edt_iso(value)
 
 
+def _serialize_change_history(change: dict | None) -> dict | None:
+    """Render the engine's closed-bar change history for the API (TC-09).
+
+    ``changed_at`` is normalized to the dashboard timezone; every other field
+    is passed through as the engine computed it.
+    """
+    if not change:
+        return None
+    return {**change, "changed_at": _to_dashboard_tz(change.get("changed_at"))}
+
+
 def _trend_evidence(
     engine,
     timeframe: str,
@@ -60,6 +71,7 @@ def _build_trend_payload(engine, sym: str, timeframe: str, tf) -> dict:
         metadata = {}
     evidence = _trend_evidence(engine, timeframe, trend_signal, metadata)
     scoring = scoring_profile_for_timeframe(tf).to_payload()
+    change_history = _serialize_change_history(engine.get_trend_change_history(tf))
     if trend_signal is None:
         return {
             "symbol": sym,
@@ -77,6 +89,7 @@ def _build_trend_payload(engine, sym: str, timeframe: str, tf) -> dict:
             "session": evidence["session"],
             "bar_closed": evidence["bar_closed"],
             "evidence": evidence,
+            "change_history": change_history,
         }
     return {
         "symbol": trend_signal.symbol,
@@ -105,6 +118,7 @@ def _build_trend_payload(engine, sym: str, timeframe: str, tf) -> dict:
         "session": evidence["session"],
         "bar_closed": evidence["bar_closed"],
         "evidence": evidence,
+        "change_history": change_history,
     }
 
 

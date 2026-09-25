@@ -275,3 +275,44 @@ describe('TrendCard chart handoff (TC-09)', () => {
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
   });
 });
+
+describe('TrendCard change history (TC-09)', () => {
+  it('shows how many closed bars an observed run has held', () => {
+    render(<TrendCard trend={trend({
+      change_history: {
+        direction: 'downtrend', bars_in_state: 7, previous_direction: 'uptrend',
+        changed_at: '2026-09-24T09:00:00-04:00', witnessed_change: true,
+      },
+    })} />);
+
+    expect(screen.getByText('Held 7 bars')).toBeInTheDocument();
+  });
+
+  it('marks a fresh reversal and names the prior direction', () => {
+    render(<TrendCard trend={trend({
+      change_history: {
+        direction: 'downtrend', bars_in_state: 1, previous_direction: 'uptrend',
+        changed_at: '2026-09-24T10:00:00-04:00', witnessed_change: true,
+      },
+    })} />);
+
+    expect(screen.getByText('New (was uptrend)')).toBeInTheDocument();
+  });
+
+  it('presents an unwitnessed run length as a lower bound', () => {
+    render(<TrendCard trend={trend({
+      change_history: {
+        direction: 'uptrend', bars_in_state: 5, previous_direction: null,
+        changed_at: null, witnessed_change: false,
+      },
+    })} />);
+
+    expect(screen.getByText('Held 5+ bars')).toBeInTheDocument();
+  });
+
+  it('renders no change-history line before any closed bar', () => {
+    render(<TrendCard trend={trend({ change_history: null })} />);
+
+    expect(screen.queryByText(/Held|New/)).not.toBeInTheDocument();
+  });
+});

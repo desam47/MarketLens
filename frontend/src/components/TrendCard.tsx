@@ -1,5 +1,5 @@
 import React, { memo } from 'react';
-import { TrendData } from '../services/api';
+import { TrendData, TrendChangeHistory } from '../services/api';
 import { formatETDateTime } from './chartMath';
 
 interface TrendCardProps {
@@ -96,6 +96,22 @@ function formatProvider(provider: string | null | undefined): string | null {
   return provider.replace(/_/g, ' ').replace(/\b\w/g, character => character.toUpperCase());
 }
 
+function formatChangeHistory(change: TrendChangeHistory | null | undefined): string | null {
+  if (!change || !Number.isFinite(change.bars_in_state)) return null;
+  const bars = Math.max(1, Math.round(change.bars_in_state));
+  const unit = bars === 1 ? 'bar' : 'bars';
+  if (change.witnessed_change) {
+    if (bars === 1) {
+      const prev = change.previous_direction?.replace(/_/g, ' ');
+      return prev ? `New (was ${prev})` : 'New this bar';
+    }
+    return `Held ${bars} ${unit}`;
+  }
+  // The transition into this state predates the tracked history, so the
+  // duration is a lower bound, not an observed run length.
+  return `Held ${bars}+ ${unit}`;
+}
+
 function formatSignedScore(score: number | null | undefined): string | null {
   if (score == null || !Number.isFinite(score)) return null;
   const rounded = Math.round(score);
@@ -147,6 +163,7 @@ export const TrendCard = memo(function TrendCard({ trend, confluenceRole, onOpen
   const scoreLine = scoreText
     ? `Score ${scoreText}${classificationLabel ? ` · ${classificationLabel}` : ''}`
     : classificationLabel;
+  const changeHistoryLabel = formatChangeHistory(trend.change_history);
   const scoring = trend.scoring;
   const scoringProfileText = scoring
     ? `${scoring.label} · ${scoring.components.length} inputs`
@@ -243,6 +260,11 @@ export const TrendCard = memo(function TrendCard({ trend, confluenceRole, onOpen
         />
       </div>
       <p className="signal-explanation">{signalExplanation(trend)}</p>
+      {changeHistoryLabel && (
+        <div className="trend-change-history" title="Direction persistence measured in closed bars for this timeframe.">
+          {changeHistoryLabel}
+        </div>
+      )}
       {freshnessLabel && (
         <div
           className={`trend-evidence trend-evidence-${freshnessState}`}

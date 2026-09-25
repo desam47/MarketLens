@@ -770,5 +770,85 @@ class TestTrendProviderProvenance(unittest.TestCase):
         self.assertEqual(agg["provider"], "mixed")
 
 
+class TestTrendChangeHistory(unittest.TestCase):
+    """TC-09: change history counts CLOSED bars, not polling-frequency updates."""
+
+    def setUp(self):
+        self.engine = TrendEngine("SPY")
+        self.tf = Timeframe.FIVE_MINUTE
+
+    def _bar(self, direction: str, index: int, minute: int) -> None:
+        # Emulate one closed bar: the bar counter advances, then the run is
+        # recorded, exactly as _update_from_bar sequences it.
+        self.engine._bar_counts[self.tf] = index
+        self.engine._record_trend_state(self.tf, direction, datetime(2026, 9, 24, 10, minute))
+
+    def test_none_before_any_closed_bar(self):
+        self.assertIsNone(self.engine.get_trend_change_history(self.tf))
+
+    def test_counts_consecutive_bars_in_state(self):
+        self._bar("uptrend", 1, 0)
+        self._bar("uptrend", 2, 5)
+        self._bar("uptrend", 3, 10)
+
+        history = self.engine.get_trend_change_history(self.tf)
+        self.assertEqual(history["direction"], "uptrend")
+        self.assertEqual(history["bars_in_state"], 3)
+        self.assertFalse(history["witnessed_change"])
+        self.assertIsNone(history["previous_direction"])
+        self.assertIsNone(history["changed_at"])
+
+    def test_records_transition_with_previous_direction_and_changed_at(self):
+        self._bar("uptrend", 1, 0)
+        self._bar("uptrend", 2, 5)
+        self._bar("downtrend", 3, 10)
+        self._bar("downtrend", 4, 15)
+
+        history = self.engine.get_trend_change_history(self.tf)
+        self.assertEqual(history["direction"], "downtrend")
+        self.assertEqual(history["bars_in_state"], 2)
+        self.assertTrue(history["witnessed_change"])
+        self.assertEqual(history["previous_direction"], "uptrend")
+        self.assertEqual(history["changed_at"], datetime(2026, 9, 24, 10, 10))
+
+    def test_a_fresh_run_reports_one_bar(self):
+        self._bar("uptrend", 1, 0)
+        self._bar("downtrend", 2, 5)
+
+        history = self.engine.get_trend_change_history(self.tf)
+        self.assertEqual(history["bars_in_state"], 1)
+        self.assertEqual(history["previous_direction"], "uptrend")
+
+    def test_tracks_closed_bar_transitions_end_to_end(self):
+        engine = TrendEngine("SPY")
+        tf = Timeframe.ONE_DAY
+        base = datetime(2026, 1, 1)
+        # A clear uptrend, then a clear downtrend — each entry is one closed bar.
+        prices = [100 + i for i in range(60)] + [160 - i for i in range(60)]
+        for i, close in enumerate(prices):
+            engine.update(
+                price=close,
+                open_price=close - 0.5,
+                high=close + 1,
+                low=close - 1,
+                volume=1_000_000,
+                timestamp=base + timedelta(days=i),
+                timeframe=tf,
+                only_timeframe=tf,
+                data_status="HISTORICAL",
+                session="regular",
+            )
+
+        history = engine.get_trend_change_history(tf)
+        self.assertIsNotNone(history)
+        # Counted closed bars, never the far larger per-update trend_history.
+        self.assertLessEqual(history["bars_in_state"], len(prices))
+        self.assertLessEqual(
+            history["bars_in_state"], engine._bar_counts.get(tf, 0)
+        )
+        # The reversal produced at least one observed direction change.
+        self.assertTrue(history["witnessed_change"])
+
+
 if __name__ == "__main__":
     unittest.main()

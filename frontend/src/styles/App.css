@@ -1339,6 +1339,13 @@ h4 {
   cursor: help;
 }
 
+.trend-change-history {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  margin-bottom: 0.5rem;
+  cursor: help;
+}
+
 .trend-details {
   display: flex;
   justify-content: space-between;

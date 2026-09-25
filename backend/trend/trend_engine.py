@@ -372,6 +372,12 @@ class TrendEngine:
         self._bar_counts: dict[Timeframe, int] = {}
         self._bar_metadata: dict[Timeframe, dict[str, Any]] = {}
         self._live_aggregates: dict[Timeframe, dict[str, Any]] = {}
+        # TC-09 change history: one entry per direction RUN (not per bar and not
+        # per polling update), keyed by the closed-bar index at which that run
+        # began. Counting closed bars (``_bar_counts``) — not ``trend_history``
+        # entries, which grow on every tick-frequency ``update()`` — is what
+        # keeps "held for N bars" honest.
+        self._trend_state_runs: dict[Timeframe, list[dict[str, Any]]] = {}
         self._short_momentum_bars: dict[Timeframe, deque[dict[str, float]]] = {
             timeframe: deque(maxlen=_SHORT_MOMENTUM_BAR_COUNT)
             for timeframe in _SHORT_HORIZON_TIMEFRAMES
@@ -673,6 +679,8 @@ class TrendEngine:
 
         self._last_processed_bar_ts[timeframe] = timestamp
         self._bar_counts[timeframe] = self._bar_counts.get(timeframe, 0) + 1
+        if signal is not None:
+            self._record_trend_state(timeframe, signal.direction.value, timestamp)
         self._bar_metadata[timeframe] = {
             "provider": provider or "unknown",
             "session": session or "unknown",
@@ -1177,6 +1185,58 @@ class TrendEngine:
         if limit is not None:
             return history[-limit:] if len(history) > limit else history
         return history.copy()
+
+    # Bound the transition log so a long-lived engine can't grow it without
+    # limit. 100 direction changes is far more history than any card shows.
+    _MAX_TREND_STATE_RUNS = 100
+
+    def _record_trend_state(
+        self, timeframe: Timeframe, direction: str, timestamp: datetime
+    ) -> None:
+        """Record a direction RUN keyed by the current closed-bar index (TC-09).
+
+        Called once per closed bar from ``_update_from_bar`` (never from the
+        tick path), so a new entry is appended only when the direction actually
+        changes. ``_bar_counts[timeframe]`` is the closed-bar index and must
+        already have been incremented for this bar.
+        """
+        runs = self._trend_state_runs.setdefault(timeframe, [])
+        if runs and runs[-1]["direction"] == direction:
+            return
+        runs.append(
+            {
+                "bar_index": self._bar_counts.get(timeframe, len(runs) + 1),
+                "direction": direction,
+                "timestamp": timestamp,
+            }
+        )
+        if len(runs) > self._MAX_TREND_STATE_RUNS:
+            del runs[: len(runs) - self._MAX_TREND_STATE_RUNS]
+
+    def get_trend_change_history(self, timeframe: Timeframe) -> dict[str, Any] | None:
+        """Closed-bar change history for a timeframe, or ``None`` before any bar.
+
+        ``bars_in_state`` counts closed bars the current direction has held,
+        inclusive of the bar it started on. ``witnessed_change`` is ``True``
+        only when this engine actually observed the transition into the current
+        state (an earlier run exists); when the whole tracked log is a single
+        run, ``bars_in_state`` is a lower bound and ``previous_direction`` /
+        ``changed_at`` are ``None``.
+        """
+        runs = self._trend_state_runs.get(timeframe)
+        if not runs:
+            return None
+        current = runs[-1]
+        latest_index = self._bar_counts.get(timeframe, current["bar_index"])
+        bars_in_state = max(1, latest_index - current["bar_index"] + 1)
+        witnessed_change = len(runs) >= 2
+        return {
+            "direction": current["direction"],
+            "bars_in_state": bars_in_state,
+            "previous_direction": runs[-2]["direction"] if witnessed_change else None,
+            "changed_at": current["timestamp"] if witnessed_change else None,
+            "witnessed_change": witnessed_change,
+        }
 
     def get_multi_timeframe_trend(self) -> dict[Timeframe, TrendSignal]:
         """Get current trend for all timeframes"""

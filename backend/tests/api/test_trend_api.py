@@ -48,6 +48,8 @@ class TestTrendBatchAPI(unittest.TestCase):
         self.engine_patch = patch("backend.api.trend.router.get_engine")
         self.mock_get_engine = self.engine_patch.start()
         self.mock_engine = MagicMock()
+        # Default: no change history, so payloads stay clean unless a test opts in.
+        self.mock_engine.get_trend_change_history.return_value = None
         self.mock_get_engine.return_value = self.mock_engine
 
     def tearDown(self):
@@ -75,6 +77,39 @@ class TestTrendBatchAPI(unittest.TestCase):
         )
         # One shared engine lookup, not one per timeframe.
         self.mock_get_engine.assert_called_once_with("AAPL")
+
+    def test_batch_serializes_closed_bar_change_history(self):
+        signal = _make_signal("AAPL", Timeframe.ONE_HOUR, TrendDirection.DOWNTREND)
+        self.mock_engine.get_current_trend.side_effect = lambda tf: signal
+        self.mock_engine.get_trend_change_history.return_value = {
+            "direction": "downtrend",
+            "bars_in_state": 4,
+            "previous_direction": "uptrend",
+            "changed_at": datetime(2025, 1, 1, 11, 0, 0),
+            "witnessed_change": True,
+        }
+
+        response = self.client.get("/api/trend/AAPL/batch?timeframes=1h")
+
+        self.assertEqual(response.status_code, 200)
+        change = response.json()[0]["change_history"]
+        self.assertEqual(change["direction"], "downtrend")
+        self.assertEqual(change["bars_in_state"], 4)
+        self.assertEqual(change["previous_direction"], "uptrend")
+        self.assertTrue(change["witnessed_change"])
+        # changed_at is normalized to the dashboard timezone, not the raw datetime.
+        self.assertIsInstance(change["changed_at"], str)
+        self.assertNotEqual(change["changed_at"], "")
+
+    def test_batch_omits_change_history_before_any_closed_bar(self):
+        signal = _make_signal("AAPL", Timeframe.ONE_HOUR, TrendDirection.UPTREND)
+        self.mock_engine.get_current_trend.side_effect = lambda tf: signal
+        self.mock_engine.get_trend_change_history.return_value = None
+
+        response = self.client.get("/api/trend/AAPL/batch?timeframes=1h")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.json()[0]["change_history"])
 
     def test_batch_declares_each_timeframe_scoring_profile(self):
         signals = {
