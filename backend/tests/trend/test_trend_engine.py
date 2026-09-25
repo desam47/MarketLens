@@ -815,6 +815,82 @@ class TestGatedHybridV2Flag(unittest.TestCase):
         self.assertLess(abs(macd_signal), 1.0)
         self.assertAlmostEqual(macd_signal, 0.025, places=3)
 
+    def _build_engine_with_supertrend(self, *, st_is_up: bool, adx_value: float):
+        """Build a 1m engine with mocked SuperTrend + ADX for gated hybrid tests."""
+        engine = TrendEngine("SPY")
+
+        def ind(value, name=""):
+            m = MagicMock()
+            m.get_latest.return_value = value
+            m.name = name
+            return m
+
+        st_mock = MagicMock()
+        st_mock.get_latest.return_value = 0.5
+        st_mock.name = "SuperTrend"
+        st_mock.is_uptrend = st_is_up
+        st_mock.band_distance_atr = 1.5
+
+        adx_mock = MagicMock()
+        adx_mock.get_latest.return_value = adx_value
+        adx_mock.name = "ADX"
+        adx_mock._di_plus = 22.0 if st_is_up else 8.0
+        adx_mock._di_minus = 8.0 if st_is_up else 22.0
+
+        engine.indicators[Timeframe.ONE_MINUTE] = {
+            "ema_fast": ind(100.2),
+            "ema_slow": ind(100.0),
+            "rsi": ind(52.0 if st_is_up else 48.0),
+            "macd": ind(0.5 if st_is_up else -0.5),
+            "atr": ind(2.0, name="ATR"),
+            "supertrend": st_mock,
+            "adx": adx_mock,
+        }
+        return engine
+
+    def test_v2_direction_gate_follows_supertrend(self):
+        """SuperTrend up → UPTREND even when legacy composite would disagree."""
+        from backend.config.settings import settings
+        from backend.trend.trend_engine import TrendDirection
+
+        engine = self._build_engine_with_supertrend(st_is_up=True, adx_value=30.0)
+        with patch.object(settings.trend, "signal_v2", True):
+            signal = engine._analyze_timeframe_trend(
+                Timeframe.ONE_MINUTE, engine.indicators[Timeframe.ONE_MINUTE], datetime.now()
+            )
+        self.assertIsNotNone(signal)
+        self.assertEqual(signal.direction, TrendDirection.UPTREND)
+        self.assertGreater(signal.score, 0)
+
+    def test_v2_adx_regime_gate_collapses_score_in_range(self):
+        """ADX below 20 → score near 0 and direction SIDEWAYS regardless of SuperTrend."""
+        from backend.config.settings import settings
+        from backend.trend.trend_engine import TrendDirection
+
+        engine = self._build_engine_with_supertrend(st_is_up=True, adx_value=10.0)
+        with patch.object(settings.trend, "signal_v2", True):
+            signal = engine._analyze_timeframe_trend(
+                Timeframe.ONE_MINUTE, engine.indicators[Timeframe.ONE_MINUTE], datetime.now()
+            )
+        self.assertIsNotNone(signal)
+        self.assertEqual(signal.direction, TrendDirection.SIDEWAYS)
+        # regime_factor = 10/20 = 0.5 → score is halved vs a trending market
+        self.assertLess(abs(signal.score), 30)
+
+    def test_v2_falls_through_to_legacy_when_supertrend_not_warmed_up(self):
+        """If SuperTrend.is_uptrend is None (not yet warmed up), legacy path runs."""
+        from backend.config.settings import settings
+
+        engine = self._build_engine_with_supertrend(st_is_up=True, adx_value=30.0)
+        # Override is_uptrend to None to simulate cold start
+        engine.indicators[Timeframe.ONE_MINUTE]["supertrend"].is_uptrend = None
+        with patch.object(settings.trend, "signal_v2", True):
+            signal = engine._analyze_timeframe_trend(
+                Timeframe.ONE_MINUTE, engine.indicators[Timeframe.ONE_MINUTE], datetime.now()
+            )
+        # Should still produce a signal via the legacy path
+        self.assertIsNotNone(signal)
+
 
 class TestTrendChangeHistory(unittest.TestCase):
     """TC-09: change history counts CLOSED bars, not polling-frequency updates."""

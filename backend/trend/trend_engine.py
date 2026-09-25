@@ -177,8 +177,15 @@ _FULL_TECHNICAL_PROFILE = TrendScoringProfile(
 
 
 def scoring_profile_for_timeframe(timeframe: Timeframe) -> TrendScoringProfile:
-    """Return the declared scoring profile for one Trend timeframe."""
+    """Return the declared scoring profile for one Trend timeframe.
+
+    Under TREND_SIGNAL_V2, fast timeframes (1m/2m/3m/5m) gain SuperTrend and
+    ADX so they use the intraday directional profile rather than the minimal
+    directional-core profile.
+    """
     if timeframe in _SHORT_HORIZON_TIMEFRAMES:
+        if _settings.trend.signal_v2:
+            return _INTRADAY_DIRECTIONAL_PROFILE
         return _DIRECTIONAL_CORE_PROFILE
     if timeframe == Timeframe.FIVE_MINUTE:
         return _INTRADAY_DIRECTIONAL_PROFILE
@@ -464,18 +471,35 @@ class TrendEngine:
             # Sub-5m timeframes get a minimal set — no ADX, no supertrend,
             # no bollinger. 2m/3m follow the 1m pattern. ATR is retained for
             # the separate, explicitly named short-horizon momentum measure.
+            # TREND_SIGNAL_V2: expand the fast-TF stacks so the direction gate
+            # (SuperTrend) and regime gate (ADX) have data to work with.
             if timeframe in _SHORT_HORIZON_TIMEFRAMES:
-                self.indicators[timeframe] = {
-                    k: v
-                    for k, v in stack.items()
-                    if k in ("ema_fast", "ema_slow", "rsi", "macd", "atr")
-                }
+                if _settings.trend.signal_v2:
+                    self.indicators[timeframe] = {
+                        k: v
+                        for k, v in stack.items()
+                        if k in ("ema_fast", "ema_slow", "rsi", "macd", "atr", "supertrend", "adx")
+                    }
+                else:
+                    self.indicators[timeframe] = {
+                        k: v
+                        for k, v in stack.items()
+                        if k in ("ema_fast", "ema_slow", "rsi", "macd", "atr")
+                    }
             elif timeframe == Timeframe.FIVE_MINUTE:
-                self.indicators[timeframe] = {
-                    k: v
-                    for k, v in stack.items()
-                    if k in ("ema_fast", "ema_slow", "rsi", "macd", "adx")
-                }
+                if _settings.trend.signal_v2:
+                    # ADX already in 5m stack; add SuperTrend + ATR for gated scoring
+                    self.indicators[timeframe] = {
+                        k: v
+                        for k, v in stack.items()
+                        if k in ("ema_fast", "ema_slow", "rsi", "macd", "adx", "supertrend", "atr")
+                    }
+                else:
+                    self.indicators[timeframe] = {
+                        k: v
+                        for k, v in stack.items()
+                        if k in ("ema_fast", "ema_slow", "rsi", "macd", "adx")
+                    }
             else:
                 self.indicators[timeframe] = stack
 
@@ -1174,49 +1198,90 @@ class TrendEngine:
             else:
                 avg_signal = 0.0
 
-            if adx_value is not None and adx_value > 35:
-                threshold = 0.15
-            elif adx_value is not None and adx_value < 20:
-                threshold = 0.35
-            else:
-                threshold = 0.25
+            # --- Gated Hybrid (TREND_SIGNAL_V2): direction → regime → conviction ---
+            # SuperTrend acts as the direction gate, ADX as the regime (trend-
+            # existence) gate, and |avg_signal| as conviction magnitude so
+            # the composite becomes a measure of *how strong* the move is in
+            # SuperTrend's direction — not the direction arbiter itself.
+            # Only activates when SuperTrend is warmed up (is_uptrend not None).
+            # Falls through to the legacy path when SuperTrend isn't available
+            # (e.g. still warming up or flag off).
+            _ADX_RANGE_GATE = 20.0
+            _v2_applied = False
+            if _settings.trend.signal_v2 and supertrend_ind is not None:
+                st_is_up = getattr(supertrend_ind, "is_uptrend", None)
+                if st_is_up is not None:
+                    _v2_applied = True
+                    direction_sign = 1.0 if st_is_up else -1.0
+                    # Regime factor: below the range gate collapse score toward 0.
+                    # adx=0 → 0.0, adx=20+ → 1.0.
+                    if adx_value is not None:
+                        regime_factor = min(1.0, adx_value / _ADX_RANGE_GATE)
+                    else:
+                        regime_factor = 1.0  # no ADX data — don't suppress
+                    conviction = abs(avg_signal)
+                    raw_score = max(
+                        -100.0, min(100.0, direction_sign * regime_factor * conviction * 100.0)
+                    )
+                    classification = classify_score(raw_score)
+                    if adx_value is not None and adx_value < _ADX_RANGE_GATE:
+                        direction = TrendDirection.SIDEWAYS  # "No trend / range"
+                    else:
+                        direction = TrendDirection.UPTREND if st_is_up else TrendDirection.DOWNTREND
+                    abs_score = abs(raw_score) / 100.0
+                    _conf_thr = 0.25
+                    if abs_score >= _conf_thr:
+                        confidence = 0.5 + 0.5 * (abs_score - _conf_thr) / (1.0 - _conf_thr)
+                    else:
+                        confidence = 0.5 * (abs_score / _conf_thr)
+                    confidence = min(confidence, 1.0)
 
-            if avg_signal > threshold:
-                direction = TrendDirection.UPTREND
-            elif avg_signal < -threshold:
-                direction = TrendDirection.DOWNTREND
-            else:
-                direction = TrendDirection.SIDEWAYS
+            if not _v2_applied:
+                # --- Legacy direction / confidence (v1 path) ---
+                if adx_value is not None and adx_value > 35:
+                    threshold = 0.15
+                elif adx_value is not None and adx_value < 20:
+                    threshold = 0.35
+                else:
+                    threshold = 0.25
 
-            # Rescale so crossing `threshold` (the same value that just
-            # decided direction, above) maps to confidence == 0.5, and
-            # the maximum possible |avg_signal| (1.0) maps to 1.0 —
-            # instead of confidence == the raw signal magnitude.
-            #
-            # Before this fix, confidence was literally `abs(avg_signal)`,
-            # so a stock at the exact moment its trend was confirmed
-            # (avg_signal == threshold, 0.15-0.35) reported confidence
-            # 0.15-0.35 — permanently below every `min_confidence >= 0.5`
-            # default in the app (NL search, DailyBullish/DailyBearish,
-            # MinTimeframeBullish/Bearish, MTFAlignment, the scanner's
-            # own MULTI_TIMEFRAME_BULLISH/BEARISH signal at scanner.py's
-            # `confidence > 0.6` check). Reaching 0.5 required an
-            # unusually strong single-direction alignment across all 8
-            # components — "confidently trending" and "clears the
-            # app's default confidence filter" were effectively two
-            # different, uncoordinated bars. Found live 2026-09-09:
-            # AI Stock Search's "bearish stocks" returned zero matches
-            # even with a real downtrend (DVLT, confidence 0.365)
-            # sitting in the watchlist.
-            abs_signal = abs(avg_signal)
-            if abs_signal >= threshold:
-                confidence = 0.5 + 0.5 * (abs_signal - threshold) / (1.0 - threshold)
-            else:
-                confidence = 0.5 * (abs_signal / threshold)
-            confidence = min(confidence, 1.0)
-            raw_score = max(-100.0, min(100.0, avg_signal * 100.0))
-            classification = classify_score(raw_score)
+                if avg_signal > threshold:
+                    direction = TrendDirection.UPTREND
+                elif avg_signal < -threshold:
+                    direction = TrendDirection.DOWNTREND
+                else:
+                    direction = TrendDirection.SIDEWAYS
 
+                # Rescale so crossing `threshold` (the same value that just
+                # decided direction, above) maps to confidence == 0.5, and
+                # the maximum possible |avg_signal| (1.0) maps to 1.0 —
+                # instead of confidence == the raw signal magnitude.
+                #
+                # Before this fix, confidence was literally `abs(avg_signal)`,
+                # so a stock at the exact moment its trend was confirmed
+                # (avg_signal == threshold, 0.15-0.35) reported confidence
+                # 0.15-0.35 — permanently below every `min_confidence >= 0.5`
+                # default in the app (NL search, DailyBullish/DailyBearish,
+                # MinTimeframeBullish/Bearish, MTFAlignment, the scanner's
+                # own MULTI_TIMEFRAME_BULLISH/BEARISH signal at scanner.py's
+                # `confidence > 0.6` check). Reaching 0.5 required an
+                # unusually strong single-direction alignment across all 8
+                # components — "confidently trending" and "clears the
+                # app's default confidence filter" were effectively two
+                # different, uncoordinated bars. Found live 2026-09-09:
+                # AI Stock Search's "bearish stocks" returned zero matches
+                # even with a real downtrend (DVLT, confidence 0.365)
+                # sitting in the watchlist.
+                abs_signal = abs(avg_signal)
+                if abs_signal >= threshold:
+                    confidence = 0.5 + 0.5 * (abs_signal - threshold) / (1.0 - threshold)
+                else:
+                    confidence = 0.5 * (abs_signal / threshold)
+                confidence = min(confidence, 1.0)
+                raw_score = max(-100.0, min(100.0, avg_signal * 100.0))
+                classification = classify_score(raw_score)
+
+            # --- Strength escalation (both paths) ---
             # ADX measures movement, not direction. An exceptional trend
             # needs a decisive DI imbalance and a confirming composite score
             # before it can be labeled Very Strong. The thresholds were set
