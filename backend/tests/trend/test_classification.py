@@ -16,15 +16,15 @@ class TestClassifyScore(unittest.TestCase):
     """Phase 6 spec: map -100..+100 score to the 8-class bucket."""
 
     def test_strong_bullish_upper(self):
-        """score >= 70 is STRONG_BULLISH."""
+        """score >= 55 is STRONG_BULLISH (SF-03: lowered from 70 to match v2 range)."""
         self.assertEqual(classify_score(100), TrendClassification.STRONG_BULLISH)
-        self.assertEqual(classify_score(85), TrendClassification.STRONG_BULLISH)
-        self.assertEqual(classify_score(70), TrendClassification.STRONG_BULLISH)
+        self.assertEqual(classify_score(75), TrendClassification.STRONG_BULLISH)
+        self.assertEqual(classify_score(55), TrendClassification.STRONG_BULLISH)
 
     def test_bullish(self):
-        """30 <= score < 70 is BULLISH."""
-        self.assertEqual(classify_score(69), TrendClassification.BULLISH)
-        self.assertEqual(classify_score(50), TrendClassification.BULLISH)
+        """30 <= score < 55 is BULLISH."""
+        self.assertEqual(classify_score(54), TrendClassification.BULLISH)
+        self.assertEqual(classify_score(45), TrendClassification.BULLISH)
         self.assertEqual(classify_score(30), TrendClassification.BULLISH)
 
     def test_weak_bullish(self):
@@ -49,16 +49,16 @@ class TestClassifyScore(unittest.TestCase):
         self.assertEqual(classify_score(-10), TrendClassification.WEAK_BEARISH)
 
     def test_bearish(self):
-        """-70 < score <= -30 is BEARISH."""
+        """-55 < score <= -30 is BEARISH (SF-03: symmetric with bullish)."""
         self.assertEqual(classify_score(-31), TrendClassification.BEARISH)
-        self.assertEqual(classify_score(-50), TrendClassification.BEARISH)
-        self.assertEqual(classify_score(-69), TrendClassification.BEARISH)
+        self.assertEqual(classify_score(-45), TrendClassification.BEARISH)
+        self.assertEqual(classify_score(-54), TrendClassification.BEARISH)
         self.assertEqual(classify_score(-30), TrendClassification.BEARISH)
 
     def test_strong_bearish_lower(self):
-        """score <= -70 is STRONG_BEARISH."""
-        self.assertEqual(classify_score(-70), TrendClassification.STRONG_BEARISH)
-        self.assertEqual(classify_score(-85), TrendClassification.STRONG_BEARISH)
+        """score <= -55 is STRONG_BEARISH (SF-03: symmetric with bullish)."""
+        self.assertEqual(classify_score(-55), TrendClassification.STRONG_BEARISH)
+        self.assertEqual(classify_score(-75), TrendClassification.STRONG_BEARISH)
         self.assertEqual(classify_score(-100), TrendClassification.STRONG_BEARISH)
 
     def test_no_signal_on_none(self):
@@ -67,7 +67,7 @@ class TestClassifyScore(unittest.TestCase):
 
     def test_no_signal_not_returned_by_score_values(self):
         """classify_score never returns NO_SIGNAL for a numeric score."""
-        for score in [-200, -100, -70, -30, -10, -9, 0, 9, 10, 30, 70, 100, 200]:
+        for score in [-200, -100, -55, -30, -10, -9, 0, 9, 10, 30, 55, 100, 200]:
             result = classify_score(score)
             self.assertNotEqual(
                 result,

@@ -219,13 +219,14 @@ class TrendClassification(StrEnum):
 def classify_score(score: float | None) -> TrendClassification:
     """Map a -100..+100 score to its 8-class bucket.
 
-    Phase 6 spec: pure function over ``score``. ``None`` (insufficient
-    data) is mapped to ``NO_SIGNAL``. Out-of-range scores are clamped
-    to the nearest bucket.
+    SF-03 calibrated for TREND_SIGNAL_V2: the regime_factor in the Gated
+    Hybrid model caps real-world scores at ~55-60 in normal markets, so the
+    ``strong`` threshold was lowered from 70 → 55 to keep that bucket
+    reachable. All other boundaries are unchanged from the Phase 6 spec.
     """
     if score is None:
         return TrendClassification.NO_SIGNAL
-    if score >= 70:
+    if score >= 55:
         return TrendClassification.STRONG_BULLISH
     if score >= 30:
         return TrendClassification.BULLISH
@@ -235,7 +236,7 @@ def classify_score(score: float | None) -> TrendClassification:
         return TrendClassification.NEUTRAL
     if score > -30:
         return TrendClassification.WEAK_BEARISH
-    if score > -70:
+    if score > -55:
         return TrendClassification.BEARISH
     return TrendClassification.STRONG_BEARISH
 
