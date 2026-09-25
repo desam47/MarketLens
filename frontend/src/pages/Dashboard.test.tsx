@@ -5,9 +5,21 @@ import { Dashboard } from './Dashboard';
 
 jest.mock('../components/RegimeCard', () => ({ RegimeCard: () => <div>Regime card</div> }));
 jest.mock('../components/MarketContextCard', () => ({ MarketContextCard: () => <div>Market context card</div> }));
-jest.mock('../components/ConfluenceCard', () => ({ ConfluenceCard: () => <div>Confluence card</div> }));
+jest.mock('../components/ConfluenceCard', () => ({
+  ConfluenceCard: ({ onPresetChange }: any) => (
+    <div>
+      {['scalper', 'day_trading', 'swing', 'all'].map(preset => (
+        <button key={preset} onClick={() => onPresetChange(preset)}>Use {preset} preset</button>
+      ))}
+    </div>
+  ),
+}));
 jest.mock('../components/StrategyCard', () => ({ StrategyCard: () => <div>Strategy card</div> }));
-jest.mock('../components/TrendCard', () => ({ TrendCard: () => <div>Trend card</div> }));
+jest.mock('../components/TrendCard', () => ({
+  TrendCard: ({ trend, confluenceRole }: any) => (
+    <div data-testid={`trend-${trend.timeframe}`}>{trend.timeframe}:{confluenceRole}</div>
+  ),
+}));
 jest.mock('../components/TopMoversCard', () => ({ TopMoversCard: () => <div>Top movers card</div> }));
 jest.mock('../components/NLSearchBar', () => ({ NLSearchBar: () => <div>Search card</div> }));
 jest.mock('../components/DigestCard', () => ({ DigestCard: () => <div>Digest card</div> }));
@@ -64,5 +76,64 @@ describe('Dashboard layouts', () => {
 
     expect(await screen.findByText(/Failed to load trends: Trend provider timed out/)).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Market Analysis Dashboard' })).toBeInTheDocument();
+  });
+
+  it('keeps Trend by Timeframe aligned with the selected Confluence preset', async () => {
+    const allTimeframes = ['1m', '2m', '3m', '5m', '15m', '30m', '1h', '4h', '1d', '1wk'];
+    const trendRows = allTimeframes.map(timeframe => ({
+      symbol: 'SPY', timeframe, direction: 'uptrend', strength: 'moderate', confidence: 0.7,
+      timestamp: null, data_status: 'ok', provider: 'webull', session: 'regular', bar_closed: true,
+    }));
+    const snapshot = (preset: string, timeframes: string[]) => ({
+      snapshot: {
+        symbol: 'SPY', preset, direction: 'bullish', strength: 0.7, alignment_score: 0.7,
+        timeframe_snapshots: Object.fromEntries(timeframes.map(timeframe => [timeframe, {
+          direction: 'bullish', score: 50, strength: 0.7, confidence: 0.7, timestamp: null,
+          data_quality: 'ok', data_age_seconds: 0, bar_closed: true, is_warmed_up: true,
+          valid: true, quality_weight: 0.7,
+        }])),
+      },
+    });
+    (api.getTrends as jest.Mock).mockResolvedValue(trendRows);
+    const presetInputs: Record<string, string[]> = {
+      scalper: ['1m', '2m', '3m', '5m', '15m'],
+      day_trading: ['5m', '15m', '30m', '1h', '4h'],
+      swing: ['15m', '1h', '4h', '1d', '1wk'],
+      all: ['1m', '5m', '15m', '30m', '1h', '4h', '1d', '1wk'],
+    };
+    (api.getMTFSnapshot as jest.Mock).mockImplementation((_symbol: string, preset: string) => Promise.resolve(
+      snapshot(preset, presetInputs[preset])
+    ));
+
+    render(<Dashboard symbol="SPY" onSymbolChange={jest.fn()} />);
+
+    expect(await screen.findByText('Day Trading Confluence uses 5 timeframes.')).toBeInTheDocument();
+    expect(screen.getByTestId('trend-5m')).toHaveTextContent('5m:input');
+    expect(screen.queryByTestId('trend-1m')).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Structure · 15m–1h' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show all' }));
+    expect(screen.getByTestId('trend-1m')).toHaveTextContent('1m:out_of_scope');
+    expect(screen.getByTestId('trend-4h')).toHaveTextContent('4h:input');
+    expect(screen.getByRole('heading', { name: 'Bias · 4h–Weekly' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Use swing preset' }));
+    await screen.findByText('Swing Trading Confluence uses 5 timeframes.');
+    expect(screen.getByTestId('trend-1m')).toHaveTextContent('1m:out_of_scope');
+    expect(screen.getByTestId('trend-1d')).toHaveTextContent('1d:input');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Use scalper preset' }));
+    await screen.findByText('Scalper Confluence uses 5 timeframes.');
+    expect(screen.getByTestId('trend-1m')).toHaveTextContent('1m:input');
+    expect(screen.getByTestId('trend-30m')).toHaveTextContent('30m:out_of_scope');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Use all preset' }));
+    await screen.findByText('All Timeframes Confluence uses 8 timeframes.');
+    expect(screen.getByTestId('trend-2m')).toHaveTextContent('2m:out_of_scope');
+    expect(screen.getByTestId('trend-1wk')).toHaveTextContent('1wk:input');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Current preset' }));
+    expect(screen.queryByTestId('trend-2m')).not.toBeInTheDocument();
+    expect(screen.getByTestId('trend-1wk')).toHaveTextContent('1wk:input');
   });
 });

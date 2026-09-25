@@ -93,6 +93,30 @@ const SECTION_LABELS: Record<DashboardSectionId, string> = {
 
 const ALL_SECTIONS = Object.keys(SECTION_LABELS) as DashboardSectionId[];
 
+type TrendScopeView = 'preset' | 'all';
+
+const PRESET_TIMEFRAMES: Record<string, string[]> = {
+  scalper: ['1m', '2m', '3m', '5m', '15m'],
+  day_trading: ['5m', '15m', '30m', '1h', '4h'],
+  swing: ['15m', '1h', '4h', '1d', '1wk'],
+  // Mirrors the backend's explicit ALL_TIMEFRAMES preset. 2m and 3m remain
+  // inspectable in Show all, but are not confluence inputs for this preset.
+  all: ['1m', '5m', '15m', '30m', '1h', '4h', '1d', '1wk'],
+};
+
+const PRESET_LABELS: Record<string, string> = {
+  scalper: 'Scalper',
+  day_trading: 'Day Trading',
+  swing: 'Swing Trading',
+  all: 'All Timeframes',
+};
+
+const TREND_TIMEFRAME_GROUPS: Array<{ label: string; timeframes: string[] }> = [
+  { label: 'Timing · 1m–5m', timeframes: ['1m', '2m', '3m', '5m'] },
+  { label: 'Structure · 15m–1h', timeframes: ['15m', '30m', '1h'] },
+  { label: 'Bias · 4h–Weekly', timeframes: ['4h', '1d', '1wk'] },
+];
+
 const DASHBOARD_PRESETS: DashboardLayout[] = [
   {
     id: 'day_trading', name: 'Day trading', builtIn: true,
@@ -155,6 +179,7 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
   const [layoutDraft, setLayoutDraft] = useState<DashboardLayout | null>(null);
   const [layoutName, setLayoutName] = useState('');
   const [selectedPreset, setSelectedPreset] = useState<string>('day_trading');
+  const [trendScopeView, setTrendScopeView] = useState<TrendScopeView>('preset');
   // Defaults on so a tab left open doesn't silently freeze — matches the
   // fix already applied to the Watchlist and Symbol page this session.
   // Confirmed live: AAPL's regime engine was current server-side, but a
@@ -628,19 +653,77 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
       case 'strategy':
         return strategyLoading && !strategy ? <SkeletonCard rows={3} /> : <StrategyCard strategy={strategy} error={strategyError} onRetry={fetchStrategy} />;
       case 'trends':
+        {
+          // The current confluence response is authoritative: it records the
+          // exact timeframe inputs the backend used. Fall back only while a
+          // new preset request is still in flight, never to a stale response.
+          const responsePreset = confluence?.preset || selectedPreset;
+          const responseTimeframes = responsePreset === selectedPreset
+            ? Object.keys(confluence?.timeframe_signals || {})
+            : [];
+          const contributingTimeframes = new Set(
+            responseTimeframes.length > 0
+              ? responseTimeframes
+              : PRESET_TIMEFRAMES[selectedPreset] || []
+          );
+          const visibleTrends = trendScopeView === 'preset'
+            ? trends.filter(trend => contributingTimeframes.has(trend.timeframe))
+            : trends;
+          const presetLabel = PRESET_LABELS[selectedPreset] || selectedPreset.replace(/_/g, ' ');
         return (
           <div className="trends-section">
-            <h2>Trend by Timeframe</h2>
+            <div className="trends-section-header">
+              <div>
+                <h2>Trend by Timeframe</h2>
+                <p className="trend-scope-summary">
+                  {presetLabel} Confluence uses {contributingTimeframes.size} timeframe{contributingTimeframes.size === 1 ? '' : 's'}.
+                </p>
+              </div>
+              <div className="trend-scope-toggle" role="group" aria-label="Trend timeframe scope">
+                <button
+                  type="button"
+                  className={trendScopeView === 'preset' ? 'active' : ''}
+                  aria-pressed={trendScopeView === 'preset'}
+                  onClick={() => setTrendScopeView('preset')}
+                >
+                  Current preset
+                </button>
+                <button
+                  type="button"
+                  className={trendScopeView === 'all' ? 'active' : ''}
+                  aria-pressed={trendScopeView === 'all'}
+                  onClick={() => setTrendScopeView('all')}
+                >
+                  Show all
+                </button>
+              </div>
+            </div>
             {trendsLoading && trends.length === 0 ? (
               <>
                 <div className="trend-grid">{Array.from({ length: 5 }).map((_, i) => <TrendCardSkeleton key={i} />)}</div>
                 <div className="trend-grid">{Array.from({ length: 5 }).map((_, i) => <TrendCardSkeleton key={i} />)}</div>
               </>
             ) : (
-              <>
-                <div className="trend-grid">{trends.slice(0, 5).map(trend => <TrendCard key={trend.timeframe} trend={trend} />)}</div>
-                <div className="trend-grid">{trends.slice(5).map(trend => <TrendCard key={trend.timeframe} trend={trend} />)}</div>
-              </>
+              <div className="trend-timeframe-groups">
+                {TREND_TIMEFRAME_GROUPS.map(group => {
+                  const groupTrends = visibleTrends.filter(trend => group.timeframes.includes(trend.timeframe));
+                  if (groupTrends.length === 0) return null;
+                  return (
+                    <section className="trend-timeframe-group" key={group.label} aria-label={group.label}>
+                      <h3>{group.label}</h3>
+                      <div className="trend-grid">
+                        {groupTrends.map(trend => (
+                          <TrendCard
+                            key={trend.timeframe}
+                            trend={trend}
+                            confluenceRole={contributingTimeframes.has(trend.timeframe) ? 'input' : 'out_of_scope'}
+                          />
+                        ))}
+                      </div>
+                    </section>
+                  );
+                })}
+              </div>
             )}
             {trends.length === 0 && !trendsLoading && !trendsError && <p className="empty-state">No trend data available</p>}
             {trendsError && (
@@ -651,6 +734,7 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
             )}
           </div>
         );
+        }
       case 'movers':
         return <TopMoversCard onSelectSymbol={onSymbolChange} autoRefresh={autoRefresh} />;
       case 'search':

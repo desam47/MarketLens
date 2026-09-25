@@ -4,6 +4,7 @@ import { formatETDateTime } from './chartMath';
 
 interface TrendCardProps {
   trend: TrendData;
+  confluenceRole?: 'input' | 'out_of_scope';
 }
 
 const directionIcons: Record<string, string> = {
@@ -93,7 +94,7 @@ function signalExplanation(trend: TrendData): string {
   return `${timeframe} is ${direction} with ${strength} strength and ${confidence} confidence.`;
 }
 
-export const TrendCard = memo(function TrendCard({ trend }: TrendCardProps) {
+export const TrendCard = memo(function TrendCard({ trend, confluenceRole }: TrendCardProps) {
   const icon = directionIcons[trend.direction] || '?';
   const color = directionColors[trend.direction] || '#9ca3af';
   const strengthColor = strengthColors[trend.strength] || '#9ca3af';
@@ -130,9 +131,14 @@ export const TrendCard = memo(function TrendCard({ trend }: TrendCardProps) {
       : 'Bar closed';
 
   return (
-    <div className="card trend-card" style={{ borderLeftColor: color }}>
+    <div
+      className={`card trend-card${confluenceRole ? ` trend-card-${confluenceRole}` : ''}`}
+      style={{ borderLeftColor: color }}
+    >
       <div className="trend-header">
         <span className="timeframe-badge">{timeframeLabels[trend.timeframe] || trend.timeframe}</span>
+        {confluenceRole === 'input' && <span className="trend-contributor-badge">Confluence input</span>}
+        {confluenceRole === 'out_of_scope' && <span className="trend-out-of-scope-badge">Not in preset</span>}
         <span className="direction-icon" style={{ color }}>{icon}</span>
       </div>
       <div className="trend-direction" style={{ color }}>

@@ -598,6 +598,59 @@ h4 {
   grid-column: 1 / -1;
 }
 
+.trends-section-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.75rem;
+}
+
+.trends-section-header h2 {
+  margin: 0;
+}
+
+.trend-scope-summary {
+  margin: 0.25rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.trend-scope-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  overflow: hidden;
+}
+
+.trend-scope-toggle button {
+  border: 0;
+  border-right: 1px solid var(--border);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.78rem;
+  padding: 0.38rem 0.62rem;
+}
+
+.trend-scope-toggle button:last-child { border-right: 0; }
+.trend-scope-toggle button.active {
+  background: color-mix(in srgb, var(--accent-primary) 22%, var(--bg-tertiary));
+  color: var(--text-primary);
+}
+.trend-scope-toggle button:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: -2px; }
+
+.trend-timeframe-groups { display: grid; gap: 1rem; }
+.trend-timeframe-group h3 {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  margin: 0 0 0.45rem;
+  text-transform: uppercase;
+}
+
 .trend-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -1225,6 +1278,26 @@ h4 {
   align-items: center;
   margin-bottom: 0.75rem;
 }
+
+.trend-contributor-badge,
+.trend-out-of-scope-badge {
+  border-radius: 999px;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  margin-left: auto;
+  padding: 0.18rem 0.38rem;
+  text-transform: uppercase;
+}
+
+.trend-contributor-badge {
+  background: color-mix(in srgb, var(--accent-primary) 20%, transparent);
+  color: var(--accent-primary);
+}
+
+.trend-out-of-scope-badge { color: var(--text-muted); }
+.trend-card-input { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-primary) 45%, transparent); }
+.trend-card-out_of_scope { opacity: 0.78; }
 
 .timeframe-badge {
   background-color: var(--bg-tertiary);
