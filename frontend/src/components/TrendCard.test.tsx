@@ -35,6 +35,30 @@ function trend(overrides: Partial<TrendData> = {}): TrendData {
 }
 
 describe('TrendCard evidence contract', () => {
+  it('shows measured short-term momentum instead of default ADX-style strength on 1m', () => {
+    render(<TrendCard trend={trend({
+      strength: 'moderate',
+      short_horizon_momentum: 'persistent',
+      short_horizon_momentum_score: 0.92,
+    })} />);
+
+    expect(screen.getByText('Momentum')).toBeInTheDocument();
+    expect(screen.getByText('PERSISTENT')).toBeInTheDocument();
+    expect(screen.queryByText('Strength')).not.toBeInTheDocument();
+    expect(screen.getByText(/persistent short-term momentum/)).toBeInTheDocument();
+  });
+
+  it('does not present default Moderate as a measurement while momentum warms up', () => {
+    render(<TrendCard trend={trend({
+      strength: 'moderate',
+      short_horizon_momentum: null,
+    })} />);
+
+    expect(screen.getByText('Momentum')).toBeInTheDocument();
+    expect(screen.getByText('AWAITING BARS')).toBeInTheDocument();
+    expect(screen.queryByText('MODERATE')).not.toBeInTheDocument();
+  });
+
   it('shows server-owned live evidence and its age separately from bar completion', () => {
     render(<TrendCard trend={trend()} />);
 

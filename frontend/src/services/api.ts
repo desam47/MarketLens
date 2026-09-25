@@ -86,6 +86,9 @@ export interface TrendData {
   timeframe: string;
   direction: string;
   strength: string;
+  /** Closed-bar ATR-normalized persistence for 1m, 2m, and 3m only. */
+  short_horizon_momentum?: 'choppy' | 'developing' | 'persistent' | null;
+  short_horizon_momentum_score?: number | null;
   confidence: number;
   timestamp: string | null;
   data_age_seconds?: number | null;

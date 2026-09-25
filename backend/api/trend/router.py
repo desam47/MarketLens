@@ -80,6 +80,12 @@ def _build_trend_payload(engine, sym: str, timeframe: str, tf) -> dict:
         "timeframe": trend_signal.timeframe.value,
         "direction": trend_signal.direction.value,
         "strength": trend_signal.strength.value,
+        "short_horizon_momentum": (
+            trend_signal.short_horizon_momentum.value
+            if trend_signal.short_horizon_momentum is not None
+            else None
+        ),
+        "short_horizon_momentum_score": trend_signal.short_horizon_momentum_score,
         "confidence": trend_signal.confidence,
         "score": trend_signal.score,
         "classification": trend_signal.classification.value
@@ -209,6 +215,12 @@ async def get_trend_history(symbol: str, timeframe: str, limit: int | None = 100
                 {
                     "direction": signal.direction.value,
                     "strength": signal.strength.value,
+                    "short_horizon_momentum": (
+                        signal.short_horizon_momentum.value
+                        if signal.short_horizon_momentum is not None
+                        else None
+                    ),
+                    "short_horizon_momentum_score": signal.short_horizon_momentum_score,
                     "confidence": signal.confidence,
                     "score": signal.score,
                     "timestamp": _to_dashboard_tz(signal.timestamp),

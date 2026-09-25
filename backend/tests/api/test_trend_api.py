@@ -24,6 +24,7 @@ from backend.api.ttl_cache import _trend_cache
 from backend.api.trend.router import _build_trend_payload, _trend_evidence
 from backend.engines.timeframe import Timeframe
 from backend.trend.trend_engine import TrendDirection, TrendSignal, TrendStrength
+from backend.trend.trend_engine import ShortHorizonMomentum
 
 
 def _make_signal(symbol: str, timeframe: Timeframe, direction: TrendDirection) -> TrendSignal:
@@ -182,6 +183,20 @@ class TestTrendEvidenceContract(unittest.TestCase):
         self.assertTrue(payload["timestamp"].startswith("2026-09-24T16:00:00"))
         self.assertTrue(payload["evidence"]["source_timestamp"].startswith("2026-09-24T00:00:00"))
         self.assertTrue(payload["evidence"]["source_as_of"].startswith("2026-09-24T16:00:00"))
+
+    def test_short_timeframe_payload_exposes_measured_momentum_separately_from_strength(self):
+        source = datetime(2026, 9, 24, 10, 0, 0, tzinfo=ET)
+        signal = self._signal(Timeframe.ONE_MINUTE, source)
+        signal.short_horizon_momentum = ShortHorizonMomentum.PERSISTENT
+        signal.short_horizon_momentum_score = 0.92
+        self.engine.get_current_trend.return_value = signal
+        self.engine.get_timeframe_metadata.return_value = self._metadata(source)
+
+        payload = _build_trend_payload(self.engine, "SPY", "1m", Timeframe.ONE_MINUTE)
+
+        self.assertEqual(payload["strength"], "moderate")
+        self.assertEqual(payload["short_horizon_momentum"], "persistent")
+        self.assertEqual(payload["short_horizon_momentum_score"], 0.92)
 
     def test_derived_weekly_payload_uses_week_close_not_bucket_start(self):
         # The stored weekly key is Monday 00:00 UTC.  Its decision-useful

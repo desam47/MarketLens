@@ -18,6 +18,7 @@ from backend.trend.trend_engine import (
     TrendEngine,
     TrendSignal,
     TrendStrength,
+    ShortHorizonMomentum,
     classify_score,
 )
 
@@ -50,6 +51,58 @@ class TestTrendEngine(unittest.TestCase):
             tf = getattr(Timeframe, tf_str)
             self.assertIn(tf, self.engine.indicators)
             self.assertGreater(len(self.engine.indicators[tf]), 0)
+
+    def test_short_horizon_momentum_uses_closed_bar_persistence_not_default_strength(self):
+        breakout = [
+            {"close": 100.0},
+            {"close": 100.7},
+            {"close": 101.5},
+            {"close": 102.3},
+        ]
+
+        state, score = self.engine._classify_short_horizon_momentum(breakout, atr_value=1.0)
+
+        self.assertEqual(state, ShortHorizonMomentum.PERSISTENT)
+        self.assertIsNotNone(score)
+        self.assertGreaterEqual(score, 0.75)
+
+    def test_short_horizon_momentum_marks_flat_and_whipsaw_bars_choppy(self):
+        flat = [
+            {"close": 100.0},
+            {"close": 100.0},
+            {"close": 100.0},
+            {"close": 100.0},
+        ]
+        whipsaw = [
+            {"close": 100.0},
+            {"close": 101.0},
+            {"close": 100.0},
+            {"close": 101.0},
+        ]
+
+        flat_state, flat_score = self.engine._classify_short_horizon_momentum(flat, atr_value=1.0)
+        whipsaw_state, whipsaw_score = self.engine._classify_short_horizon_momentum(
+            whipsaw, atr_value=1.0
+        )
+
+        self.assertEqual(flat_state, ShortHorizonMomentum.CHOPPY)
+        self.assertEqual(flat_score, 0.0)
+        self.assertEqual(whipsaw_state, ShortHorizonMomentum.CHOPPY)
+        self.assertIsNotNone(whipsaw_score)
+
+    def test_short_horizon_momentum_waits_for_closed_bars_and_atr(self):
+        state, score = self.engine._classify_short_horizon_momentum(
+            [{"close": 100.0}, {"close": 100.5}, {"close": 101.0}], atr_value=1.0
+        )
+        no_atr_state, no_atr_score = self.engine._classify_short_horizon_momentum(
+            [{"close": 100.0}, {"close": 100.5}, {"close": 101.0}, {"close": 101.5}],
+            atr_value=None,
+        )
+
+        self.assertIsNone(state)
+        self.assertIsNone(score)
+        self.assertIsNone(no_atr_state)
+        self.assertIsNone(no_atr_score)
 
     def test_engine_update_with_data(self):
         """Test updating the engine with market data"""

@@ -1,9 +1,9 @@
 # Version 5 Trend Cards Bug Fixes
 
 **Created:** 2026-09-24
-**Last updated:** 2026-09-24 (TC-01 complete)
-**Status:** Re-prioritized from a trading-desk perspective: what would actually cost a trader money first, not just severity as originally filed. TC-01's shared Trend and Confluence evidence contract is implemented and covered by focused API and component tests. TC-01 and TC-06 describe one underlying fix — a single server-owned evidence contract — and are tracked together under TC-01. TC-08 remains High because it is a silent scope-mismatch bug, not a workflow nicety.
-**Scorecard:** 1 ✅ COMPLETE, 0 ⚠️ PARTIAL, 8 ❌ NOT STARTED, 0 🟡 DEFERRED, 1 folded (TC-06 → TC-01).
+**Last updated:** 2026-09-24 (TC-01 and TC-03 complete)
+**Status:** Re-prioritized from a trading-desk perspective: what would actually cost a trader money first, not just severity as originally filed. TC-01's shared Trend and Confluence evidence contract and TC-03's measured short-horizon momentum display are implemented and covered by focused API and component tests. TC-01 and TC-06 describe one underlying fix — a single server-owned evidence contract — and are tracked together under TC-01. TC-08 remains High because it is a silent scope-mismatch bug, not a workflow nicety.
+**Scorecard:** 2 ✅ COMPLETE, 1 ⚠️ PARTIAL, 6 ❌ NOT STARTED, 0 🟡 DEFERRED, 1 folded (TC-06 → TC-01).
 **Source:** 2026-09-24 code, API, and live-payload review of the Dashboard's **Trend by Timeframe** cards at `78a1adc`, re-prioritized the same day from a trading-desk perspective and re-verified live against SPY.
 **Related:** [Phase audit](phase_audit_v5.md), [AI Analysis fixes](v5_ai_analysis.md), [Historical Signals fixes](v5_historical_signal_bug_fixes.md), [Market Data fixes](v5_market_data_bug_fixes.md)
 
@@ -23,14 +23,14 @@ Pre-implementation line numbers refer to the code at `78a1adc`; implementation e
 | ID | Severity | Area | Title | Evidence | Status |
 |---|---|---|---|---|---|
 | TC-01 | Critical | UI + data truth | Cards cannot prove freshness or validity — stale, warming, and invalid data all look like an ordinary closed bar (includes former TC-06) | Verified | ✅ COMPLETE |
-| TC-03 | Critical | Methodology | 1m, 2m, and 3m Strength is a fixed default rather than a measurement | Verified | ❌ NOT STARTED |
+| TC-03 | Critical | Methodology | 1m, 2m, and 3m Strength is a fixed default rather than a measurement | Verified | ✅ COMPLETE |
 | TC-08 | High | Workflow + data truth | The all-timeframe grid and the selected Confluence preset do not share one scope | Code-read | ❌ NOT STARTED |
 | TC-05 | High | Methodology | Confidence and score are not comparable across short and long timeframes | Code-read | ❌ NOT STARTED |
 | TC-02 | High | Provenance | Live intraday Trend cards lose their market-data provider | Verified | ❌ NOT STARTED |
 | TC-04 | High | Methodology | Per-timeframe `Very Strong` can never be emitted, and may be silently diluting `Strong` | Code-read | ❌ NOT STARTED |
 | TC-07 | Medium | UI + contract | Raw score and classification are available but hidden from Trend Cards | Code-read | ❌ NOT STARTED |
 | TC-09 | Medium | Workflow | Cards lack change history, indicator attribution, key-level context, and chart handoff | Code-read | ❌ NOT STARTED |
-| TC-10 | Medium | Tests | No direct TrendCard regressions protect trader-facing truth states | Code-read | ❌ NOT STARTED |
+| TC-10 | Medium | Tests | Direct TrendCard regressions are incomplete | Code-read | ⚠️ PARTIAL |
 | ~~TC-06~~ | — | — | ~~Cards cannot explain warming, invalid, delayed, or unavailable evidence~~ — folded into TC-01, same evidence contract | Verified | folded |
 
 **Trading-desk order — what would actually cost a trader money first, not filing order:**
@@ -76,7 +76,7 @@ The bug is therefore broader than a missing closed-session label: the card has n
 
 ### TC-03 — 1m, 2m, and 3m Strength is a fixed default rather than a measurement
 
-**Status:** ❌ NOT STARTED
+**Status:** ✅ COMPLETE
 **Where:** indicator-stack selection (`backend/trend/trend_engine.py:370`) and strength derivation (`:846`).
 
 The 1m, 2m, and 3m stacks contain only EMA, RSI, and MACD. They intentionally exclude ADX. `TrendEngine._calculate_trend` initializes `trend_strength` to `MODERATE` and changes it only when ADX exists. Therefore every available 1m, 2m, and 3m card reports `Moderate` Strength, regardless of trend persistence, volatility, or directional agreement.
@@ -88,9 +88,11 @@ The 1m, 2m, and 3m stacks contain only EMA, RSI, and MACD. They intentionally ex
 
 **Impact:** a label that appears to measure trend quality is instead a constant for the shortest cards — on every card, every time, not an edge case. It can lead a trader to overvalue a noisy one-minute move, or to lose trust in every other label on the platform once they notice this one never changes.
 
-**Resolution:** either show `Strength: N/A — short-term momentum` for 1m–3m, or introduce an explicitly named short-horizon persistence metric based on closed bars, ATR-normalized displacement, and directional consistency. Do not call the result ADX-style strength unless it is genuinely measured.
+**Resolution:** introduce an explicitly named short-horizon momentum metric based on closed bars, ATR-normalized displacement, and directional consistency. Do not call the result ADX-style strength unless it is genuinely measured.
 
-**Tests:** written alongside this fix. Require that sub-5m cards never present a default `Moderate` as measured strength. If a new metric is added, test its flat, breakout, and whipsaw behaviour independently.
+**Implementation (2026-09-24):** 1m, 2m, and 3m retain ATR solely to measure short-horizon momentum. The engine evaluates the latest four valid closed bars: net close-to-close displacement in ATRs plus directional consistency (net movement divided by total movement). It emits `Choppy`, `Developing`, or `Persistent`, separately from the legacy ADX-style strength enum. The card now labels the field **Momentum** on these three timeframes and displays `Awaiting bars` until enough closed-bar and ATR evidence exists; it never presents default `Moderate` as a measured strength.
+
+**Tests:** backend breakout, flat, whipsaw, insufficient-bars, and missing-ATR cases; API contract coverage for the separate momentum fields; and card assertions that 1m renders `Momentum` / `Persistent` or `Awaiting bars`, never `Strength` / default `Moderate`.
 
 ---
 
@@ -189,12 +191,12 @@ The backend retains trend history and the card has the current direction, streng
 
 **Tests:** cover a state change, stable continuation, unavailable history, a rendered key-level value, and the chart handoff's selected timeframe.
 
-### TC-10 — No direct TrendCard regressions protect trader-facing truth states
+### TC-10 — Direct TrendCard regressions are incomplete
 
-**Status:** ❌ NOT STARTED
-**Where:** Dashboard tests mock `TrendCard` (`frontend/src/pages/Dashboard.test.tsx:10`); there is no `TrendCard.test.tsx`.
+**Status:** ⚠️ PARTIAL
+**Where:** Dashboard tests mock `TrendCard` (`frontend/src/pages/Dashboard.test.tsx:10`); direct coverage now exists in `frontend/src/components/TrendCard.test.tsx`, but only for completed TC-01 and TC-03 contracts.
 
-Focused engine tests cover closed-bar processing and confidence bounds, and registry tests cover warm-up / dispatch behaviour. They do not exercise the rendered card's stale state, provider label, unknown/warming distinction, strength meaning, score display, or accessible text.
+Focused engine tests cover closed-bar processing and confidence bounds, and registry tests cover warm-up / dispatch behaviour. Direct card tests now cover evidence state/age, unavailable and warming states, and short-horizon momentum wording. They do not yet cover provider label, score/classification display, history, or chart handoff.
 
 **Corrected in this pass:** the original resolution said tests come "before each Batch 1 change," while the original batch plan placed TC-10 in Batch 3, after every other fix — a direct contradiction that would have left Batch 1 unprotected while it was actually being built. There is no separate "testing batch." Each finding's own **Tests** section is written alongside that finding's fix, in whichever batch it falls in. This entry stays open only to track whether a `TrendCard.test.tsx` exists at all and whether it covers every truth-state contract by the time TC-01 through TC-09 are done — it is a completeness check, not a batch of its own.
 
@@ -256,7 +258,8 @@ No code changed in this pass — re-verification and re-ranking only, ahead of i
 | 2026-09-24 | TC-01 to TC-10 | ❌ NOT STARTED | — | `docs/Version_5/v5_trend_cards_bug_fixes.md` | — | Trading-desk prioritization pass: TC-06 folded into TC-01; TC-08 raised to High; TC-04 dilution risk added; TC-10 sequencing contradiction corrected; TC-01/TC-03/TC-02 re-verified live. No code changed. |
 | 2026-09-24 | TC-01 | ❌ NOT STARTED | — | `docs/Version_5/v5_trend_cards_bug_fixes.md` | — | Correction: both initial batch probes ran after the 20:00 ET extended-session close, so neither reproduced an open-market stale-feed event. Follow-up direct source probes also showed that the batch's shared 19:59 timestamp / `ok` status cannot be treated as universally correct for daily and incomplete weekly evidence. TC-01 now covers the required per-timeframe evidence contract. No code changed. |
 | 2026-09-24 | TC-01 | ⚠️ PARTIAL | pending | `backend/api/trend/router.py`, `backend/tests/api/test_trend_api.py`, `frontend/src/components/TrendCard.tsx`, `frontend/src/components/TrendCard.test.tsx`, `frontend/src/services/api.ts`, `frontend/src/styles/App.css` | 119 focused backend tests passed; 5 TrendCard tests passed; production frontend build passed | Added the server-owned Trend evidence contract and rendered it directly. API as-of time now comes from each timeframe's own metadata; daily midnight source stamps normalize to the regular close while retaining their raw timestamp. Confluence adoption remains. |
-| 2026-09-24 | TC-01 | ✅ COMPLETE | pending | `backend/trend/evidence.py`, `backend/multitimeframe/multi_timeframe_engine.py`, `backend/api/multitimeframe/router.py`, `backend/tests/api/test_mtf_api.py`, `backend/tests/api/test_trend_api.py`, `frontend/src/components/ConfluenceCard.tsx`, `frontend/src/components/ConfluenceCard.test.tsx` | 140 focused Trend/MTF/AI-contract backend tests passed; 8 TrendCard/ConfluenceCard tests passed; production frontend build passed | Moved the contract into a shared backend module. Confluence now uses it for validity/quality weighting, serializes the identical per-timeframe payload, and visibly labels each contributing timeframe's evidence state. Completed weekly derived bars now use their final trading-session close as the trader-facing as-of time, while retaining the raw Monday bucket key. |
+| 2026-09-24 | TC-01 | ✅ COMPLETE | `03e5b3a` | `backend/trend/evidence.py`, `backend/multitimeframe/multi_timeframe_engine.py`, `backend/api/multitimeframe/router.py`, `backend/tests/api/test_mtf_api.py`, `backend/tests/api/test_trend_api.py`, `frontend/src/components/ConfluenceCard.tsx`, `frontend/src/components/ConfluenceCard.test.tsx` | 140 focused Trend/MTF/AI-contract backend tests passed; 8 TrendCard/ConfluenceCard tests passed; production frontend build passed | Moved the contract into a shared backend module. Confluence now uses it for validity/quality weighting, serializes the identical per-timeframe payload, and visibly labels each contributing timeframe's evidence state. Completed weekly derived bars now use their final trading-session close as the trader-facing as-of time, while retaining the raw Monday bucket key. |
+| 2026-09-24 | TC-03 | ✅ COMPLETE | pending | `backend/trend/trend_engine.py`, `backend/api/trend/router.py`, `backend/tests/trend/test_trend_engine.py`, `backend/tests/api/test_trend_api.py`, `frontend/src/components/TrendCard.tsx`, `frontend/src/components/TrendCard.test.tsx`, `frontend/src/services/api.ts` | 189 focused Trend/MTF/AI-contract backend tests passed; 10 TrendCard/ConfluenceCard tests passed; production frontend build passed | Replaced the false short-timeframe strength display with a closed-bar, ATR-normalized momentum measure: Choppy, Developing, or Persistent. Retaining ATR for this measure does not change the existing short-timeframe directional score. TC-10 is now partial because direct card coverage exists for TC-01 and TC-03. |
 
 ---
 

@@ -27,6 +27,12 @@ const strengthColors: Record<string, string> = {
   very_strong: '#22c55e',
 };
 
+const momentumColors: Record<string, string> = {
+  choppy: '#f59e0b',
+  developing: '#60a5fa',
+  persistent: '#10b981',
+};
+
 const timeframeLabels: Record<string, string> = {
   '1m': '1 Min',
   '2m': '2 Min',
@@ -71,11 +77,18 @@ function formatAge(ageSeconds: number | null | undefined): string | null {
 function signalExplanation(trend: TrendData): string {
   const timeframe = timeframeLabels[trend.timeframe] || trend.timeframe;
   const direction = trend.direction.replace(/_/g, ' ');
+  const isShortHorizon = ['1m', '2m', '3m'].includes(trend.timeframe);
   const strength = trend.strength.replace(/_/g, ' ');
+  const momentum = trend.short_horizon_momentum?.replace(/_/g, ' ');
   const confidence = `${Math.round(trend.confidence * 100)}%`;
 
   if (trend.direction === 'unknown') {
     return `${timeframe} has insufficient data for a directional signal.`;
+  }
+  if (isShortHorizon) {
+    return momentum
+      ? `${timeframe} is ${direction} with ${momentum} short-term momentum and ${confidence} confidence.`
+      : `${timeframe} is ${direction}; short-term momentum is awaiting enough closed-bar evidence.`;
   }
   return `${timeframe} is ${direction} with ${strength} strength and ${confidence} confidence.`;
 }
@@ -84,6 +97,9 @@ export const TrendCard = memo(function TrendCard({ trend }: TrendCardProps) {
   const icon = directionIcons[trend.direction] || '?';
   const color = directionColors[trend.direction] || '#9ca3af';
   const strengthColor = strengthColors[trend.strength] || '#9ca3af';
+  const isShortHorizon = ['1m', '2m', '3m'].includes(trend.timeframe);
+  const momentum = trend.short_horizon_momentum;
+  const momentumColor = momentum ? momentumColors[momentum] || '#9ca3af' : '#9ca3af';
   const confidencePct = (trend.confidence * 100).toFixed(0);
   const evidence = trend.evidence;
   const freshnessState = evidence?.freshness_state;
@@ -124,9 +140,11 @@ export const TrendCard = memo(function TrendCard({ trend }: TrendCardProps) {
       </div>
       <div className="trend-details">
         <div className="trend-detail">
-          <span className="detail-label">Strength</span>
-          <span className="detail-value" style={{ color: strengthColor }}>
-            {trend.strength.replace(/_/g, ' ').toUpperCase()}
+          <span className="detail-label">{isShortHorizon ? 'Momentum' : 'Strength'}</span>
+          <span className="detail-value" style={{ color: isShortHorizon ? momentumColor : strengthColor }}>
+            {isShortHorizon
+              ? (momentum ? momentum.replace(/_/g, ' ').toUpperCase() : 'AWAITING BARS')
+              : trend.strength.replace(/_/g, ' ').toUpperCase()}
           </span>
         </div>
         <div className="trend-detail">

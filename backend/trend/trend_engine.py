@@ -3,6 +3,7 @@ Trend and market structure engine
 """
 
 import logging
+from collections import deque
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -82,6 +83,11 @@ _TIMEFRAME_EMA: dict[Timeframe, tuple[int, int]] = {
     Timeframe.ONE_WEEK: (50, 200),
 }
 
+_SHORT_HORIZON_TIMEFRAMES = frozenset(
+    {Timeframe.ONE_MINUTE, Timeframe.TWO_MINUTE, Timeframe.THREE_MINUTE}
+)
+_SHORT_MOMENTUM_BAR_COUNT = 4
+
 
 def _ensure_aware(dt: datetime) -> datetime:
     """Normalize a datetime to timezone-aware UTC.
@@ -114,6 +120,14 @@ class TrendStrength(StrEnum):
     MODERATE = "moderate"
     STRONG = "strong"
     VERY_STRONG = "very_strong"
+
+
+class ShortHorizonMomentum(StrEnum):
+    """Measured short-horizon momentum states, distinct from ADX strength."""
+
+    CHOPPY = "choppy"
+    DEVELOPING = "developing"
+    PERSISTENT = "persistent"
 
 
 class TrendClassification(StrEnum):
@@ -198,6 +212,8 @@ class TrendSignal:
         score: float | None = None,
         classification: TrendClassification | None = None,
         data_quality: str = "ok",
+        short_horizon_momentum: ShortHorizonMomentum | None = None,
+        short_horizon_momentum_score: float | None = None,
     ):
         self.symbol = symbol
         self.timeframe = timeframe
@@ -225,6 +241,11 @@ class TrendSignal:
         # Phase 6: data quality stamp. Defaults to "ok" so existing callers
         # are unaffected; set by the engine when stale/duplicate/gap is hit.
         self.data_quality = data_quality
+        # ADX is intentionally absent on 1m-3m.  Their trader-facing card
+        # uses this separate, closed-bar momentum measure instead of claiming
+        # the default ADX-style ``strength`` is a measurement.
+        self.short_horizon_momentum = short_horizon_momentum
+        self.short_horizon_momentum_score = short_horizon_momentum_score
         self.indicators: dict[str, Any] = {}
 
     def __repr__(self):
@@ -296,6 +317,10 @@ class TrendEngine:
         self._bar_counts: dict[Timeframe, int] = {}
         self._bar_metadata: dict[Timeframe, dict[str, Any]] = {}
         self._live_aggregates: dict[Timeframe, dict[str, Any]] = {}
+        self._short_momentum_bars: dict[Timeframe, deque[dict[str, float]]] = {
+            timeframe: deque(maxlen=_SHORT_MOMENTUM_BAR_COUNT)
+            for timeframe in _SHORT_HORIZON_TIMEFRAMES
+        }
 
         # Initialize indicators for each timeframe
         self.indicators: dict[Timeframe, dict[str, Any]] = {}
@@ -368,10 +393,13 @@ class TrendEngine:
                     {"period": 12},
                 )
             # Sub-5m timeframes get a minimal set — no ADX, no supertrend,
-            # no bollinger. 2m/3m follow the 1m pattern (just ema + rsi + macd).
-            if timeframe in (Timeframe.ONE_MINUTE, Timeframe.TWO_MINUTE, Timeframe.THREE_MINUTE):
+            # no bollinger. 2m/3m follow the 1m pattern. ATR is retained for
+            # the separate, explicitly named short-horizon momentum measure.
+            if timeframe in _SHORT_HORIZON_TIMEFRAMES:
                 self.indicators[timeframe] = {
-                    k: v for k, v in stack.items() if k in ("ema_fast", "ema_slow", "rsi", "macd")
+                    k: v
+                    for k, v in stack.items()
+                    if k in ("ema_fast", "ema_slow", "rsi", "macd", "atr")
                 }
             elif timeframe == Timeframe.FIVE_MINUTE:
                 self.indicators[timeframe] = {
@@ -574,6 +602,11 @@ class TrendEngine:
                 logger.debug("Error updating %s for %s: %s", name, timeframe.value, exc)
 
         quality = self._status_value(data_status)
+        if timeframe in _SHORT_HORIZON_TIMEFRAMES and quality == "ok":
+            # Only completed, trustworthy source bars contribute. Forming,
+            # delayed, duplicate, and gap bars must not manufacture a
+            # persistence reading.
+            self._short_momentum_bars[timeframe].append(point)
         # Keep signal emission on the engine's established generation path.
         # Besides avoiding two subtly different scoring implementations, this
         # preserves replay/backtest instrumentation that intentionally wraps
@@ -810,10 +843,17 @@ class TrendEngine:
             return None
 
         # Analyze trend based on available indicators
+        # Sub-5m MACD historically uses a binary sign because its scoring
+        # stack intentionally omitted ATR. Retaining ATR for the new momentum
+        # measure must not silently change that established directional score.
+        scoring_atr = None if timeframe in _SHORT_HORIZON_TIMEFRAMES else atr_ind
         result = self._calculate_trend(
-            timeframe, indicator_values, atr_ind, adx_ind, supertrend_ind
+            timeframe, indicator_values, scoring_atr, adx_ind, supertrend_ind
         )
         direction, strength, confidence, raw_score, classification = result
+        short_momentum, short_momentum_score = self._short_horizon_momentum(
+            timeframe, atr_value=indicator_values.get("atr")
+        )
 
         return TrendSignal(
             symbol=self.symbol,
@@ -825,6 +865,48 @@ class TrendEngine:
             score=raw_score,
             classification=classification,
             data_quality=data_quality,
+            short_horizon_momentum=short_momentum,
+            short_horizon_momentum_score=short_momentum_score,
+        )
+
+    @staticmethod
+    def _classify_short_horizon_momentum(
+        bars: list[dict[str, float]], atr_value: float | None
+    ) -> tuple[ShortHorizonMomentum | None, float | None]:
+        """Classify closed-bar momentum without pretending it is ADX strength.
+
+        The measure is deliberately compact and observable: four closed bars,
+        net price displacement normalized by current ATR, and directional
+        consistency (net movement divided by total movement).  A breakout
+        needs both material displacement and persistence; alternating closes
+        remain choppy even if their individual moves are large.
+        """
+        if len(bars) < _SHORT_MOMENTUM_BAR_COUNT or atr_value is None or atr_value <= 0:
+            return None, None
+
+        closes = [float(bar["close"]) for bar in bars[-_SHORT_MOMENTUM_BAR_COUNT:]]
+        moves = [current - previous for previous, current in zip(closes, closes[1:])]
+        gross_move = sum(abs(move) for move in moves)
+        if gross_move <= 0:
+            return ShortHorizonMomentum.CHOPPY, 0.0
+
+        net_displacement_atr = abs(closes[-1] - closes[0]) / atr_value
+        directional_consistency = abs(sum(moves)) / gross_move
+        score = min(1.0, 0.6 * min(1.0, net_displacement_atr / 1.5) + 0.4 * directional_consistency)
+
+        if net_displacement_atr >= 1.5 and directional_consistency >= 0.70:
+            return ShortHorizonMomentum.PERSISTENT, score
+        if net_displacement_atr >= 0.60 and directional_consistency >= 0.45:
+            return ShortHorizonMomentum.DEVELOPING, score
+        return ShortHorizonMomentum.CHOPPY, score
+
+    def _short_horizon_momentum(
+        self, timeframe: Timeframe, atr_value: float | None
+    ) -> tuple[ShortHorizonMomentum | None, float | None]:
+        if timeframe not in _SHORT_HORIZON_TIMEFRAMES:
+            return None, None
+        return self._classify_short_horizon_momentum(
+            list(self._short_momentum_bars[timeframe]), atr_value
         )
 
     def _calculate_trend(
