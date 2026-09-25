@@ -16,8 +16,13 @@ jest.mock('../components/ConfluenceCard', () => ({
 }));
 jest.mock('../components/StrategyCard', () => ({ StrategyCard: () => <div>Strategy card</div> }));
 jest.mock('../components/TrendCard', () => ({
-  TrendCard: ({ trend, confluenceRole }: any) => (
-    <div data-testid={`trend-${trend.timeframe}`}>{trend.timeframe}:{confluenceRole}</div>
+  TrendCard: ({ trend, confluenceRole, onOpenChart }: any) => (
+    <div data-testid={`trend-${trend.timeframe}`}>
+      {trend.timeframe}:{confluenceRole}
+      {onOpenChart && (
+        <button aria-label={`open-${trend.timeframe}`} onClick={onOpenChart}>open</button>
+      )}
+    </div>
   ),
 }));
 jest.mock('../components/TopMoversCard', () => ({ TopMoversCard: () => <div>Top movers card</div> }));
@@ -135,5 +140,31 @@ describe('Dashboard layouts', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Current preset' }));
     expect(screen.queryByTestId('trend-2m')).not.toBeInTheDocument();
     expect(screen.getByTestId('trend-1wk')).toHaveTextContent('1wk:input');
+  });
+
+  it('hands off a trend card to the symbol chart at that card\'s timeframe (TC-09)', async () => {
+    const trendRows = ['5m', '15m', '30m', '1h', '4h'].map(timeframe => ({
+      symbol: 'SPY', timeframe, direction: 'uptrend', strength: 'moderate', confidence: 0.7,
+      timestamp: null, data_status: 'ok', provider: 'webull', session: 'regular', bar_closed: true,
+    }));
+    (api.getTrends as jest.Mock).mockResolvedValue(trendRows);
+    (api.getMTFSnapshot as jest.Mock).mockResolvedValue({
+      snapshot: {
+        symbol: 'SPY', preset: 'day_trading', direction: 'bullish', strength: 0.7, alignment_score: 0.7,
+        timeframe_snapshots: Object.fromEntries(['5m', '15m', '30m', '1h', '4h'].map(timeframe => [timeframe, {
+          direction: 'bullish', score: 50, strength: 0.7, confidence: 0.7, timestamp: null,
+          data_quality: 'ok', data_age_seconds: 0, bar_closed: true, is_warmed_up: true,
+          valid: true, quality_weight: 0.7,
+        }])),
+      },
+    });
+
+    const onOpenChart = jest.fn();
+    render(<Dashboard symbol="SPY" onSymbolChange={jest.fn()} onOpenChart={onOpenChart} />);
+
+    await screen.findByText('Day Trading Confluence uses 5 timeframes.');
+    fireEvent.click(await screen.findByRole('button', { name: 'open-15m' }));
+
+    expect(onOpenChart).toHaveBeenCalledWith('SPY', '15m');
   });
 });

@@ -102,7 +102,7 @@ export default function App() {
   const renderPage = () => {
     switch (currentPage) {
       case 'dashboard':
-        return <PageErrorBoundary key={currentPage} pageName="Dashboard"><Dashboard symbol={symbol} onSymbolChange={setSymbol} /></PageErrorBoundary>;
+        return <PageErrorBoundary key={currentPage} pageName="Dashboard"><Dashboard symbol={symbol} onSymbolChange={setSymbol} onOpenChart={(s, tf) => { setSymbol(s); navigateTo('symbol', { symbol: s, timeframe: tf }); }} /></PageErrorBoundary>;
       case 'watchlist':
         return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="Watchlist"><WatchlistPage onSelectSymbol={(s) => { setSymbol(s); navigateTo('symbol'); }} /></PageErrorBoundary></Suspense>;
       case 'symbol':

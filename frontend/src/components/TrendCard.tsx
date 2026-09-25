@@ -5,6 +5,8 @@ import { formatETDateTime } from './chartMath';
 interface TrendCardProps {
   trend: TrendData;
   confluenceRole?: 'input' | 'out_of_scope';
+  /** When provided, the card opens the symbol chart at this timeframe (TC-09). */
+  onOpenChart?: () => void;
 }
 
 const directionIcons: Record<string, string> = {
@@ -130,7 +132,7 @@ function signalExplanation(trend: TrendData): string {
   return `${timeframe} is ${direction} with ${strength} strength and ${agreement} indicator agreement.`;
 }
 
-export const TrendCard = memo(function TrendCard({ trend, confluenceRole }: TrendCardProps) {
+export const TrendCard = memo(function TrendCard({ trend, confluenceRole, onOpenChart }: TrendCardProps) {
   const icon = directionIcons[trend.direction] || '?';
   const color = directionColors[trend.direction] || '#9ca3af';
   const strengthColor = strengthColors[trend.strength] || '#9ca3af';
@@ -181,10 +183,27 @@ export const TrendCard = memo(function TrendCard({ trend, confluenceRole }: Tren
       ? trend.data_status.replace(/_/g, ' ')
       : 'Bar closed';
 
+  const timeframeLabel = timeframeLabels[trend.timeframe] || trend.timeframe;
+  const interactive = Boolean(onOpenChart);
+  const handleOpenChart = onOpenChart;
+  const handleKeyDown = interactive
+    ? (event: React.KeyboardEvent<HTMLDivElement>) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          handleOpenChart?.();
+        }
+      }
+    : undefined;
+
   return (
     <div
-      className={`card trend-card${confluenceRole ? ` trend-card-${confluenceRole}` : ''}`}
+      className={`card trend-card${confluenceRole ? ` trend-card-${confluenceRole}` : ''}${interactive ? ' trend-card-clickable' : ''}`}
       style={{ borderLeftColor: color }}
+      onClick={handleOpenChart}
+      onKeyDown={handleKeyDown}
+      role={interactive ? 'button' : undefined}
+      tabIndex={interactive ? 0 : undefined}
+      aria-label={interactive ? `Open ${trend.symbol} ${timeframeLabel} chart` : undefined}
     >
       <div className="trend-header">
         <span className="timeframe-badge">{timeframeLabels[trend.timeframe] || trend.timeframe}</span>

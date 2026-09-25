@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { TrendCard } from './TrendCard';
 import { TrendData } from '../services/api';
 
@@ -244,5 +244,34 @@ describe('TrendCard score and classification (TC-07)', () => {
 
     expect(screen.queryByText(/^Score/)).not.toBeInTheDocument();
     expect(screen.queryByText('No signal')).not.toBeInTheDocument();
+  });
+});
+
+describe('TrendCard chart handoff (TC-09)', () => {
+  it('opens the chart at this timeframe on click', () => {
+    const onOpenChart = jest.fn();
+    render(<TrendCard trend={trend({ symbol: 'SPY', timeframe: '1m' })} onOpenChart={onOpenChart} />);
+
+    const card = screen.getByRole('button', { name: 'Open SPY 1 Min chart' });
+    fireEvent.click(card);
+
+    expect(onOpenChart).toHaveBeenCalledTimes(1);
+  });
+
+  it('is keyboard-operable with Enter and Space', () => {
+    const onOpenChart = jest.fn();
+    render(<TrendCard trend={trend({ symbol: 'AAPL', timeframe: '1h' })} onOpenChart={onOpenChart} />);
+
+    const card = screen.getByRole('button', { name: 'Open AAPL 1 Hour chart' });
+    fireEvent.keyDown(card, { key: 'Enter' });
+    fireEvent.keyDown(card, { key: ' ' });
+
+    expect(onOpenChart).toHaveBeenCalledTimes(2);
+  });
+
+  it('is not interactive when no handoff handler is provided', () => {
+    render(<TrendCard trend={trend()} />);
+
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
   });
 });

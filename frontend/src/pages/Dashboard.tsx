@@ -55,6 +55,8 @@ function TrendCardSkeleton() {
 interface DashboardProps {
   symbol: string;
   onSymbolChange: (symbol: string) => void;
+  /** Open the symbol chart at a specific timeframe (TC-09 chart handoff). */
+  onOpenChart?: (symbol: string, timeframe: string) => void;
 }
 
 type DashboardSectionId =
@@ -171,7 +173,7 @@ function readSelectedLayout(): string {
   }
 }
 
-export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
+export function Dashboard({ symbol, onSymbolChange, onOpenChart }: DashboardProps) {
   const marketSession = useMarketSession();
   const [customLayouts, setCustomLayouts] = useState<DashboardLayout[]>(readCustomLayouts);
   const [selectedLayoutId, setSelectedLayoutId] = useState<string>(readSelectedLayout);
@@ -717,6 +719,7 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
                             key={trend.timeframe}
                             trend={trend}
                             confluenceRole={contributingTimeframes.has(trend.timeframe) ? 'input' : 'out_of_scope'}
+                            onOpenChart={onOpenChart ? () => onOpenChart(symbol, trend.timeframe) : undefined}
                           />
                         ))}
                       </div>
