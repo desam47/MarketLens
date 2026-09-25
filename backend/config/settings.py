@@ -602,6 +602,11 @@ class TrendSettings(BaseSettings):
     """Settings that control TrendEngine behaviour and weighting."""
 
     model_config = SettingsConfigDict(env_prefix="", extra="ignore")
+    # Gated Hybrid scoring model (v5 signal fidelity plan). When off, the engine
+    # uses the legacy flat weighted-vote scoring. Rolled out behind this flag so
+    # old and new can be shadow-compared before flipping. See
+    # docs/Version_5/v5_trend_signal_fidelity_plan.md.
+    signal_v2: bool = Field(default=False, validation_alias="TREND_SIGNAL_V2")
     # Score component weights (passed to TrendSignalWeights; sum not required to be 1).
     signal_weights: TrendSignalWeights = Field(default_factory=TrendSignalWeights)
     # Indicator defaults used when building per-timeframe indicator stacks.

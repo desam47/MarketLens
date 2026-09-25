@@ -929,11 +929,17 @@ class TrendEngine:
         if all(v is None for v in indicator_values.values()):
             return None
 
-        # Analyze trend based on available indicators
-        # Sub-5m MACD historically uses a binary sign because its scoring
-        # stack intentionally omitted ATR. Retaining ATR for the new momentum
-        # measure must not silently change that established directional score.
-        scoring_atr = None if timeframe in _SHORT_HORIZON_TIMEFRAMES else atr_ind
+        # Analyze trend based on available indicators.
+        # Legacy (v1): sub-5m MACD uses a binary ±1 sign because its scoring
+        # stack intentionally omitted ATR — which saturates the fast cards
+        # (AAPL 1m/2m/3m pinned at ±100). The Gated Hybrid (v2) ATR-normalizes
+        # MACD on every timeframe so conviction is graded, not a rail. The ATR
+        # indicator already exists on 1m/2m/3m (for the momentum measure), so
+        # this only changes how MACD is scored, not the stack.
+        if _settings.trend.signal_v2:
+            scoring_atr = atr_ind
+        else:
+            scoring_atr = None if timeframe in _SHORT_HORIZON_TIMEFRAMES else atr_ind
         result = self._calculate_trend(
             timeframe, indicator_values, scoring_atr, adx_ind, supertrend_ind
         )

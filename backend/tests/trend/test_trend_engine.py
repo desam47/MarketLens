@@ -6,7 +6,7 @@ import os
 import sys
 import unittest
 from datetime import datetime, timedelta
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 # Add the backend directory to the path so we can import modules
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../"))
@@ -768,6 +768,52 @@ class TestTrendProviderProvenance(unittest.TestCase):
 
         agg = self.engine._live_aggregates[Timeframe.TWO_MINUTE]
         self.assertEqual(agg["provider"], "mixed")
+
+
+class TestGatedHybridV2Flag(unittest.TestCase):
+    """Stage 1 of the Gated Hybrid: TREND_SIGNAL_V2 ATR-normalizes MACD on the
+    fast timeframes so conviction is graded, not the binary ±1 that saturates
+    the current 1m/2m/3m cards. Flag off must be byte-identical to legacy."""
+
+    def _one_minute_signal(self):
+        engine = TrendEngine("SPY")
+
+        def ind(value, name=""):
+            m = MagicMock()
+            m.get_latest.return_value = value
+            m.name = name
+            return m
+
+        # A small positive MACD histogram: binary scoring calls it a full +1.0
+        # vote; ATR-normalized scoring calls it a tiny fraction.
+        engine.indicators[Timeframe.ONE_MINUTE] = {
+            "ema_fast": ind(100.2),
+            "ema_slow": ind(100.0),
+            "rsi": ind(52.0),
+            "macd": ind(0.5),
+            "atr": ind(2.0, name="ATR"),
+        }
+        signal = engine._analyze_timeframe_trend(
+            Timeframe.ONE_MINUTE, engine.indicators[Timeframe.ONE_MINUTE], datetime.now()
+        )
+        self.assertIsNotNone(signal, "_analyze_timeframe_trend returned None — check mock indicator setup")
+        macd = next(a for a in signal.attribution if a["component"] == "MACD")
+        return macd["signal"]
+
+    def test_legacy_uses_binary_macd_on_short_timeframes(self):
+        from backend.config.settings import settings
+
+        with patch.object(settings.trend, "signal_v2", False):
+            self.assertEqual(abs(self._one_minute_signal()), 1.0)
+
+    def test_v2_normalizes_macd_by_atr_on_short_timeframes(self):
+        from backend.config.settings import settings
+
+        with patch.object(settings.trend, "signal_v2", True):
+            macd_signal = self._one_minute_signal()
+        # (0.5 / 2.0) / 10 = 0.025 — graded, not the ±1 rail.
+        self.assertLess(abs(macd_signal), 1.0)
+        self.assertAlmostEqual(macd_signal, 0.025, places=3)
 
 
 class TestTrendChangeHistory(unittest.TestCase):
