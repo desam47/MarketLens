@@ -562,13 +562,16 @@ async def health_check():
 @app.get("/api/system/status")
 async def system_status():
     """System status endpoint"""
+    import os
     from datetime import datetime
 
+    stable = os.environ.get("STABLE_MODE", "").lower() == "true"
     return {
         "service": settings.app_name,
         "version": get_version(),
         "debug": settings.debug,
         "startup_mode": settings.startup_mode,
+        "reload_mode": "stable" if stable else "dev",
         "market_data_provider": settings.market_data.primary_provider,
         "market_data_fallback_providers": settings.market_data.fallback_providers,
         "ai_enabled": settings.ai.enabled,

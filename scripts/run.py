@@ -146,7 +146,8 @@ def start_backend(config: LocalConfig, *, stable: bool = False) -> subprocess.Po
     if not stable:
         # Editing a test must not restart the server and re-run its whole lifespan.
         cmd += ["--reload", "--reload-exclude", str(ROOT / "backend" / "tests")]
-    return subprocess.Popen(cmd, cwd=ROOT, env=_backend_env(config))
+    env = {**_backend_env(config), "STABLE_MODE": "true" if stable else "false"}
+    return subprocess.Popen(cmd, cwd=ROOT, env=env)
 
 
 def start_frontend(config: LocalConfig) -> subprocess.Popen:

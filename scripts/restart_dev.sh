@@ -96,7 +96,7 @@ done
 
 if [[ "$STABLE_MODE" == "true" ]]; then
     echo "$(date): starting backend in stable mode (no --reload)" >> logs/restart_dev.log
-    nohup "$PYTHON_BIN" -m uvicorn backend.api.main:app --host 127.0.0.1 --port "$BACKEND_PORT" 2>&1 \
+    STABLE_MODE=true nohup "$PYTHON_BIN" -m uvicorn backend.api.main:app --host 127.0.0.1 --port "$BACKEND_PORT" 2>&1 \
         | nohup "$PYTHON_BIN" "$ROTATE" logs/backend.log &
     disown
 else
@@ -105,7 +105,7 @@ else
     # start.sh and scripts/run.py. It must be the ABSOLUTE directory: the relative "backend/tests/*"
     # only matches files directly in backend/tests/, so every edit under backend/tests/<pkg>/ (most of
     # the suite) still reloaded the server.
-    nohup "$PYTHON_BIN" -m uvicorn backend.api.main:app --host 127.0.0.1 --port "$BACKEND_PORT" --reload \
+    STABLE_MODE=false nohup "$PYTHON_BIN" -m uvicorn backend.api.main:app --host 127.0.0.1 --port "$BACKEND_PORT" --reload \
         --reload-exclude "$SCRIPT_DIR/backend/tests" 2>&1 \
         | nohup "$PYTHON_BIN" "$ROTATE" logs/backend.log &
     disown

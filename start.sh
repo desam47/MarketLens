@@ -121,13 +121,13 @@ trap 'exit 0' INT TERM
 echo "📁 Working directory: $SCRIPT_DIR"
 if [[ "$STABLE_MODE" == "true" ]]; then
     echo "🚀 Starting backend on $BACKEND_URL (stable — no auto-reload) ..."
-    DEBUG="$DEBUG_VALUE" STARTUP_MODE="$STARTUP_MODE" python -m uvicorn backend.api.main:app \
+    DEBUG="$DEBUG_VALUE" STARTUP_MODE="$STARTUP_MODE" STABLE_MODE=true python -m uvicorn backend.api.main:app \
         --host "$BACKEND_HOST" \
         --port "$BACKEND_PORT" &
 else
     echo "🚀 Starting backend on $BACKEND_URL (dev — auto-reload enabled) ..."
     # Reload excludes tests so editing them does not restart the whole application.
-    DEBUG="$DEBUG_VALUE" STARTUP_MODE="$STARTUP_MODE" python -m uvicorn backend.api.main:app \
+    DEBUG="$DEBUG_VALUE" STARTUP_MODE="$STARTUP_MODE" STABLE_MODE=false python -m uvicorn backend.api.main:app \
         --host "$BACKEND_HOST" \
         --port "$BACKEND_PORT" \
         --reload \

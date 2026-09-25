@@ -976,7 +976,9 @@ def _format_watchlist_intelligence(data: dict) -> str:
             metric = item.get("metric")
             metric_label = item.get("metric_label")
             if isinstance(metric, (int, float)) and metric_label:
-                evidence.append(f"{metric_label} {metric:+.2f}")
+                # Skip if this metric duplicates change_pct already shown above.
+                if not (isinstance(change_pct, (int, float)) and abs(metric - change_pct) < 0.01):
+                    evidence.append(f"{metric_label} {metric:+.2f}")
             details = item.get("details") or {}
             benchmark = details.get("benchmark") if isinstance(details, dict) else None
             if benchmark:

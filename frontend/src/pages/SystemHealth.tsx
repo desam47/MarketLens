@@ -65,12 +65,14 @@ const SystemStatusBanner = memo(function SystemStatusBanner({
   performance,
   ingestionStatus,
   backupStatus,
+  systemStatus,
   loading
 }: {
   health: HealthData | null;
   performance: SystemPerformance | null;
   ingestionStatus: IngestionStatus | null;
   backupStatus: BackupStatusData | null;
+  systemStatus: SystemStatus | null;
   loading: boolean;
 }) {
   const freshness = freshnessStatus(performance?.ingestion.tf_update_latency_seconds);
@@ -111,6 +113,17 @@ const SystemStatusBanner = memo(function SystemStatusBanner({
               <>
                 <span className={`status-pulse ${ingestionStatus?.is_running ? 'pulse-ok' : 'pulse-warning'}`}></span>
                 {ingestionStatus?.is_running ? 'Running' : 'Stopped'}
+              </>
+            )}
+          </span>
+        </div>
+        <div className="health-banner-metric">
+          <span className="label">Reload Mode</span>
+          <span className="value">
+            {loading ? <SkeletonBlock width="80px" height="1.5rem" /> : (
+              <>
+                <span className={`status-pulse ${systemStatus?.reload_mode === 'stable' ? 'pulse-ok' : 'pulse-warning'}`}></span>
+                {systemStatus?.reload_mode === 'stable' ? 'Stable' : systemStatus?.reload_mode === 'dev' ? 'Dev' : '—'}
               </>
             )}
           </span>
@@ -187,7 +200,6 @@ const SystemConfigCard = memo(function SystemConfigCard({ systemConfig, systemSt
               <p><strong>Startup Mode:</strong> <span className={`status-badge ${systemStatus.startup_mode === 'api' ? 'status-warning' : 'status-ok'}`}>{systemStatus.startup_mode.toUpperCase()}</span></p>
               <p><strong>Debug Mode:</strong> {systemStatus.debug ? 'Yes' : 'No'}</p>
               <p><strong>AI Enabled:</strong> {systemStatus.ai_enabled ? 'Yes' : 'No'}</p>
-              <p><strong>Version:</strong> {systemStatus.version}</p>
             </>
           )}
         </div>
@@ -200,7 +212,6 @@ const SystemConfigCard = memo(function SystemConfigCard({ systemConfig, systemSt
            <p><strong>Startup Mode:</strong> <span className={`status-badge ${systemStatus.startup_mode === 'api' ? 'status-warning' : 'status-ok'}`}>{systemStatus.startup_mode.toUpperCase()}</span></p>
            <p><strong>Debug Mode:</strong> {systemStatus.debug ? 'Yes' : 'No'}</p>
            <p><strong>AI Enabled:</strong> {systemStatus.ai_enabled ? 'Yes' : 'No'}</p>
-           <p><strong>Version:</strong> {systemStatus.version}</p>
          </div>
       ) : (
         <p className="error-text">Status unavailable</p>
@@ -584,6 +595,7 @@ export function SystemHealth({ navigation }: { navigation?: NavigationState }) {
         performance={performance}
         ingestionStatus={ingestionStatus}
         backupStatus={backupStatus}
+        systemStatus={systemStatus}
         loading={loading}
       />
 

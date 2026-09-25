@@ -254,6 +254,7 @@ export interface SystemStatus {
   version: string;
   debug: boolean;
   startup_mode: 'full' | 'api';
+  reload_mode: 'stable' | 'dev';
   market_data_provider: string;
   market_data_fallback_providers: string[];
   ai_enabled: boolean;
