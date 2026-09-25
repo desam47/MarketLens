@@ -66,13 +66,27 @@ def _weekly_bucket_reference_time(timestamp: datetime) -> datetime:
 def _bar_reference_time(
     timeframe: str, timestamp: datetime | None, provider: object | None
 ) -> datetime | None:
-    """Return the market-data as-of time used for display and freshness."""
+    """Return the market-data as-of time used for display and freshness.
+
+    For intraday bars the timestamp is the bar's *open* time. Advancing by
+    the timeframe duration gives the *close* time — the moment the bar
+    completed and became usable — which is what "As Of" should convey.
+    A 5m bar that opened at 10:55 and closed at 11:00 should show
+    "As Of 11:00", not "As Of 10:55".
+    """
     if timestamp is None:
         return None
     if timeframe == "1d":
         return daily_bar_reference_time(timestamp) or timestamp
     if timeframe == "1wk" and str(provider or "").startswith("aggregated_from_"):
         return _weekly_bucket_reference_time(timestamp)
+    duration = TIMEFRAME_SECONDS.get(timeframe)
+    if duration:
+        close_time = timestamp + timedelta(seconds=duration)
+        # Don't show a future close time — the bar is still forming.
+        # Cap at now so "As Of" never exceeds the current wall-clock time.
+        now = datetime.now(UTC)
+        return min(close_time, now)
     return timestamp
 
 

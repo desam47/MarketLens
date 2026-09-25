@@ -492,6 +492,7 @@ export function SystemHealth({ navigation }: { navigation?: NavigationState }) {
 
   const [showRestartModal, setShowRestartModal] = useState(false);
   const [restarting, setRestarting] = useState(false);
+  const [restartStable, setRestartStable] = useState(false);
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
@@ -543,7 +544,7 @@ export function SystemHealth({ navigation }: { navigation?: NavigationState }) {
     setShowRestartModal(false);
     setGlobalError(null);
     try {
-      await api.restartServices();
+      await api.restartServices(restartStable);
       // Poll until backend is back up
       const poll = setInterval(async () => {
         try {
@@ -612,6 +613,19 @@ export function SystemHealth({ navigation }: { navigation?: NavigationState }) {
           <div className="modal-content" onClick={e => e.stopPropagation()}>
             <h2>Restart System?</h2>
             <p>This will restart the backend and frontend development servers. Analysis will be briefly unavailable.</p>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '12px 0', cursor: 'pointer', fontSize: 14 }}>
+              <input
+                type="checkbox"
+                checked={restartStable}
+                onChange={e => setRestartStable(e.target.checked)}
+              />
+              <span>
+                <strong>Stable mode</strong> — disable auto-reload
+                <span style={{ display: 'block', color: 'var(--text-muted)', fontSize: 12, marginTop: 2 }}>
+                  Keeps WebSocket connections alive (no "Reconnecting" badge). Use for live trading.
+                </span>
+              </span>
+            </label>
             <div className="modal-actions">
               <button className="btn" onClick={() => setShowRestartModal(false)}>Cancel</button>
               <button className="btn btn-danger" onClick={handleRestartConfirm}>Restart Now</button>

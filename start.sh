@@ -2,7 +2,18 @@
 # Start the local backend, frontend, and optional workers from the repository
 # root. Configuration is read without sourcing .env, so credential values are
 # never evaluated as shell code.
+#
+# Flags:
+#   --stable    Disable uvicorn auto-reload (stable WebSocket connections;
+#               use for live trading sessions). Default is --reload (dev mode).
 set -e
+
+STABLE_MODE=false
+for arg in "$@"; do
+    case "$arg" in
+        --stable) STABLE_MODE=true ;;
+    esac
+done
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
@@ -108,13 +119,20 @@ trap cleanup EXIT
 trap 'exit 0' INT TERM
 
 echo "📁 Working directory: $SCRIPT_DIR"
-echo "🚀 Starting backend on $BACKEND_URL ..."
-# Reload excludes tests so editing them does not restart the whole application.
-DEBUG="$DEBUG_VALUE" STARTUP_MODE="$STARTUP_MODE" python -m uvicorn backend.api.main:app \
-    --host "$BACKEND_HOST" \
-    --port "$BACKEND_PORT" \
-    --reload \
-    --reload-exclude "$SCRIPT_DIR/backend/tests" &
+if [[ "$STABLE_MODE" == "true" ]]; then
+    echo "🚀 Starting backend on $BACKEND_URL (stable — no auto-reload) ..."
+    DEBUG="$DEBUG_VALUE" STARTUP_MODE="$STARTUP_MODE" python -m uvicorn backend.api.main:app \
+        --host "$BACKEND_HOST" \
+        --port "$BACKEND_PORT" &
+else
+    echo "🚀 Starting backend on $BACKEND_URL (dev — auto-reload enabled) ..."
+    # Reload excludes tests so editing them does not restart the whole application.
+    DEBUG="$DEBUG_VALUE" STARTUP_MODE="$STARTUP_MODE" python -m uvicorn backend.api.main:app \
+        --host "$BACKEND_HOST" \
+        --port "$BACKEND_PORT" \
+        --reload \
+        --reload-exclude "$SCRIPT_DIR/backend/tests" &
+fi
 BACKEND_PID=$!
 PIDS+=("$BACKEND_PID")
 

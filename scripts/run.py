@@ -123,27 +123,30 @@ def _backend_env(config: LocalConfig) -> dict[str, str]:
     }
 
 
-def start_backend(config: LocalConfig) -> subprocess.Popen:
-    """Start FastAPI with the configured host and port."""
-    print(f"🚀 Starting backend on {config.backend_url}")
-    return subprocess.Popen(
-        [
-            sys.executable,
-            "-m",
-            "uvicorn",
-            "backend.api.main:app",
-            "--host",
-            config.host,
-            "--port",
-            str(config.port),
-            "--reload",
-            # Editing a test must not restart the server and re-run its whole lifespan.
-            "--reload-exclude",
-            str(ROOT / "backend" / "tests"),
-        ],
-        cwd=ROOT,
-        env=_backend_env(config),
-    )
+def start_backend(config: LocalConfig, *, stable: bool = False) -> subprocess.Popen:
+    """Start FastAPI with the configured host and port.
+
+    ``stable=True`` omits ``--reload`` so uvicorn never auto-restarts on file
+    changes — WebSocket connections stay alive for the whole session.  Use this
+    for live trading.  The default (``stable=False``) adds ``--reload`` for the
+    dev workflow where you want code changes to take effect immediately.
+    """
+    mode = "stable — no auto-reload" if stable else "dev — auto-reload enabled"
+    print(f"🚀 Starting backend on {config.backend_url} ({mode})")
+    cmd = [
+        sys.executable,
+        "-m",
+        "uvicorn",
+        "backend.api.main:app",
+        "--host",
+        config.host,
+        "--port",
+        str(config.port),
+    ]
+    if not stable:
+        # Editing a test must not restart the server and re-run its whole lifespan.
+        cmd += ["--reload", "--reload-exclude", str(ROOT / "backend" / "tests")]
+    return subprocess.Popen(cmd, cwd=ROOT, env=_backend_env(config))
 
 
 def start_frontend(config: LocalConfig) -> subprocess.Popen:
@@ -212,6 +215,7 @@ def _raise_keyboard_interrupt(_signum: int, _frame: object) -> None:
 
 
 def main() -> None:
+    stable = "--stable" in sys.argv
     config = load_config()
     processes: list[subprocess.Popen] = []
     signal.signal(signal.SIGINT, _raise_keyboard_interrupt)
@@ -222,7 +226,7 @@ def main() -> None:
     print("=" * 60)
 
     try:
-        backend = start_backend(config)
+        backend = start_backend(config, stable=stable)
         processes.append(backend)
         time.sleep(2)
         processes.extend(start_workers(config))

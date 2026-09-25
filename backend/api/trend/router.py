@@ -64,6 +64,16 @@ def _trend_evidence(
     }
 
 
+def _normalize_htf_bias(htf_bias: dict | None) -> dict | None:
+    """Normalize -0.0 → 0.0 in htf_bias.score (IEEE 754 negative zero)."""
+    if htf_bias is None:
+        return None
+    score = htf_bias.get("score")
+    if score is not None:
+        htf_bias = {**htf_bias, "score": score + 0.0}
+    return htf_bias
+
+
 def _build_trend_payload(engine, sym: str, timeframe: str, tf) -> dict:
     trend_signal = engine.get_current_trend(tf)
     metadata = engine.get_timeframe_metadata(tf)
@@ -111,7 +121,7 @@ def _build_trend_payload(engine, sym: str, timeframe: str, tf) -> dict:
         ),
         "short_horizon_momentum_score": trend_signal.short_horizon_momentum_score,
         "confidence": trend_signal.confidence,
-        "score": trend_signal.score,
+        "score": trend_signal.score + 0.0 if trend_signal.score is not None else None,
         "classification": trend_signal.classification.value
         if hasattr(trend_signal.classification, "value")
         else trend_signal.classification,
@@ -131,7 +141,7 @@ def _build_trend_payload(engine, sym: str, timeframe: str, tf) -> dict:
         "key_levels": getattr(trend_signal, "key_levels", None) or {},
         "maturity": getattr(trend_signal, "maturity", None),
         "stop_distance_atr": getattr(trend_signal, "stop_distance_atr", None),
-        "htf_bias": getattr(trend_signal, "htf_bias", None),
+        "htf_bias": _normalize_htf_bias(getattr(trend_signal, "htf_bias", None)),
         "adx_slope": getattr(trend_signal, "adx_slope", None),
         "divergence": getattr(trend_signal, "divergence", None),
     }

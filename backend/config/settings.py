@@ -601,7 +601,7 @@ class IndicatorDefaults(BaseSettings):
 class TrendSettings(BaseSettings):
     """Settings that control TrendEngine behaviour and weighting."""
 
-    model_config = SettingsConfigDict(env_prefix="", extra="ignore")
+    model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="", extra="ignore")
     # Gated Hybrid scoring model (v5 signal fidelity plan). When off, the engine
     # uses the legacy flat weighted-vote scoring. Rolled out behind this flag so
     # old and new can be shadow-compared before flipping. See

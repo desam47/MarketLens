@@ -468,7 +468,7 @@ async def get_loop_lag_watchdog() -> dict:
 
 
 @router.post("/restart")
-async def restart_services() -> dict:
+async def restart_services(stable: bool = False) -> dict:
     """Restart the backend and frontend dev servers (System Health page).
 
     Spawns ``scripts/restart_dev.sh`` as a fully detached process (its own
@@ -476,6 +476,10 @@ async def restart_services() -> dict:
     process being killed a moment later) and returns immediately. The
     script itself sleeps briefly before killing anything, giving this
     response time to actually reach the client first.
+
+    ``stable=true`` passes ``--stable`` to the restart script, which starts
+    uvicorn without ``--reload`` so WebSocket connections survive file changes.
+    Use this for live trading sessions.
 
     Local dev tool, matching the rest of this app: no auth gate, same as
     every other endpoint here.
@@ -485,15 +489,20 @@ async def restart_services() -> dict:
 
     project_root = _Path(__file__).resolve().parents[3]
     script = project_root / "scripts" / "restart_dev.sh"
+    cmd = ["/bin/bash", str(script)]
+    if stable:
+        cmd.append("--stable")
     subprocess.Popen(
-        ["/bin/bash", str(script)],
+        cmd,
         cwd=str(project_root),
         start_new_session=True,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
+    mode = "stable (no auto-reload)" if stable else "dev (auto-reload enabled)"
     return {
         "status": "restarting",
+        "mode": mode,
         "message": "Backend and frontend are restarting — this page will reconnect automatically.",
     }
 

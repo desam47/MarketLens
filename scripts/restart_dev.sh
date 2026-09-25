@@ -84,15 +84,32 @@ sleep 1
 # no longer share logs/rq_workers.log.
 ROTATE="$SCRIPT_DIR/scripts/rotate_stdin.py"
 
-# --reload-exclude: editing a test must not restart the server (each restart re-runs the whole
-# lifespan: migrations, cache flush, provider handshakes, engine seeding). Keep in sync with
-# start.sh and scripts/run.py. It must be the ABSOLUTE directory: the relative "backend/tests/*"
-# only matches files directly in backend/tests/, so every edit under backend/tests/<pkg>/ (most of
-# the suite) still reloaded the server.
-nohup "$PYTHON_BIN" -m uvicorn backend.api.main:app --host 127.0.0.1 --port "$BACKEND_PORT" --reload \
-    --reload-exclude "$SCRIPT_DIR/backend/tests" 2>&1 \
-    | nohup "$PYTHON_BIN" "$ROTATE" logs/backend.log &
-disown
+# --stable flag: skip --reload so uvicorn never auto-restarts on file changes.
+# WebSocket connections (Latest Price badge, realtime bars) stay alive for the
+# whole session. Pass --stable for live trading; omit for dev work.
+STABLE_MODE=false
+for arg in "$@"; do
+    case "$arg" in
+        --stable) STABLE_MODE=true ;;
+    esac
+done
+
+if [[ "$STABLE_MODE" == "true" ]]; then
+    echo "$(date): starting backend in stable mode (no --reload)" >> logs/restart_dev.log
+    nohup "$PYTHON_BIN" -m uvicorn backend.api.main:app --host 127.0.0.1 --port "$BACKEND_PORT" 2>&1 \
+        | nohup "$PYTHON_BIN" "$ROTATE" logs/backend.log &
+    disown
+else
+    # --reload-exclude: editing a test must not restart the server (each restart re-runs the whole
+    # lifespan: migrations, cache flush, provider handshakes, engine seeding). Keep in sync with
+    # start.sh and scripts/run.py. It must be the ABSOLUTE directory: the relative "backend/tests/*"
+    # only matches files directly in backend/tests/, so every edit under backend/tests/<pkg>/ (most of
+    # the suite) still reloaded the server.
+    nohup "$PYTHON_BIN" -m uvicorn backend.api.main:app --host 127.0.0.1 --port "$BACKEND_PORT" --reload \
+        --reload-exclude "$SCRIPT_DIR/backend/tests" 2>&1 \
+        | nohup "$PYTHON_BIN" "$ROTATE" logs/backend.log &
+    disown
+fi
 
 if [ -d "frontend" ] && [ -f "frontend/package.json" ]; then
     (cd frontend && nohup npx craco start 2>&1 | nohup "$PYTHON_BIN" "$ROTATE" ../logs/frontend.log &)

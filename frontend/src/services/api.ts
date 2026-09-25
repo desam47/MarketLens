@@ -1900,8 +1900,9 @@ class ApiService {
    * serving this request dies a moment after responding, so the
    * response itself is the only confirmation the request landed —
    * don't expect a follow-up call to succeed until both are back up. */
-  async restartServices(): Promise<{ status: string; message: string }> {
-    return this.fetch('/system/restart', { method: 'POST' });
+  async restartServices(stable = false): Promise<{ status: string; message: string }> {
+    const url = stable ? '/system/restart?stable=true' : '/system/restart';
+    return this.fetch(url, { method: 'POST' });
   }
 
   // Market Regime
