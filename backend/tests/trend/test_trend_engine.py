@@ -932,6 +932,110 @@ class TestADXSlope(unittest.TestCase):
         self.assertEqual(result, "flat")
 
 
+class TestMomentumDivergence(unittest.TestCase):
+    """E2: RSI-vs-price divergence detection."""
+
+    def _div(self, bars):
+        from collections import deque
+        from backend.trend.trend_engine import TrendEngine
+        return TrendEngine._compute_divergence(deque(bars, maxlen=14))
+
+    def _bar(self, high, low, rsi, close=None, macd=0.0):
+        if close is None:
+            close = (high + low) / 2
+        return {"high": high, "low": low, "close": close, "rsi": rsi, "macd": macd}
+
+    def test_returns_none_with_fewer_than_8_bars(self):
+        bars = [self._bar(100 + i, 99 + i, 50) for i in range(7)]
+        self.assertIsNone(self._div(bars))
+
+    def test_bearish_divergence_price_high_rsi_lower(self):
+        # older half: price peak 105, RSI 65
+        # recent half: price peak 108 (higher), RSI 58 (lower) → bearish divergence
+        older = [
+            self._bar(103, 100, 60),
+            self._bar(105, 102, 65),  # older peak
+            self._bar(104, 101, 63),
+            self._bar(103, 100, 61),
+        ]
+        recent = [
+            self._bar(106, 103, 62),
+            self._bar(108, 104, 58),  # new high, lower RSI → bearish
+            self._bar(107, 103, 57),
+            self._bar(106, 102, 56),
+        ]
+        result = self._div(older + recent)
+        self.assertIsNotNone(result)
+        self.assertEqual(result["type"], "bearish")
+        self.assertLess(result["rsi_delta"], 0)
+
+    def test_bullish_divergence_price_low_rsi_higher(self):
+        # older half: price trough 92, RSI 32
+        # recent half: price trough 89 (lower), RSI 38 (higher) → bullish divergence
+        older = [
+            self._bar(98, 94, 40),
+            self._bar(96, 92, 32),  # older trough
+            self._bar(97, 93, 35),
+            self._bar(98, 94, 37),
+        ]
+        recent = [
+            self._bar(96, 92, 36),
+            self._bar(94, 89, 38),  # new low, higher RSI → bullish
+            self._bar(95, 91, 39),
+            self._bar(97, 93, 41),
+        ]
+        result = self._div(older + recent)
+        self.assertIsNotNone(result)
+        self.assertEqual(result["type"], "bullish")
+        self.assertGreater(result["rsi_delta"], 0)
+
+    def test_no_divergence_when_rsi_confirms_price(self):
+        # price new high, RSI also new high → no divergence
+        older = [
+            self._bar(103, 100, 55),
+            self._bar(105, 102, 60),
+            self._bar(104, 101, 58),
+            self._bar(103, 100, 57),
+        ]
+        recent = [
+            self._bar(106, 103, 62),
+            self._bar(108, 104, 68),  # new high, also higher RSI → no divergence
+            self._bar(107, 103, 66),
+            self._bar(106, 102, 64),
+        ]
+        self.assertIsNone(self._div(older + recent))
+
+    def test_no_divergence_when_price_move_too_small(self):
+        # price barely higher (0.001% < threshold 0.15%) — RSI diverges but price signal is noise
+        older = [self._bar(100.00, 99.0, 65)] * 4
+        recent = [self._bar(100.01, 99.0, 58)] * 4  # price +0.01%, RSI -7 → below price threshold
+        self.assertIsNone(self._div(older + recent))
+
+    def test_no_divergence_when_rsi_delta_too_small(self):
+        # price clearly higher, RSI only slightly lower (< 4pt threshold)
+        older = [self._bar(100, 98, 60)] * 4
+        recent = [self._bar(105, 103, 57)] * 4  # price +5%, RSI -3 → below RSI threshold
+        self.assertIsNone(self._div(older + recent))
+
+    def test_uses_last_12_bars_of_buffer(self):
+        # Flat boring bars at the start (low price, neutral RSI) — they sit in
+        # the deque but must not suppress the bearish divergence in the later bars.
+        # With maxlen=14 and a 12-bar window the boring bars land in the older half
+        # with lower highs than the meaningful peak, so they don't mask it.
+        boring = [self._bar(100, 99, 55)] * 8  # flat, low, neutral
+        older = [self._bar(103, 100, 60), self._bar(105, 102, 65),
+                 self._bar(104, 101, 63), self._bar(103, 100, 61)]
+        recent = [self._bar(106, 103, 62), self._bar(108, 104, 58),
+                  self._bar(107, 103, 57), self._bar(106, 102, 56)]
+        # Total 16 bars; deque(maxlen=14) keeps last 14; window[-12:] takes 12.
+        # The boring bars have lower highs (100) so the older_half peak is still
+        # older[1] (high=105, rsi=65) and recent_half peak is recent[1] (high=108,
+        # rsi=58) → bearish divergence detected.
+        result = self._div(boring + older + recent)
+        self.assertIsNotNone(result)
+        self.assertEqual(result["type"], "bearish")
+
+
 class TestTrendChangeHistory(unittest.TestCase):
     """TC-09: change history counts CLOSED bars, not polling-frequency updates."""
 

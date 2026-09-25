@@ -148,6 +148,8 @@ export interface TrendData {
   htf_bias?: { timeframe: string; direction: string; score: number | null; classification: string | null } | null;
   /** E3: ADX slope direction — 'strengthening' | 'fading' | 'flat'; null when ADX not in stack or insufficient history */
   adx_slope?: 'strengthening' | 'fading' | 'flat' | null;
+  /** E2: RSI-vs-price divergence warning. type: 'bearish' (new price high, RSI lower) | 'bullish' (new price low, RSI higher) */
+  divergence?: { type: 'bearish' | 'bullish'; rsi_delta: number; price_delta_pct: number } | null;
 }
 
 export interface ConfluenceTimeframeSignal {

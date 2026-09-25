@@ -248,6 +248,11 @@ export const TrendCard = memo(function TrendCard({ trend, confluenceRole, onOpen
   const adxSlopeLabel = trend.adx_slope === 'strengthening' ? '↗ ADX strengthening'
     : trend.adx_slope === 'fading' ? '↘ ADX fading'
     : null; // 'flat' and null both render nothing — flat is expected/boring
+  const divergenceLabel = trend.divergence
+    ? trend.divergence.type === 'bearish'
+      ? `⚠ momentum not confirming high`
+      : `↗ momentum not confirming low`
+    : null;
   const sessionLabel = trend.session === 'after_hours'
     ? 'After-hours'
     : trend.session === 'premarket'
@@ -325,6 +330,14 @@ export const TrendCard = memo(function TrendCard({ trend, confluenceRole, onOpen
         />
       </div>
       <p className="signal-explanation">{signalExplanation(trend)}</p>
+      {divergenceLabel && (
+        <div
+          className={`trend-divergence trend-divergence-${trend.divergence?.type}`}
+          title={`RSI divergence: RSI Δ${(trend.divergence?.rsi_delta ?? 0) > 0 ? '+' : ''}${trend.divergence?.rsi_delta} · price Δ${(trend.divergence?.price_delta_pct ?? 0) > 0 ? '+' : ''}${trend.divergence?.price_delta_pct}%`}
+        >
+          {divergenceLabel}
+        </div>
+      )}
       {changeHistoryLabel && (
         <div className="trend-change-history" title="Direction persistence measured in closed bars for this timeframe.">
           {changeHistoryLabel}

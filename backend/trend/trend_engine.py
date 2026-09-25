@@ -282,6 +282,7 @@ class TrendSignal:
         stop_distance_atr: float | None = None,
         htf_bias: dict[str, Any] | None = None,
         adx_slope: str | None = None,
+        divergence: dict[str, Any] | None = None,
     ):
         self.symbol = symbol
         self.timeframe = timeframe
@@ -328,6 +329,9 @@ class TrendSignal:
         # E3: ADX slope label — 'strengthening', 'fading', or 'flat'.
         # Derived from a rolling 8-bar ADX buffer; None when ADX isn't in the stack.
         self.adx_slope: str | None = adx_slope
+        # E2: RSI-vs-price divergence. None = no divergence detected or insufficient
+        # history. Dict keys: type ('bearish'|'bullish'), rsi_delta, price_delta_pct.
+        self.divergence: dict[str, Any] | None = divergence
         # E4: compact higher-timeframe bias tag so each card is actionable
         # standalone — e.g. {"timeframe": "1h", "direction": "uptrend", "score": 25.1}
         self.htf_bias: dict[str, Any] | None = htf_bias
@@ -415,6 +419,12 @@ class TrendEngine:
         # E3: rolling ADX buffer — last 8 closed-bar ADX readings per timeframe.
         # Used to derive "strengthening" vs "fading" for the card.
         self._adx_history: dict[Timeframe, deque[float]] = {}
+        # E2: rolling bar buffer for divergence detection (last 14 closed bars).
+        # Stores {close, high, low, rsi, macd} per bar per timeframe.
+        self._divergence_bars: dict[Timeframe, deque[dict[str, float]]] = {}
+        # Bridge: _update_from_bar deposits OHLC here before calling
+        # _generate_trend_signals so _analyze_timeframe_trend can read it.
+        self._pending_bar_ohlc: dict[Timeframe, dict[str, float]] = {}
 
         # Initialize indicators for each timeframe
         self.indicators: dict[Timeframe, dict[str, Any]] = {}
@@ -726,6 +736,14 @@ class TrendEngine:
             # delayed, duplicate, and gap bars must not manufacture a
             # persistence reading.
             self._short_momentum_bars[timeframe].append(point)
+        # E2: deposit OHLC for divergence detection. _analyze_timeframe_trend
+        # pops this and pairs it with the freshly-updated RSI/MACD values.
+        if quality == "ok":
+            self._pending_bar_ohlc[timeframe] = {
+                "close": float(close),
+                "high": float(high),
+                "low": float(low),
+            }
         # Keep signal emission on the engine's established generation path.
         # Besides avoiding two subtly different scoring implementations, this
         # preserves replay/backtest instrumentation that intentionally wraps
@@ -1016,6 +1034,24 @@ class TrendEngine:
             buf = self._adx_history.get(timeframe, deque())
         adx_slope = self._compute_adx_slope(buf)
 
+        # E2: populate the divergence bar buffer from the pending closed bar
+        # (deposited by _update_from_bar) combined with the freshly-updated
+        # RSI and MACD values now available in indicator_values.
+        rsi_val = indicator_values.get("rsi")
+        pending_ohlc = self._pending_bar_ohlc.pop(timeframe, None)
+        if pending_ohlc is not None and rsi_val is not None:
+            div_buf = self._divergence_bars.setdefault(timeframe, deque(maxlen=14))
+            div_buf.append({
+                "close": pending_ohlc["close"],
+                "high": pending_ohlc["high"],
+                "low": pending_ohlc["low"],
+                "rsi": float(rsi_val),
+                "macd": float(indicator_values.get("macd") or 0.0),
+            })
+        divergence = self._compute_divergence(
+            self._divergence_bars.get(timeframe, deque())
+        )
+
         # E4: higher-TF bias tag — read last completed signal from the anchor TF.
         # One-bar lag on the higher TF is acceptable; the engine holds all TFs.
         htf_bias: dict[str, Any] | None = None
@@ -1049,6 +1085,7 @@ class TrendEngine:
             stop_distance_atr=stop_distance_atr,
             htf_bias=htf_bias,
             adx_slope=adx_slope,
+            divergence=divergence,
         )
 
     @staticmethod
@@ -1144,6 +1181,58 @@ class TrendEngine:
         if delta < -2.0:
             return "fading"
         return "flat"
+
+    @staticmethod
+    def _compute_divergence(bars: "deque[dict[str, float]]") -> "dict[str, Any] | None":
+        """Detect RSI-vs-price divergence over the last 12 closed bars (E2).
+
+        Splits the window into two 6-bar halves and compares the price peak/trough
+        with the RSI at that same bar. Returns a divergence dict or None.
+
+        Bearish: recent price high > older price high, but RSI at that high is lower
+                 → momentum not confirming the new price peak.
+        Bullish: recent price low < older price low, but RSI at that low is higher
+                 → momentum not confirming the new price trough.
+
+        Thresholds (conservative — avoids noise):
+          price move:  ≥ 0.15%  of the reference bar's price
+          RSI delta:   ≥  4.0 points in the diverging direction
+
+        Returns None when fewer than 8 bars are available.
+        """
+        if len(bars) < 8:
+            return None
+
+        window = list(bars)[-12:]  # up to last 12 bars
+        mid = len(window) // 2
+        older = window[:mid]
+        recent = window[mid:]
+
+        # --- Bearish: price new high, RSI lower high ---
+        older_peak = max(older, key=lambda b: b["high"])
+        recent_peak = max(recent, key=lambda b: b["high"])
+        price_hi_delta = (recent_peak["high"] - older_peak["high"]) / (older_peak["high"] + 1e-9)
+        rsi_hi_delta = recent_peak["rsi"] - older_peak["rsi"]
+        if price_hi_delta > 0.0015 and rsi_hi_delta < -4.0:
+            return {
+                "type": "bearish",
+                "price_delta_pct": round(price_hi_delta * 100, 2),
+                "rsi_delta": round(rsi_hi_delta, 1),
+            }
+
+        # --- Bullish: price new low, RSI higher low ---
+        older_trough = min(older, key=lambda b: b["low"])
+        recent_trough = min(recent, key=lambda b: b["low"])
+        price_lo_delta = (recent_trough["low"] - older_trough["low"]) / (older_trough["low"] + 1e-9)
+        rsi_lo_delta = recent_trough["rsi"] - older_trough["rsi"]
+        if price_lo_delta < -0.0015 and rsi_lo_delta > 4.0:
+            return {
+                "type": "bullish",
+                "price_delta_pct": round(price_lo_delta * 100, 2),
+                "rsi_delta": round(rsi_lo_delta, 1),
+            }
+
+        return None
 
     # Higher-TF bias map (E4): each TF reads its designated anchor's last signal.
     _HTF_FOR_TIMEFRAME: dict["Timeframe", "Timeframe"] = {}  # populated lazily below
