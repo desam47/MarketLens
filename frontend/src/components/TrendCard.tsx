@@ -56,6 +56,24 @@ const evidenceLabels: Record<string, string> = {
   unavailable: 'Unavailable',
 };
 
+const classificationLabels: Record<string, string> = {
+  strong_bullish: 'Strong bullish',
+  bullish: 'Bullish',
+  weak_bullish: 'Weak bullish',
+  neutral: 'Neutral',
+  weak_bearish: 'Weak bearish',
+  bearish: 'Bearish',
+  strong_bearish: 'Strong bearish',
+  no_signal: 'No signal',
+};
+
+// The card never recomputes the bucket; the server derives `classification`
+// from `score`. This tooltip only documents the fixed boundaries so a trader
+// can see how close a score sits to the next classification.
+const scoreThresholdTitle =
+  'Composite score, -100 to +100. Buckets: +70 Strong bullish, +30 Bullish, +10 Weak bullish, ' +
+  '-9 to +9 Neutral, -10 Weak bearish, -30 Bearish, -70 Strong bearish.';
+
 const invalidReasonLabels: Record<string, string> = {
   signal_unavailable: 'Signal unavailable',
   source_timestamp_missing: 'Source timestamp unavailable',
@@ -74,6 +92,14 @@ function formatProvider(provider: string | null | undefined): string | null {
   if (provider === 'aggregated_from_1d') return 'Aggregated from daily';
   if (provider === 'live_from_1m') return 'Live aggregation from 1m';
   return provider.replace(/_/g, ' ').replace(/\b\w/g, character => character.toUpperCase());
+}
+
+function formatSignedScore(score: number | null | undefined): string | null {
+  if (score == null || !Number.isFinite(score)) return null;
+  const rounded = Math.round(score);
+  if (rounded > 0) return `+${rounded}`;
+  if (rounded < 0) return `-${Math.abs(rounded)}`;
+  return '0';
 }
 
 function formatAge(ageSeconds: number | null | undefined): string | null {
@@ -112,6 +138,13 @@ export const TrendCard = memo(function TrendCard({ trend, confluenceRole }: Tren
   const momentum = trend.short_horizon_momentum;
   const momentumColor = momentum ? momentumColors[momentum] || '#9ca3af' : '#9ca3af';
   const confidencePct = (trend.confidence * 100).toFixed(0);
+  const scoreText = formatSignedScore(trend.score);
+  const classificationLabel = trend.classification
+    ? classificationLabels[trend.classification] || trend.classification.replace(/_/g, ' ')
+    : null;
+  const scoreLine = scoreText
+    ? `Score ${scoreText}${classificationLabel ? ` · ${classificationLabel}` : ''}`
+    : classificationLabel;
   const scoring = trend.scoring;
   const scoringProfileText = scoring
     ? `${scoring.label} · ${scoring.components.length} inputs`
@@ -162,6 +195,11 @@ export const TrendCard = memo(function TrendCard({ trend, confluenceRole }: Tren
       <div className="trend-direction" style={{ color }}>
         {trend.direction.replace(/_/g, ' ').toUpperCase()}
       </div>
+      {scoreLine && (
+        <div className="trend-score" title={scoreThresholdTitle} aria-label={scoreLine}>
+          {scoreLine}
+        </div>
+      )}
       <div className="trend-details">
         <div className="trend-detail">
           <span className="detail-label">{isShortHorizon ? 'Momentum' : 'Strength'}</span>

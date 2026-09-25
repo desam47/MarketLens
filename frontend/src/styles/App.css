@@ -1327,6 +1327,15 @@ h4 {
   text-align: center;
 }
 
+.trend-score {
+  text-align: center;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 0.6rem;
+  cursor: help;
+}
+
 .trend-details {
   display: flex;
   justify-content: space-between;

@@ -203,3 +203,46 @@ describe('TrendCard provider provenance (TC-02)', () => {
     expect(screen.queryByText(/unknown/i)).not.toBeInTheDocument();
   });
 });
+
+describe('TrendCard score and classification (TC-07)', () => {
+  it('shows an explicit positive-signed score with its classification', () => {
+    render(<TrendCard trend={trend({ score: 82, classification: 'strong_bullish' })} />);
+
+    expect(screen.getByText('Score +82 · Strong bullish')).toBeInTheDocument();
+  });
+
+  it('shows a negative sign and rounds the score for display', () => {
+    render(<TrendCard trend={trend({ score: -33.2, classification: 'bearish' })} />);
+
+    expect(screen.getByText('Score -33 · Bearish')).toBeInTheDocument();
+  });
+
+  it('renders an unsigned zero at the neutral boundary', () => {
+    render(<TrendCard trend={trend({ score: 0, classification: 'neutral' })} />);
+
+    expect(screen.getByText('Score 0 · Neutral')).toBeInTheDocument();
+  });
+
+  it('exposes the score bucket thresholds through an accessible tooltip', () => {
+    render(<TrendCard trend={trend({ score: 65, classification: 'bullish' })} />);
+
+    expect(screen.getByText('Score +65 · Bullish')).toHaveAttribute(
+      'title',
+      expect.stringContaining('-100 to +100'),
+    );
+  });
+
+  it('shows the classification alone when the score is unavailable', () => {
+    render(<TrendCard trend={trend({ score: null, classification: 'no_signal' })} />);
+
+    expect(screen.getByText('No signal')).toBeInTheDocument();
+    expect(screen.queryByText(/^Score/)).not.toBeInTheDocument();
+  });
+
+  it('renders no score line when neither score nor classification is present', () => {
+    render(<TrendCard trend={trend({ score: null, classification: null })} />);
+
+    expect(screen.queryByText(/^Score/)).not.toBeInTheDocument();
+    expect(screen.queryByText('No signal')).not.toBeInTheDocument();
+  });
+});

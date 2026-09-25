@@ -1,9 +1,9 @@
 # Version 5 Trend Cards Bug Fixes
 
 **Created:** 2026-09-24
-**Last updated:** 2026-09-24 (TC-01, TC-02, TC-03, TC-04, TC-05, and TC-08 complete)
-**Status:** Re-prioritized from a trading-desk perspective: what would actually cost a trader money first, not just severity as originally filed. TC-01's shared Trend and Confluence evidence contract, TC-02's end-to-end provider provenance, TC-03's measured short-horizon momentum display, TC-04's meaningful `Very Strong` boundary, TC-05's profile-aware score contract, and TC-08's explicit Confluence scope are implemented and covered by focused tests. TC-01 and TC-06 describe one underlying fix — a single server-owned evidence contract — and are tracked together under TC-01.
-**Scorecard:** 6 ✅ COMPLETE, 1 ⚠️ PARTIAL, 2 ❌ NOT STARTED, 0 🟡 DEFERRED, 1 folded (TC-06 → TC-01).
+**Last updated:** 2026-09-24 (TC-01, TC-02, TC-03, TC-04, TC-05, TC-07, and TC-08 complete)
+**Status:** Re-prioritized from a trading-desk perspective: what would actually cost a trader money first, not just severity as originally filed. TC-01's shared Trend and Confluence evidence contract, TC-02's end-to-end provider provenance, TC-03's measured short-horizon momentum display, TC-04's meaningful `Very Strong` boundary, TC-05's profile-aware score contract, TC-07's visible score/classification line, and TC-08's explicit Confluence scope are implemented and covered by focused tests. TC-01 and TC-06 describe one underlying fix — a single server-owned evidence contract — and are tracked together under TC-01.
+**Scorecard:** 7 ✅ COMPLETE, 1 ⚠️ PARTIAL, 1 ❌ NOT STARTED, 0 🟡 DEFERRED, 1 folded (TC-06 → TC-01).
 **Source:** 2026-09-24 code, API, and live-payload review of the Dashboard's **Trend by Timeframe** cards at `78a1adc`, re-prioritized the same day from a trading-desk perspective and re-verified live against SPY.
 **Related:** [Phase audit](phase_audit_v5.md), [AI Analysis fixes](v5_ai_analysis.md), [Historical Signals fixes](v5_historical_signal_bug_fixes.md), [Market Data fixes](v5_market_data_bug_fixes.md)
 
@@ -28,7 +28,7 @@ Pre-implementation line numbers refer to the code at `78a1adc`; implementation e
 | TC-05 | High | Methodology | Confidence and score are not comparable across short and long timeframes | Validated | ✅ COMPLETE |
 | TC-02 | High | Provenance | Live intraday Trend cards lose their market-data provider | Verified | ✅ COMPLETE |
 | TC-04 | High | Methodology | Per-timeframe `Very Strong` can never be emitted, and may be silently diluting `Strong` | Verified | ✅ COMPLETE |
-| TC-07 | Medium | UI + contract | Raw score and classification are available but hidden from Trend Cards | Code-read | ❌ NOT STARTED |
+| TC-07 | Medium | UI + contract | Raw score and classification are available but hidden from Trend Cards | Code-read | ✅ COMPLETE |
 | TC-09 | Medium | Workflow | Cards lack change history, indicator attribution, key-level context, and chart handoff | Code-read | ❌ NOT STARTED |
 | TC-10 | Medium | Tests | Direct TrendCard regressions are incomplete | Code-read | ⚠️ PARTIAL |
 | ~~TC-06~~ | — | — | ~~Cards cannot explain warming, invalid, delayed, or unavailable evidence~~ — folded into TC-01, same evidence contract | Verified | folded |
@@ -179,7 +179,7 @@ A second, more concrete risk than "advertises a state no one sees": if the top b
 
 ### TC-07 — Raw score and classification are available but hidden from Trend Cards
 
-**Status:** ❌ NOT STARTED
+**Status:** ✅ COMPLETE
 **Where:** Trend API returns `score` and `classification` (`backend/api/trend/router.py:62`), but `TrendData` and `TrendCard` omit them (`frontend/src/services/api.ts:64`, `frontend/src/components/TrendCard.tsx:55`).
 
 The same 1m state can appear as `DOWNTREND / 55%` on a Trend Card and `Bearish / −33` in Multi-Timeframe Confluence. Both are valid representations of the same source signal, but the dashboard does not make their relationship visible.
@@ -188,7 +188,9 @@ The same 1m state can appear as `DOWNTREND / 55%` on a Trend Card and `Bearish /
 
 **Resolution:** show a compact, explicit line: `Score −33 · Bearish`, with a tooltip that states score range and thresholds. Keep confidence distinct and describe it as indicator agreement, not win probability.
 
-**Tests:** require positive/negative signs, every score classification boundary, and an accessible tooltip / label.
+**Implementation (2026-09-24):** `TrendData` now carries the `score` and `classification` the API already returned. `TrendCard` renders a compact `Score +82 · Strong bullish` line beneath the direction, with a `title` tooltip documenting the fixed `-100..+100` buckets. The score is explicitly signed (`+82`, `-33`) and rounded for display; exact zero renders unsigned. The card never recomputes the bucket — it displays the server-derived `classification` verbatim — so display and the confluence summary can never disagree on the boundary. When the score is unavailable the card shows the classification alone (e.g. `No signal`), and renders nothing when neither is present. Agreement stays a separate labelled field (TC-05), not folded into this line.
+
+**Tests:** the `classify_score` boundaries were already exhaustively covered (`backend/tests/trend/test_classification.py`), so this fix adds card-side coverage in `frontend/src/components/TrendCard.test.tsx`: positive sign + classification, negative sign with rounding, unsigned neutral zero, the accessible threshold tooltip, classification-only rendering when the score is missing, and no line when both are absent.
 
 ### TC-09 — Cards lack change history, indicator attribution, key-level context, and chart handoff
 
@@ -208,7 +210,7 @@ The backend retains trend history and the card has the current direction, streng
 **Status:** ⚠️ PARTIAL
 **Where:** Dashboard tests mock `TrendCard` (`frontend/src/pages/Dashboard.test.tsx:10`); direct coverage now exists in `frontend/src/components/TrendCard.test.tsx`, but only for completed TC-01 and TC-03 contracts.
 
-Focused engine tests cover closed-bar processing and confidence bounds, and registry tests cover warm-up / dispatch behaviour. Direct card tests now cover evidence state/age, unavailable and warming states, short-horizon momentum wording, and provider provenance (TC-02: mixed, derived-aggregate, live-1m, trend-level fallback, hidden `unknown`). They do not yet cover score/classification display, history, or chart handoff.
+Focused engine tests cover closed-bar processing and confidence bounds, and registry tests cover warm-up / dispatch behaviour. Direct card tests now cover evidence state/age, unavailable and warming states, short-horizon momentum wording, provider provenance (TC-02), and score/classification display with signs and threshold tooltip (TC-07). They do not yet cover change history or chart handoff (TC-09).
 
 **Corrected in this pass:** the original resolution said tests come "before each Batch 1 change," while the original batch plan placed TC-10 in Batch 3, after every other fix — a direct contradiction that would have left Batch 1 unprotected while it was actually being built. There is no separate "testing batch." Each finding's own **Tests** section is written alongside that finding's fix, in whichever batch it falls in. This entry stays open only to track whether a `TrendCard.test.tsx` exists at all and whether it covers every truth-state contract by the time TC-01 through TC-09 are done — it is a completeness check, not a batch of its own.
 
@@ -275,7 +277,8 @@ No code changed in this pass — re-verification and re-ranking only, ahead of i
 | 2026-09-24 | TC-04 | ✅ COMPLETE | `0c894f6` | `backend/trend/trend_engine.py`, `backend/tests/trend/test_trend_engine.py`, `frontend/src/components/TrendCard.test.tsx`, `docs/Version_5/v5_trend_cards_bug_fixes.md` | 191 focused Trend/MTF/AI-contract backend tests passed; 11 TrendCard/ConfluenceCard tests passed; production frontend build passed | Made `Very Strong` reachable only for ADX > 50 plus DI-balance and composite-score confirmation, using the active-watchlist distribution to select the boundary. |
 | 2026-09-24 | TC-08 | ✅ COMPLETE | `aaa8af3` | `frontend/src/pages/Dashboard.tsx`, `frontend/src/pages/Dashboard.test.tsx`, `frontend/src/components/TrendCard.tsx`, `frontend/src/styles/App.css`, `docs/Version_5/v5_trend_cards_bug_fixes.md` | 15 focused Dashboard/TrendCard/ConfluenceCard tests passed; production frontend build passed; live browser verified Day Trading scope and Show all roles | Made the actual backend Confluence input set visible and filterable, with explicit roles for all inspected cards. |
 | 2026-09-24 | TC-05 | ✅ COMPLETE | `ee0173a` | `backend/trend/trend_engine.py`, `backend/api/trend/router.py`, `backend/multitimeframe/multi_timeframe_engine.py`, `backend/api/multitimeframe/router.py`, focused backend tests, `frontend/src/components/TrendCard.tsx`, `frontend/src/components/ConfluenceCard.tsx`, frontend API types/styles/tests, `docs/Version_5/v5_trend_cards_bug_fixes.md` | 99 focused backend tests passed; 16 focused frontend tests passed; production frontend build passed | Declared profile-specific score semantics, rendered them, and changed Confluence from raw-score/agreement aggregation to source-quality-weighted directional votes. Local live API check was unavailable because port 5001 was not listening; API behavior is covered by FastAPI contract tests. |
-| 2026-09-24 | TC-02 | ✅ COMPLETE | pending | `backend/market_data/services/engine_seeder.py`, `backend/market_data/services/ingestion_service.py`, `backend/trend/trend_engine.py`, `frontend/src/components/TrendCard.tsx`, `backend/tests/test_engine_seeding.py`, `backend/tests/trend/test_trend_engine.py`, `frontend/src/components/TrendCard.test.tsx`, `docs/Version_5/v5_trend_cards_bug_fixes.md` | 20 focused backend tests passed (7 new: dispatch forwarding + `_merged_provider`/live-aggregate provenance); 14 TrendCard tests passed (5 new provenance cases) | Carried `provider` through `dispatch_bar` and all three ingestion dispatch sites; all `bar:{tf}` consumers absorb the new kwarg without breaking. Live aggregates report `mixed` when sources disagree; the card renders a compact provider label and hides bare `unknown`. |
+| 2026-09-24 | TC-02 | ✅ COMPLETE | `d4998b0` | `backend/market_data/services/engine_seeder.py`, `backend/market_data/services/ingestion_service.py`, `backend/trend/trend_engine.py`, `frontend/src/components/TrendCard.tsx`, `backend/tests/test_engine_seeding.py`, `backend/tests/trend/test_trend_engine.py`, `frontend/src/components/TrendCard.test.tsx`, `docs/Version_5/v5_trend_cards_bug_fixes.md` | 20 focused backend tests passed (7 new: dispatch forwarding + `_merged_provider`/live-aggregate provenance); 14 TrendCard tests passed (5 new provenance cases) | Carried `provider` through `dispatch_bar` and all three ingestion dispatch sites; all `bar:{tf}` consumers absorb the new kwarg without breaking. Live aggregates report `mixed` when sources disagree; the card renders a compact provider label and hides bare `unknown`. Also backfilled the TC-05/TC-08 commit hashes. |
+| 2026-09-24 | TC-07 | ✅ COMPLETE | pending | `frontend/src/services/api.ts`, `frontend/src/components/TrendCard.tsx`, `frontend/src/styles/App.css`, `frontend/src/components/TrendCard.test.tsx`, `docs/Version_5/v5_trend_cards_bug_fixes.md` | `classify_score` boundaries already covered by `backend/tests/trend/test_classification.py`; 20 TrendCard tests passed (6 new score/classification cases); tsc --noEmit clean | Surfaced the server's existing `score`/`classification` as a compact signed `Score +82 · Strong bullish` line with a threshold tooltip. The card displays the server-derived bucket verbatim; agreement stays a separate field. |
 
 ---
 

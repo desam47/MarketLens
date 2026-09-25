@@ -100,6 +100,10 @@ export interface TrendData {
   short_horizon_momentum?: 'choppy' | 'developing' | 'persistent' | null;
   short_horizon_momentum_score?: number | null;
   confidence: number;
+  /** Composite -100..+100 trend score. Derived classification lives in `classification`. */
+  score?: number | null;
+  /** 8-class bucket derived server-side from `score` (e.g. 'strong_bullish', 'no_signal'). */
+  classification?: string | null;
   timestamp: string | null;
   data_age_seconds?: number | null;
   data_status?: string | null;
