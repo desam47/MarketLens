@@ -66,6 +66,16 @@ const invalidReasonLabels: Record<string, string> = {
   source_stale: 'Source is stale',
 };
 
+function formatProvider(provider: string | null | undefined): string | null {
+  if (!provider || provider === 'unknown') return null;
+  if (provider === 'mixed') return 'Mixed sources';
+  if (provider === 'aggregated_from_1m') return 'Aggregated from 1m';
+  if (provider === 'aggregated_from_1h') return 'Aggregated from 1h';
+  if (provider === 'aggregated_from_1d') return 'Aggregated from daily';
+  if (provider === 'live_from_1m') return 'Live aggregation from 1m';
+  return provider.replace(/_/g, ' ').replace(/\b\w/g, character => character.toUpperCase());
+}
+
 function formatAge(ageSeconds: number | null | undefined): string | null {
   if (ageSeconds == null || !Number.isFinite(ageSeconds)) return null;
   const seconds = Math.max(0, Math.round(ageSeconds));
@@ -120,6 +130,7 @@ export const TrendCard = memo(function TrendCard({ trend, confluenceRole }: Tren
     ? invalidReasonLabels[evidence.invalid_reason] || evidence.invalid_reason.replace(/^data_status_/, '').replace(/_/g, ' ')
     : null;
   const sourceAsOf = evidence?.source_as_of ?? trend.timestamp;
+  const providerLabel = formatProvider(evidence?.provider ?? trend.provider);
   const sessionLabel = trend.session === 'after_hours'
     ? 'After-hours'
     : trend.session === 'premarket'
@@ -189,7 +200,7 @@ export const TrendCard = memo(function TrendCard({ trend, confluenceRole }: Tren
       <div className="trend-provenance">
         <span>{statusLabel}</span>
         <span>{sessionLabel}</span>
-        {trend.provider && <span>{trend.provider}</span>}
+        {providerLabel && <span>{providerLabel}</span>}
         {sourceAsOf && <span>As of {formatETDateTime(sourceAsOf)}</span>}
       </div>
     </div>

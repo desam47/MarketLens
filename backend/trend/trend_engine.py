@@ -687,6 +687,18 @@ class TrendEngine:
         if timeframe == Timeframe.ONE_MINUTE and aggregate_live_1m:
             self._aggregate_live_bar(point, timestamp, provider, quality, session)
 
+    @staticmethod
+    def _merged_provider(existing: str | None, incoming: str | None) -> str:
+        """Keep aggregate provenance truthful when source providers change.
+
+        A resampled candle represents more than one source bar. Once sources
+        disagree (including a missing provider), returning the newest source
+        would falsely imply the whole candle came from it, so expose ``mixed``.
+        """
+        current = (existing or "unknown").strip() or "unknown"
+        candidate = (incoming or "unknown").strip() or "unknown"
+        return current if current == candidate else "mixed"
+
     def _aggregate_live_bar(
         self,
         point: dict[str, float],
@@ -749,6 +761,7 @@ class TrendEngine:
             current["low"] = min(current["low"], point["low"])
             current["close"] = point["close"]
             current["volume"] += point["volume"]
+            current["provider"] = self._merged_provider(current.get("provider"), provider)
             if session and current["session"] != session:
                 current["session"] = "mixed"
             if current["data_status"] == "ok" and data_status != "ok":

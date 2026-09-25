@@ -159,3 +159,47 @@ describe('TrendCard evidence contract', () => {
     expect(screen.getByText('Source is stale')).toBeInTheDocument();
   });
 });
+
+describe('TrendCard provider provenance (TC-02)', () => {
+  it('names a mixed-source aggregate instead of a single misleading provider', () => {
+    render(<TrendCard trend={trend({
+      evidence: { ...trend().evidence!, provider: 'mixed' },
+    })} />);
+
+    expect(screen.getByText('Mixed sources')).toBeInTheDocument();
+  });
+
+  it('renders a readable label for a derived aggregate source', () => {
+    render(<TrendCard trend={trend({
+      evidence: { ...trend().evidence!, provider: 'aggregated_from_1m' },
+    })} />);
+
+    expect(screen.getByText('Aggregated from 1m')).toBeInTheDocument();
+  });
+
+  it('renders live 1m aggregation provenance', () => {
+    render(<TrendCard trend={trend({
+      evidence: { ...trend().evidence!, provider: 'live_from_1m' },
+    })} />);
+
+    expect(screen.getByText('Live aggregation from 1m')).toBeInTheDocument();
+  });
+
+  it('falls back to the trend-level provider when evidence carries none', () => {
+    render(<TrendCard trend={trend({
+      provider: 'alpaca',
+      evidence: { ...trend().evidence!, provider: null },
+    })} />);
+
+    expect(screen.getByText('Alpaca')).toBeInTheDocument();
+  });
+
+  it('hides provenance entirely rather than showing a bare "unknown"', () => {
+    render(<TrendCard trend={trend({
+      provider: 'unknown',
+      evidence: { ...trend().evidence!, provider: 'unknown' },
+    })} />);
+
+    expect(screen.queryByText(/unknown/i)).not.toBeInTheDocument();
+  });
+});

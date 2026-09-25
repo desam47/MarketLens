@@ -254,6 +254,7 @@ class EngineRegistry:
         price: float,
         volume: float,
         timestamp,
+        provider: str | None = None,
         high: float | None = None,
         low: float | None = None,
         open_price: float | None = None,
@@ -263,7 +264,7 @@ class EngineRegistry:
         """Fan out a fresh bar to engines registered for that timeframe on this symbol.
 
         Callbacks are invoked with the full bar context: ``symbol``, ``timeframe``,
-        ``price``, ``volume``, ``timestamp`` plus optional OHLCV. Engine
+        ``price``, ``volume``, ``timestamp``, provider, plus optional OHLCV. Engine
         ``update()`` methods should accept these as ``**kwargs`` (or
         explicitly named params) to remain forward-compatible.
         """
@@ -288,6 +289,7 @@ class EngineRegistry:
                     price=price,
                     volume=volume,
                     timestamp=timestamp,
+                    provider=provider,
                     high=high,
                     low=low,
                     open_price=open_price,

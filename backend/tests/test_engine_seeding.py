@@ -238,6 +238,38 @@ class TestEngineRegistry(unittest.TestCase):
         self.assertEqual(n_1d, 1)
         self.assertEqual(received, ["1h", "1d"])
 
+    def test_dispatch_bar_forwards_provider(self):
+        """TC-02: dispatch_bar must forward the originating provider to callbacks.
+
+        Before this fix the bar dispatch path carried OHLCV, timestamp, status,
+        and session but not the provider, so ``TrendEngine.update`` fell back to
+        its empty default and every live intraday card reported ``unknown``.
+        """
+        captured = {}
+
+        self.registry.register("bar:1m", "AAPL", lambda **kw: captured.update(kw))
+        n = self.registry.dispatch_bar(
+            "AAPL",
+            "1m",
+            price=100,
+            volume=1,
+            timestamp=datetime.now(UTC),
+            provider="alpaca",
+        )
+
+        self.assertEqual(n, 1)
+        self.assertEqual(captured.get("provider"), "alpaca")
+
+    def test_dispatch_bar_provider_defaults_to_none(self):
+        """A caller that omits provider still dispatches; provider is None, not missing."""
+        captured = {}
+
+        self.registry.register("bar:1m", "AAPL", lambda **kw: captured.update(kw))
+        self.registry.dispatch_bar("AAPL", "1m", price=100, volume=1, timestamp=datetime.now(UTC))
+
+        self.assertIn("provider", captured)
+        self.assertIsNone(captured["provider"])
+
     def test_dispatch_is_safe_when_no_callbacks_registered(self):
         """dispatch_* must return 0 and not raise when no engine is registered."""
         n = self.registry.dispatch_quote("MISSING", price=0, volume=0, timestamp=datetime.now())

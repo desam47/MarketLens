@@ -713,5 +713,62 @@ class TestPhase6Scenarios(unittest.TestCase):
         self.assertLessEqual(signal.confidence, 1.0)
 
 
+class TestTrendProviderProvenance(unittest.TestCase):
+    """TC-02: a resampled candle must report truthful source provenance.
+
+    A live higher-timeframe bar is aggregated from several 1m source bars. When
+    those sources agree the aggregate keeps that provider; when they disagree
+    (including a missing provider on one side) returning the newest source would
+    imply the whole candle came from it, so the aggregate must report ``mixed``.
+    """
+
+    def setUp(self):
+        self.engine = TrendEngine("SPY")
+
+    def test_merged_provider_keeps_a_single_agreeing_source(self):
+        self.assertEqual(TrendEngine._merged_provider("alpaca", "alpaca"), "alpaca")
+
+    def test_merged_provider_flags_disagreeing_sources_as_mixed(self):
+        self.assertEqual(TrendEngine._merged_provider("alpaca", "webull"), "mixed")
+
+    def test_merged_provider_treats_a_missing_side_as_disagreement(self):
+        self.assertEqual(TrendEngine._merged_provider("webull", None), "mixed")
+        self.assertEqual(TrendEngine._merged_provider(None, "webull"), "mixed")
+
+    def test_merged_provider_defaults_to_unknown_when_both_missing(self):
+        self.assertEqual(TrendEngine._merged_provider(None, None), "unknown")
+        self.assertEqual(TrendEngine._merged_provider("", "   "), "unknown")
+
+    def test_merged_provider_ignores_surrounding_whitespace(self):
+        self.assertEqual(TrendEngine._merged_provider("  webull ", "webull"), "webull")
+
+    def _point(self, close: float) -> dict[str, float]:
+        return {"open": close, "high": close, "low": close, "close": close, "volume": 1_000}
+
+    def test_live_aggregate_keeps_provider_when_sources_agree(self):
+        from backend.trend.trend_engine import NY
+
+        start = datetime(2026, 9, 24, 10, 0, tzinfo=NY)
+        self.engine._aggregate_live_bar(self._point(100.0), start, "alpaca", "ok", "regular")
+        self.engine._aggregate_live_bar(
+            self._point(100.5), start + timedelta(minutes=1), "alpaca", "ok", "regular"
+        )
+
+        agg = self.engine._live_aggregates[Timeframe.TWO_MINUTE]
+        self.assertEqual(agg["provider"], "alpaca")
+
+    def test_live_aggregate_reports_mixed_when_sources_disagree(self):
+        from backend.trend.trend_engine import NY
+
+        start = datetime(2026, 9, 24, 10, 0, tzinfo=NY)
+        self.engine._aggregate_live_bar(self._point(100.0), start, "alpaca", "ok", "regular")
+        self.engine._aggregate_live_bar(
+            self._point(100.5), start + timedelta(minutes=1), "webull", "ok", "regular"
+        )
+
+        agg = self.engine._live_aggregates[Timeframe.TWO_MINUTE]
+        self.assertEqual(agg["provider"], "mixed")
+
+
 if __name__ == "__main__":
     unittest.main()
