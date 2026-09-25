@@ -60,9 +60,14 @@ _TF_ST_MULTIPLIER: dict[Timeframe, float] = {
 # the extra lag for on the noisiest short timeframes — longer timeframes
 # already lag from the tighter multiplier above and don't need it.
 _TF_ST_CONFIRMATION: dict[Timeframe, int] = {
-    Timeframe.ONE_MINUTE: 2,
-    Timeframe.TWO_MINUTE: 2,
-    Timeframe.THREE_MINUTE: 1,
+    # TREND_SIGNAL_V2: fast TFs use immediate flip (confirmation=0) — the wide
+    # bands (20-bar ATR × 4.0 multiplier) prevent whipsaw naturally, and the
+    # ADX range gate (ADX<20 → SIDEWAYS) handles the choppy-market case that
+    # confirmation was protecting against. Keeping confirmation here caused a
+    # 3-bar lag on 1m before a flip registered, making live cards visibly wrong.
+    Timeframe.ONE_MINUTE: 0,
+    Timeframe.TWO_MINUTE: 0,
+    Timeframe.THREE_MINUTE: 0,
     Timeframe.FIVE_MINUTE: 1,
 }
 
@@ -1451,7 +1456,13 @@ class TrendEngine:
                         regime_factor = min(1.0, adx_value / _ADX_RANGE_GATE)
                     else:
                         regime_factor = 1.0  # no ADX data — don't suppress
-                    conviction = abs(avg_signal)
+                    # Conviction = how strongly the components AGREE with
+                    # SuperTrend's direction. If avg_signal opposes direction_sign
+                    # (e.g. MACD+RSI bearish while ST is still in uptrend), conviction
+                    # is 0 → score ≈ 0 → NEUTRAL, not a confident uptrend signal.
+                    # abs(avg_signal) was the original formula but it used bearish
+                    # component magnitude to report "confident uptrend", which is wrong.
+                    conviction = max(0.0, avg_signal * direction_sign)
                     raw_score = max(
                         -100.0, min(100.0, direction_sign * regime_factor * conviction * 100.0)
                     )
