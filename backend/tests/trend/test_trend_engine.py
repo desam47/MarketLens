@@ -119,7 +119,7 @@ class TestTrendEngine(unittest.TestCase):
             "adx": 55.0,
         }
 
-        _, strength, _, score, _ = self.engine._calculate_trend(
+        _, strength, _, score, _, _ = self.engine._calculate_trend(
             Timeframe.FIFTEEN_MINUTE, values, atr, adx
         )
 
@@ -141,7 +141,7 @@ class TestTrendEngine(unittest.TestCase):
             "adx": 55.0,
         }
 
-        _, strength, _, score, _ = self.engine._calculate_trend(
+        _, strength, _, score, _, _ = self.engine._calculate_trend(
             Timeframe.FIFTEEN_MINUTE, values, atr, adx
         )
 
@@ -848,6 +848,92 @@ class TestTrendChangeHistory(unittest.TestCase):
         )
         # The reversal produced at least one observed direction change.
         self.assertTrue(history["witnessed_change"])
+
+
+class TestTrendAttributionAndKeyLevels(unittest.TestCase):
+    """TC-09: cards can show which indicators drove the score and where the
+    relevant price levels sit."""
+
+    def _feed_daily_uptrend(self) -> tuple[TrendEngine, Timeframe]:
+        engine = TrendEngine("SPY")
+        tf = Timeframe.ONE_DAY
+        base = datetime(2026, 1, 1)
+        for i in range(80):
+            close = 100 + i
+            engine.update(
+                price=close,
+                open_price=close - 0.5,
+                high=close + 1,
+                low=close - 1,
+                volume=1_000_000,
+                timestamp=base + timedelta(days=i),
+                timeframe=tf,
+                only_timeframe=tf,
+                data_status="HISTORICAL",
+                session="regular",
+            )
+        return engine, tf
+
+    def test_attribution_lists_named_components_that_sum_to_the_score(self):
+        engine, tf = self._feed_daily_uptrend()
+        signal = engine.get_current_trend(tf)
+        self.assertIsNotNone(signal)
+        self.assertTrue(signal.attribution)
+
+        full_stack = {
+            "EMA", "RSI", "MACD", "ADX/DI", "SuperTrend", "Bollinger", "Relative volume", "ROC",
+        }
+        for entry in signal.attribution:
+            self.assertIn(entry["component"], full_stack)
+            self.assertIn("signal", entry)
+            self.assertIn("weight", entry)
+            self.assertIn("contribution", entry)
+
+        # Contributions are each component's share of the -100..+100 score, so
+        # they sum back to it (within rounding).
+        total = sum(entry["contribution"] for entry in signal.attribution)
+        self.assertAlmostEqual(total, signal.score, delta=1.0)
+        # Sorted by absolute impact, largest first.
+        magnitudes = [abs(entry["contribution"]) for entry in signal.attribution]
+        self.assertEqual(magnitudes, sorted(magnitudes, reverse=True))
+
+    def test_full_stack_timeframe_exposes_supertrend_and_bollinger_levels(self):
+        engine, tf = self._feed_daily_uptrend()
+        signal = engine.get_current_trend(tf)
+        self.assertIsNotNone(signal)
+
+        self.assertIn("supertrend", signal.key_levels)
+        self.assertIn("flip_price", signal.key_levels["supertrend"])
+        self.assertEqual(signal.key_levels["supertrend"]["direction"], "up")
+
+        self.assertIn("bollinger", signal.key_levels)
+        bands = signal.key_levels["bollinger"]
+        self.assertGreaterEqual(bands["upper"], bands["middle"])
+        self.assertGreaterEqual(bands["middle"], bands["lower"])
+
+    def test_short_horizon_timeframe_has_no_supertrend_or_bollinger_levels(self):
+        engine = TrendEngine("SPY")
+        tf = Timeframe.ONE_MINUTE
+        base = datetime(2026, 1, 1, 10, 0)
+        for i in range(80):
+            close = 100 + i * 0.1
+            engine.update(
+                price=close,
+                open_price=close - 0.02,
+                high=close + 0.05,
+                low=close - 0.05,
+                volume=10_000,
+                timestamp=base + timedelta(minutes=i),
+                timeframe=tf,
+                only_timeframe=tf,
+                data_status="HISTORICAL",
+                session="regular",
+            )
+        signal = engine.get_current_trend(tf)
+        self.assertIsNotNone(signal)
+        # 1m omits SuperTrend and Bollinger, so no levels for them.
+        self.assertNotIn("supertrend", signal.key_levels)
+        self.assertNotIn("bollinger", signal.key_levels)
 
 
 if __name__ == "__main__":

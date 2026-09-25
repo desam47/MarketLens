@@ -92,6 +92,20 @@ export interface TrendChangeHistory {
   witnessed_change: boolean;
 }
 
+/** One indicator's share of the -100..+100 composite score (TC-09). */
+export interface TrendComponentContribution {
+  component: string;
+  signal: number;
+  weight: number;
+  contribution: number;
+}
+
+/** Available indicator price levels for a timeframe (TC-09); omitted where not calculated. */
+export interface TrendKeyLevels {
+  supertrend?: { flip_price: number; direction: string; band_distance_atr: number | null };
+  bollinger?: { upper: number; middle: number; lower: number };
+}
+
 /** Declares the indicator stack behind a Trend score; it is not an outcome calibration. */
 export interface TrendScoringProfile {
   id: 'directional_core' | 'intraday_directional' | 'full_technical' | string;
@@ -124,6 +138,8 @@ export interface TrendData {
   scoring?: TrendScoringProfile;
   evidence?: TrendEvidence;
   change_history?: TrendChangeHistory | null;
+  attribution?: TrendComponentContribution[];
+  key_levels?: TrendKeyLevels;
 }
 
 export interface ConfluenceTimeframeSignal {

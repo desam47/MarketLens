@@ -1346,6 +1346,42 @@ h4 {
   cursor: help;
 }
 
+.trend-key-levels {
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+  margin-bottom: 0.5rem;
+  cursor: help;
+}
+
+.trend-attribution {
+  font-size: 0.7rem;
+  margin-bottom: 0.5rem;
+}
+
+.trend-attribution > summary {
+  cursor: pointer;
+  color: var(--text-muted);
+  user-select: none;
+}
+
+.trend-attribution ul {
+  list-style: none;
+  margin: 0.35rem 0 0;
+  padding: 0;
+}
+
+.trend-attribution li {
+  display: flex;
+  justify-content: space-between;
+  padding: 0.1rem 0;
+  color: var(--text-secondary);
+}
+
+.trend-attribution-value {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
 .trend-details {
   display: flex;
   justify-content: space-between;

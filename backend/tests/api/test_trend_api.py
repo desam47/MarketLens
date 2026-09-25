@@ -101,6 +101,27 @@ class TestTrendBatchAPI(unittest.TestCase):
         self.assertIsInstance(change["changed_at"], str)
         self.assertNotEqual(change["changed_at"], "")
 
+    def test_batch_serializes_attribution_and_key_levels(self):
+        signal = _make_signal("AAPL", Timeframe.ONE_DAY, TrendDirection.UPTREND)
+        signal.attribution = [
+            {"component": "EMA", "signal": 0.9, "weight": 1.5, "contribution": 40.0},
+            {"component": "RSI", "signal": 0.4, "weight": 1.0, "contribution": 12.0},
+        ]
+        signal.key_levels = {
+            "supertrend": {"flip_price": 231.4, "direction": "up", "band_distance_atr": 1.2},
+            "bollinger": {"upper": 240.0, "middle": 232.0, "lower": 224.0},
+        }
+        self.mock_engine.get_current_trend.side_effect = lambda tf: signal
+
+        response = self.client.get("/api/trend/AAPL/batch?timeframes=1d")
+
+        self.assertEqual(response.status_code, 200)
+        row = response.json()[0]
+        self.assertEqual(row["attribution"][0]["component"], "EMA")
+        self.assertEqual(row["attribution"][0]["contribution"], 40.0)
+        self.assertEqual(row["key_levels"]["supertrend"]["flip_price"], 231.4)
+        self.assertEqual(row["key_levels"]["bollinger"]["upper"], 240.0)
+
     def test_batch_omits_change_history_before_any_closed_bar(self):
         signal = _make_signal("AAPL", Timeframe.ONE_HOUR, TrendDirection.UPTREND)
         self.mock_engine.get_current_trend.side_effect = lambda tf: signal

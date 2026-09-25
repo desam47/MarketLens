@@ -71,7 +71,8 @@ def _build_trend_payload(engine, sym: str, timeframe: str, tf) -> dict:
         metadata = {}
     evidence = _trend_evidence(engine, timeframe, trend_signal, metadata)
     scoring = scoring_profile_for_timeframe(tf).to_payload()
-    change_history = _serialize_change_history(engine.get_trend_change_history(tf))
+    change_getter = getattr(engine, "get_trend_change_history", None)
+    change_history = _serialize_change_history(change_getter(tf) if callable(change_getter) else None)
     if trend_signal is None:
         return {
             "symbol": sym,
@@ -90,6 +91,8 @@ def _build_trend_payload(engine, sym: str, timeframe: str, tf) -> dict:
             "bar_closed": evidence["bar_closed"],
             "evidence": evidence,
             "change_history": change_history,
+            "attribution": [],
+            "key_levels": {},
         }
     return {
         "symbol": trend_signal.symbol,
@@ -119,6 +122,8 @@ def _build_trend_payload(engine, sym: str, timeframe: str, tf) -> dict:
         "bar_closed": evidence["bar_closed"],
         "evidence": evidence,
         "change_history": change_history,
+        "attribution": getattr(trend_signal, "attribution", None) or [],
+        "key_levels": getattr(trend_signal, "key_levels", None) or {},
     }
 
 

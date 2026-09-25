@@ -1,5 +1,5 @@
 import React, { memo } from 'react';
-import { TrendData, TrendChangeHistory } from '../services/api';
+import { TrendData, TrendChangeHistory, TrendKeyLevels } from '../services/api';
 import { formatETDateTime } from './chartMath';
 
 interface TrendCardProps {
@@ -112,6 +112,24 @@ function formatChangeHistory(change: TrendChangeHistory | null | undefined): str
   return `Held ${bars}+ ${unit}`;
 }
 
+function formatSignedContribution(value: number): string {
+  const rounded = Math.round(value * 10) / 10;
+  return rounded > 0 ? `+${rounded}` : `${rounded}`;
+}
+
+function formatKeyLevels(levels: TrendKeyLevels | undefined): string[] {
+  if (!levels) return [];
+  const parts: string[] = [];
+  if (levels.supertrend) {
+    const arrow = levels.supertrend.direction === 'up' ? '↑' : '↓';
+    parts.push(`SuperTrend ${arrow} ${levels.supertrend.flip_price}`);
+  }
+  if (levels.bollinger) {
+    parts.push(`Bollinger ${levels.bollinger.lower}–${levels.bollinger.upper}`);
+  }
+  return parts;
+}
+
 function formatSignedScore(score: number | null | undefined): string | null {
   if (score == null || !Number.isFinite(score)) return null;
   const rounded = Math.round(score);
@@ -164,6 +182,8 @@ export const TrendCard = memo(function TrendCard({ trend, confluenceRole, onOpen
     ? `Score ${scoreText}${classificationLabel ? ` · ${classificationLabel}` : ''}`
     : classificationLabel;
   const changeHistoryLabel = formatChangeHistory(trend.change_history);
+  const attribution = trend.attribution ?? [];
+  const keyLevelParts = formatKeyLevels(trend.key_levels);
   const scoring = trend.scoring;
   const scoringProfileText = scoring
     ? `${scoring.label} · ${scoring.components.length} inputs`
@@ -264,6 +284,28 @@ export const TrendCard = memo(function TrendCard({ trend, confluenceRole, onOpen
         <div className="trend-change-history" title="Direction persistence measured in closed bars for this timeframe.">
           {changeHistoryLabel}
         </div>
+      )}
+      {keyLevelParts.length > 0 && (
+        <div className="trend-key-levels" title="Available indicator price levels for this timeframe.">
+          {keyLevelParts.join(' · ')}
+        </div>
+      )}
+      {attribution.length > 0 && (
+        <details
+          className="trend-attribution"
+          onClick={event => event.stopPropagation()}
+          onKeyDown={event => event.stopPropagation()}
+        >
+          <summary>Why this score</summary>
+          <ul>
+            {attribution.map(entry => (
+              <li key={entry.component}>
+                <span>{entry.component}</span>
+                <span className="trend-attribution-value">{formatSignedContribution(entry.contribution)}</span>
+              </li>
+            ))}
+          </ul>
+        </details>
       )}
       {freshnessLabel && (
         <div

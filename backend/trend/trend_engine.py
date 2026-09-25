@@ -269,6 +269,8 @@ class TrendSignal:
         data_quality: str = "ok",
         short_horizon_momentum: ShortHorizonMomentum | None = None,
         short_horizon_momentum_score: float | None = None,
+        attribution: list[dict[str, Any]] | None = None,
+        key_levels: dict[str, Any] | None = None,
     ):
         self.symbol = symbol
         self.timeframe = timeframe
@@ -301,6 +303,12 @@ class TrendSignal:
         # the default ADX-style ``strength`` is a measurement.
         self.short_horizon_momentum = short_horizon_momentum
         self.short_horizon_momentum_score = short_horizon_momentum_score
+        # TC-09: per-component contributions to this score (name/signal/weight/
+        # contribution), and available indicator price levels (SuperTrend flip,
+        # Bollinger edges). Both are optional and default empty for callers that
+        # construct a signal without the engine's scoring internals.
+        self.attribution: list[dict[str, Any]] = attribution or []
+        self.key_levels: dict[str, Any] = key_levels or {}
         self.indicators: dict[str, Any] = {}
 
     def __repr__(self):
@@ -900,6 +908,7 @@ class TrendEngine:
         atr_ind: BaseIndicator | None = None
         adx_ind: BaseIndicator | None = None
         supertrend_ind: BaseIndicator | None = None
+        bollinger_ind: BaseIndicator | None = None
         for name, ind in indicators.items():
             try:
                 indicator_values[name] = ind.get_latest()
@@ -913,6 +922,8 @@ class TrendEngine:
                 adx_ind = ind
             elif n == "SuperTrend":
                 supertrend_ind = ind
+            elif n == "Bollinger_Bands":
+                bollinger_ind = ind
 
         # Skip if we don't have enough data
         if all(v is None for v in indicator_values.values()):
@@ -926,10 +937,11 @@ class TrendEngine:
         result = self._calculate_trend(
             timeframe, indicator_values, scoring_atr, adx_ind, supertrend_ind
         )
-        direction, strength, confidence, raw_score, classification = result
+        direction, strength, confidence, raw_score, classification, attribution = result
         short_momentum, short_momentum_score = self._short_horizon_momentum(
             timeframe, atr_value=indicator_values.get("atr")
         )
+        key_levels = self._extract_key_levels(supertrend_ind, bollinger_ind)
 
         return TrendSignal(
             symbol=self.symbol,
@@ -943,7 +955,44 @@ class TrendEngine:
             data_quality=data_quality,
             short_horizon_momentum=short_momentum,
             short_horizon_momentum_score=short_momentum_score,
+            attribution=attribution,
+            key_levels=key_levels,
         )
+
+    @staticmethod
+    def _extract_key_levels(
+        supertrend_ind: BaseIndicator | None, bollinger_ind: BaseIndicator | None
+    ) -> dict[str, Any]:
+        """Collect the available indicator price levels for a card (TC-09).
+
+        Only levels the timeframe actually calculates are returned; short
+        timeframes that omit SuperTrend/Bollinger simply yield an empty dict.
+        """
+        levels: dict[str, Any] = {}
+        if supertrend_ind is not None:
+            flip = getattr(supertrend_ind, "prev_supertrend", None)
+            is_up = getattr(supertrend_ind, "is_uptrend", None)
+            if flip is not None and is_up is not None:
+                levels["supertrend"] = {
+                    "flip_price": round(float(flip), 4),
+                    "direction": "up" if is_up else "down",
+                    "band_distance_atr": (
+                        round(float(supertrend_ind.band_distance_atr), 3)
+                        if getattr(supertrend_ind, "band_distance_atr", None) is not None
+                        else None
+                    ),
+                }
+        if bollinger_ind is not None:
+            upper = getattr(bollinger_ind, "upper_band", None)
+            middle = getattr(bollinger_ind, "middle_band", None)
+            lower = getattr(bollinger_ind, "lower_band", None)
+            if upper and middle and lower:
+                levels["bollinger"] = {
+                    "upper": round(float(upper[-1]), 4),
+                    "middle": round(float(middle[-1]), 4),
+                    "lower": round(float(lower[-1]), 4),
+                }
+        return levels
 
     @staticmethod
     def _classify_short_horizon_momentum(
@@ -1001,7 +1050,8 @@ class TrendEngine:
         if atr_ind is not None:
             atr_value = atr_ind.get_latest()
 
-        components: list[tuple[float, float]] = []
+        # (component name, directional signal in -1..1, weight)
+        components: list[tuple[str, float, float]] = []
         trend_strength = TrendStrength.MODERATE
         adx_value: float | None = indicator_values.get("adx")
         di_directional_balance: float | None = None
@@ -1012,13 +1062,13 @@ class TrendEngine:
         if ema_fast is not None and ema_slow is not None:
             spread = ema_fast - ema_slow
             spread_signal = max(-1.0, min(1.0, spread / (ema_slow * 0.01 + 1e-9)))
-            components.append((spread_signal, weights_cfg.ema))
+            components.append(("EMA", spread_signal, weights_cfg.ema))
 
         # --- Component 2: RSI continuous ---
         rsi = indicator_values.get("rsi")
         if rsi is not None:
             rsi_signal = max(-1.0, min(1.0, (rsi - 50) / 50))
-            components.append((rsi_signal, weights_cfg.rsi))
+            components.append(("RSI", rsi_signal, weights_cfg.rsi))
 
         # --- Component 3: MACD histogram continuous ---
         macd = indicator_values.get("macd")
@@ -1028,7 +1078,7 @@ class TrendEngine:
                 macd_signal = max(-1.0, min(1.0, norm))
             else:
                 macd_signal = 1.0 if macd > 0 else -1.0
-            components.append((macd_signal, weights_cfg.macd))
+            components.append(("MACD", macd_signal, weights_cfg.macd))
 
         # --- Component 4: ADX strength + DI+/DI- direction ---
         if adx_ind is not None:
@@ -1040,7 +1090,7 @@ class TrendEngine:
                     di_signal = (di_plus_vals - di_minus_vals) / di_sum
                     di_signal = max(-1.0, min(1.0, di_signal))
                     di_directional_balance = abs(di_signal)
-                    components.append((di_signal, weights_cfg.adx))
+                    components.append(("ADX/DI", di_signal, weights_cfg.adx))
 
             if adx_value is not None:
                 if adx_value > 40:
@@ -1066,19 +1116,21 @@ class TrendEngine:
                     magnitude = max(0.2, min(1.0, band_dist / 3.0))
                 else:
                     magnitude = 1.0
-                components.append((magnitude if st_is_up else -magnitude, weights_cfg.supertrend))
+                components.append(
+                    ("SuperTrend", magnitude if st_is_up else -magnitude, weights_cfg.supertrend)
+                )
 
         # --- Component 6: Bollinger Bands market structure ---
         bb = indicator_values.get("bollinger_bands")
         if bb is not None:
             bb_signal = max(-1.0, min(1.0, (bb - 0.5) * 2))
-            components.append((bb_signal, weights_cfg.bollinger))
+            components.append(("Bollinger", bb_signal, weights_cfg.bollinger))
 
         # --- Component 7: Volume confirmation ---
         rel_vol = indicator_values.get("relative_volume")
         if rel_vol is not None and rel_vol > 0:
             vol_signal = max(-1.0, min(1.0, (rel_vol - 1.0) * 2))
-            components.append((vol_signal, weights_cfg.relative_volume))
+            components.append(("Relative volume", vol_signal, weights_cfg.relative_volume))
 
         # --- Component 8: Momentum (ROC) continuous ---
         roc = indicator_values.get("roc")
@@ -1087,17 +1139,32 @@ class TrendEngine:
                 roc_signal = max(-1.0, min(1.0, roc / 5.0))
             else:
                 roc_signal = 1.0 if roc > 0 else -1.0
-            components.append((roc_signal, weights_cfg.momentum))
+            components.append(("ROC", roc_signal, weights_cfg.momentum))
 
         # --- Combine ---
+        attribution: list[dict[str, Any]] = []
         if components:
-            active = [(s, w) for s, w in components if w > 0]
+            active = [(name, s, w) for name, s, w in components if w > 0]
             if active:
-                signals_out = [s for s, _ in active]
-                weights_out = [w for _, w in active]
-                weighted_sum = sum(s * w for s, w in zip(signals_out, weights_out, strict=True))
-                total_weight = sum(weights_out)
+                weighted_sum = sum(s * w for _, s, w in active)
+                total_weight = sum(w for _, _, w in active)
                 avg_signal = weighted_sum / total_weight
+                # Each component's contribution is its share of the -100..+100
+                # composite: signal * weight / total_weight * 100. They sum to
+                # the raw score, so the card can show what actually drove it.
+                attribution = sorted(
+                    (
+                        {
+                            "component": name,
+                            "signal": round(s, 4),
+                            "weight": w,
+                            "contribution": round(s * w / total_weight * 100.0, 2),
+                        }
+                        for name, s, w in active
+                    ),
+                    key=lambda entry: abs(entry["contribution"]),
+                    reverse=True,
+                )
             else:
                 avg_signal = 0.0
 
@@ -1169,7 +1236,7 @@ class TrendEngine:
             raw_score = 0.0
             classification = TrendClassification.NO_SIGNAL
 
-        return direction, trend_strength, confidence, raw_score, classification
+        return direction, trend_strength, confidence, raw_score, classification, attribution
 
     def get_current_trend(self, timeframe: Timeframe) -> TrendSignal | None:
         """Get the current trend signal for a timeframe"""

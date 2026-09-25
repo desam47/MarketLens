@@ -316,3 +316,51 @@ describe('TrendCard change history (TC-09)', () => {
     expect(screen.queryByText(/Held|New/)).not.toBeInTheDocument();
   });
 });
+
+describe('TrendCard indicator attribution and key levels (TC-09)', () => {
+  it('lists each component contribution with a sign', () => {
+    render(<TrendCard trend={trend({
+      attribution: [
+        { component: 'EMA', signal: 0.9, weight: 1.5, contribution: 40 },
+        { component: 'RSI', signal: -0.4, weight: 1, contribution: -12 },
+      ],
+    })} />);
+
+    expect(screen.getByText('Why this score')).toBeInTheDocument();
+    expect(screen.getByText('EMA')).toBeInTheDocument();
+    expect(screen.getByText('+40')).toBeInTheDocument();
+    expect(screen.getByText('RSI')).toBeInTheDocument();
+    expect(screen.getByText('-12')).toBeInTheDocument();
+  });
+
+  it('shows SuperTrend flip and Bollinger levels when available', () => {
+    render(<TrendCard trend={trend({
+      key_levels: {
+        supertrend: { flip_price: 231.4, direction: 'up', band_distance_atr: 1.2 },
+        bollinger: { upper: 240, middle: 232, lower: 224 },
+      },
+    })} />);
+
+    expect(screen.getByText(/SuperTrend ↑ 231.4/)).toBeInTheDocument();
+    expect(screen.getByText(/Bollinger 224–240/)).toBeInTheDocument();
+  });
+
+  it('renders neither section when the timeframe supplies no attribution or levels', () => {
+    render(<TrendCard trend={trend({ attribution: [], key_levels: {} })} />);
+
+    expect(screen.queryByText('Why this score')).not.toBeInTheDocument();
+    expect(screen.queryByText(/SuperTrend|Bollinger/)).not.toBeInTheDocument();
+  });
+
+  it('expanding the attribution panel does not trigger chart handoff', () => {
+    const onOpenChart = jest.fn();
+    render(<TrendCard
+      trend={trend({ attribution: [{ component: 'EMA', signal: 0.9, weight: 1.5, contribution: 40 }] })}
+      onOpenChart={onOpenChart}
+    />);
+
+    fireEvent.click(screen.getByText('Why this score'));
+
+    expect(onOpenChart).not.toHaveBeenCalled();
+  });
+});
