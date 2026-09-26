@@ -79,3 +79,32 @@ class TestGracefulDegradation:
         # won't try to connect -> returns None rather than raising.
         with patch.object(settings.redis, "enabled", False):
             assert background._safe_rq_status("some-job-id") is None
+
+    def test_enqueue_alert_commentary_job_passes_trigger_id(self):
+        """enqueue_alert_commentary_job enqueues with trigger_id in kwargs."""
+        queue = MagicMock()
+        queue.enqueue.return_value.id = "rq-alert-001"
+
+        with patch.object(background, "get_queue", return_value=queue):
+            rq_id = background.enqueue_alert_commentary_job(trigger_id=42)
+
+        assert rq_id == "rq-alert-001"
+        enqueue_kwargs = queue.enqueue.call_args.kwargs
+        assert enqueue_kwargs["kwargs"]["trigger_id"] == 42
+
+    def test_enqueue_analyze_job_passes_portfolio_symbols(self):
+        """portfolio_symbols must be forwarded to the RQ task kwargs."""
+        queue = MagicMock()
+        queue.enqueue.return_value.id = "rq-analyze-001"
+        db = MagicMock()
+
+        with (
+            patch.object(background, "get_queue", return_value=queue),
+            patch("backend.database.SessionLocal", return_value=db),
+        ):
+            background.enqueue_analyze_job(
+                "AAPL", timeframe="1d", portfolio_symbols=["MSFT", "GOOG"]
+            )
+
+        enqueue_kwargs = queue.enqueue.call_args.kwargs
+        assert enqueue_kwargs["kwargs"]["portfolio_symbols"] == ["MSFT", "GOOG"]

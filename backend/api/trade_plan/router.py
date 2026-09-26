@@ -1,25 +1,23 @@
 """
-API endpoint for draft trade plans.
+API endpoints for trade plans.
 
 Routes:
-  GET /api/trade-plan/{symbol}/draft  - candidate stops/targets from every
-                                        source, plus one assembled plan
-
-Read-only. The response is a proposal for the trader to review: nothing is
-saved, no order is placed. Assembly lives in
-``backend.services.trade_plan_builder``; the arithmetic lives in
-``backend.ai.market_tools.build_trade_plan_tool``.
+  GET    /api/trade-plan/{symbol}/draft  - draft plan candidates (read-only)
+  GET    /api/trade-plan/saved           - list all saved plans
+  POST   /api/trade-plan/saved           - upsert a saved plan by client_id
+  DELETE /api/trade-plan/saved/{id}      - remove a saved plan by client_id
 """
 
 import logging
 from datetime import datetime
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from backend.services.excursion_stats import DEFAULT_MIN_SAMPLE
+from backend.repositories.saved_trade_plan_repository import SavedTradePlanRepository
 from backend.services.trade_plan_builder import build_draft_plan
 
 from ..dependencies import get_db
@@ -110,3 +108,75 @@ async def get_trade_plan_draft(
         include_options=include_options,
         min_sample=min_sample,
     )
+
+
+# ------------------------------------------------------------------ #
+# Saved plans persistence                                             #
+# ------------------------------------------------------------------ #
+
+class SavedPlanPayload(BaseModel):
+    client_id: str
+    symbol: str
+    side: str
+    timeframe: str
+    entry_price: float
+    stop_price: float
+    target_price: float
+    quantity: float
+    stop_source: str = ""
+    reward_risk: float | None = None
+    thesis: str = ""
+    created_at: str | None = None
+
+
+def _serialize_plan(plan) -> dict:
+    return {
+        "id": plan.client_id,
+        "symbol": plan.symbol,
+        "side": plan.side,
+        "timeframe": plan.timeframe,
+        "entryPrice": plan.entry_price,
+        "stopPrice": plan.stop_price,
+        "targetPrice": plan.target_price,
+        "quantity": plan.quantity,
+        "stopSource": plan.stop_source,
+        "rewardRisk": plan.reward_risk,
+        "thesis": plan.thesis,
+        "createdAt": plan.created_at.isoformat() if plan.created_at else None,
+    }
+
+
+@router.get("/saved")
+def list_saved_plans(db: Session = Depends(get_db)):
+    repo = SavedTradePlanRepository(db)
+    return [_serialize_plan(p) for p in repo.list_all()]
+
+
+@router.post("/saved")
+def upsert_saved_plan(payload: SavedPlanPayload, db: Session = Depends(get_db)):
+    from backend.utils.timezone import now_ny
+    repo = SavedTradePlanRepository(db)
+    data = {
+        "client_id": payload.client_id,
+        "symbol": payload.symbol.upper(),
+        "side": payload.side,
+        "timeframe": payload.timeframe,
+        "entry_price": payload.entry_price,
+        "stop_price": payload.stop_price,
+        "target_price": payload.target_price,
+        "quantity": payload.quantity,
+        "stop_source": payload.stop_source,
+        "reward_risk": payload.reward_risk,
+        "thesis": payload.thesis,
+        "created_at": now_ny(),
+    }
+    plan = repo.upsert(data)
+    return _serialize_plan(plan)
+
+
+@router.delete("/saved/{client_id}")
+def delete_saved_plan(client_id: str, db: Session = Depends(get_db)):
+    repo = SavedTradePlanRepository(db)
+    if not repo.delete_by_client_id(client_id):
+        raise HTTPException(status_code=404, detail="Plan not found")
+    return {"deleted": True}

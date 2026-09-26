@@ -2776,6 +2776,38 @@ class ApiService {
     );
   }
 
+  async listSavedPlans(): Promise<any[]> {
+    return this.fetch<any[]>('/trade-plan/saved');
+  }
+
+  async upsertSavedPlan(plan: any): Promise<any> {
+    return this.fetch<any>('/trade-plan/saved', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(plan),
+    });
+  }
+
+  async deleteSavedPlan(clientId: string): Promise<void> {
+    await this.fetch<any>(`/trade-plan/saved/${encodeURIComponent(clientId)}`, { method: 'DELETE' });
+  }
+
+  async listJournalEntries(): Promise<any[]> {
+    return this.fetch<any[]>('/journal/entries');
+  }
+
+  async upsertJournalEntry(entry: any): Promise<any> {
+    return this.fetch<any>('/journal/entries', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(entry),
+    });
+  }
+
+  async deleteJournalEntry(clientId: string): Promise<void> {
+    await this.fetch<any>(`/journal/entries/${encodeURIComponent(clientId)}`, { method: 'DELETE' });
+  }
+
   /** Excursion distribution for one symbol/timeframe/direction slice. */
   async getSignalExcursions(
     symbol: string,

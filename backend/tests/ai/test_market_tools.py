@@ -1533,7 +1533,8 @@ def test_decision_checklist_all_checks_pass(monkeypatch) -> None:
 
 
 def test_decision_checklist_reports_failures_and_unavailable(monkeypatch) -> None:
-    _patch_checklist_tools(monkeypatch, trend_direction="downtrend", earnings_dates=["2026-09-25"], quote_age_seconds=200)
+    tomorrow = (datetime.now(UTC) + timedelta(days=1)).strftime("%Y-%m-%d")
+    _patch_checklist_tools(monkeypatch, trend_direction="downtrend", earnings_dates=[tomorrow], quote_age_seconds=200)
     result = decision_checklist_tool(DecisionChecklistRequest(symbol="AAPL", direction="long")).model_dump()
 
     checks = {c["check"]: c for c in result["checks"]}

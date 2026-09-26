@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, field_serializer
 from sqlalchemy.orm import Session
 
 from backend.alerts.conditions import VALID_CONDITION_TYPES
-from backend.alerts.engine import alerts_engine
+from backend.alerts.engine import PRICE_CONDITIONS, alerts_engine
 from backend.api.dependencies import get_db
 from backend.api.rate_limit import _alerts_limiter, check_rate_limit
 from backend.repositories.alert_repository import AlertRepository
@@ -33,6 +33,20 @@ class AlertCreate(BaseModel):
     def model_post_init(self, _):
         if self.condition_type not in VALID_CONDITION_TYPES:
             raise ValueError(f"condition_type must be one of {list(VALID_CONDITION_TYPES)}")
+        # Numeric conditions require a parseable float parameter.
+        _NUMERIC_CONDITIONS = {
+            "price_above", "price_below", "pct_change_above",
+            "volume_expansion", "spread_widening", "bid_ask_imbalance",
+            "large_print_activity", "tape_pressure_reversal", "trade_rate_spike",
+            "live_volume_acceleration", "breakout", "breakdown",
+        }
+        if self.condition_type in _NUMERIC_CONDITIONS:
+            try:
+                float(self.parameter)
+            except (TypeError, ValueError):
+                raise ValueError(
+                    f"parameter must be a numeric value for condition_type '{self.condition_type}'"
+                )
 
 
 class AlertUpdate(BaseModel):
@@ -387,7 +401,7 @@ async def update_alert(
         raise HTTPException(status_code=404, detail="Alert not found")
 
     # Capture old state for engine registration management.
-    was_price_alert = existing.condition_type in ("price_above", "price_below", "pct_change_above")
+    was_price_alert = existing.condition_type in PRICE_CONDITIONS
 
     def _do_update():
         return repo.update(
@@ -402,17 +416,24 @@ async def update_alert(
     if updated is None:
         raise HTTPException(status_code=404, detail="Alert not found")
 
-    is_price_alert = updated.condition_type in ("price_above", "price_below", "pct_change_above")
+    is_price_alert = updated.condition_type in PRICE_CONDITIONS
+    condition_type_changed = payload.condition_type is not None and payload.condition_type != existing.condition_type
 
-    if was_price_alert and (not is_price_alert or not updated.is_enabled):
+    # Always unregister old + re-register new when condition_type changes,
+    # to avoid dead subscriptions (e.g. bar→price leaves orphaned bar callbacks).
+    if condition_type_changed:
+        await asyncio.to_thread(alerts_engine.unregister_for_alert, existing)
+        if updated.is_enabled:
+            await asyncio.to_thread(alerts_engine.register_for_alert, updated)
+    elif was_price_alert and (not is_price_alert or not updated.is_enabled):
         await asyncio.to_thread(alerts_engine.unregister_for_alert, existing)
     elif is_price_alert and updated.is_enabled:
         await asyncio.to_thread(alerts_engine.register_for_alert, updated)
-    elif not was_price_alert:
+    else:
         # Bar/signal alerts are cached in-memory too. Refresh the cache when
         # their profile parameter changes (for example, a snooze), and keep
         # enable/disable behavior consistent with price alerts.
-        profile_changed = payload.condition_type is not None or payload.parameter is not None
+        profile_changed = payload.parameter is not None
         if existing.is_enabled and not updated.is_enabled:
             await asyncio.to_thread(alerts_engine.unregister_for_alert, existing)
         elif not existing.is_enabled and updated.is_enabled:

@@ -167,7 +167,7 @@ describe('TradePlanningPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /Build plan/i }));
 
     expect(await screen.findByText(/the best available is 0\.77:1/i)).toBeInTheDocument();
-    expect(screen.getByText(/no stop\/target pairing pays for its own risk/i)).toBeInTheDocument();
+    expect(screen.getByText(/No auto-selected plan/i)).toBeInTheDocument();
     // A thin sample must not present a fabricated stop.
     expect(screen.getByRole('heading', { name: /Empirical sample . insufficient/i })).toBeInTheDocument();
     // The count sits in a nested <strong>, so match on normalised text.
@@ -202,16 +202,23 @@ describe('TradePlanningPage', () => {
     });
   });
 
-  it('does not save an unsized plan', async () => {
+  it('saves an unsized plan with quantity 0 and shows the sizing prompt', async () => {
     jest.spyOn(api, 'getTradePlanDraft').mockResolvedValue(draftWithoutSizing());
     render(<TradePlanningPage />);
 
     fireEvent.click(screen.getByRole('button', { name: /Build plan/i }));
     const save = await screen.findByRole('button', { name: /^Save plan$/i });
 
-    expect(save).toBeDisabled();
+    // Save is enabled even without sizing so traders can record levels.
+    expect(save).not.toBeDisabled();
     expect(screen.getByText(/Provide account_value and risk_percent/i)).toBeInTheDocument();
-    expect(JSON.parse(window.localStorage.getItem(STORAGE_KEY) || '{}').plans).toHaveLength(0);
+
+    fireEvent.click(save);
+    await waitFor(() => {
+      const stored = JSON.parse(window.localStorage.getItem(STORAGE_KEY) || '{}');
+      expect(stored.plans).toHaveLength(1);
+      expect(stored.plans[0].quantity).toBe(0);
+    });
   });
 
   it('clears a built draft when setup inputs change', async () => {

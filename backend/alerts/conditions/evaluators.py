@@ -211,9 +211,12 @@ def _eval_trend_weakens(parameter: str, value: object) -> bool:
 def _eval_full_timeframe_alignment(parameter: str, value: object) -> bool:
     """Fires when all timeframes agree on the same trend direction.
 
-    ``value`` is a list of direction strings: "bullish", "bearish", "neutral".
+    ``value`` is a list of direction strings: "bullish", "bearish", "neutral",
+    or a dict with a ``directions`` key (as returned by ``build_alignment_payload``).
     Fires when all non-unknown entries are identical.
     """
+    if isinstance(value, dict):
+        value = value.get("directions", [])
     if not isinstance(value, (list, tuple)):
         return False
     known = [str(d).lower() for d in value if str(d).lower() not in ("unknown", "")]
@@ -225,9 +228,12 @@ def _eval_full_timeframe_alignment(parameter: str, value: object) -> bool:
 def _eval_timeframe_conflict(parameter: str, value: object) -> bool:
     """Fires when timeframes disagree on trend direction.
 
-    ``value`` is a list of direction strings: "bullish", "bearish", "neutral".
+    ``value`` is a list of direction strings: "bullish", "bearish", "neutral",
+    or a dict with a ``directions`` key (as returned by ``build_alignment_payload``).
     Fires when there are at least 2 distinct known directions.
     """
+    if isinstance(value, dict):
+        value = value.get("directions", [])
     if not isinstance(value, (list, tuple)):
         return False
     known = [str(d).lower() for d in value if str(d).lower() not in ("unknown", "")]

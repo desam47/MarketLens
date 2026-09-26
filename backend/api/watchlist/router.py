@@ -396,11 +396,15 @@ def remove_symbol_from_watchlist(watchlist_id: int, symbol: str, db: Session = D
     # Drop the dedup cache so a re-added symbol isn't suppressed as a
     # "duplicate" of its now-deleted historical signals.
     try:
+        from collections import OrderedDict
+
         from backend.services.signal_recorder import signal_recorder
 
-        signal_recorder._last_recorded = {
-            (s, tf, ts): ts for (s, tf, ts) in signal_recorder._last_recorded if s != symbol_upper
-        }
+        signal_recorder._last_recorded = OrderedDict(
+            ((s, tf, ts), None)
+            for (s, tf, ts) in signal_recorder._last_recorded
+            if s != symbol_upper
+        )
     except Exception as e:
         logger.debug(f"signal_recorder cache cleanup skipped: {e}")
     # Phase 3.8.6+: notify ingestion service BEFORE purge so it stops fetching

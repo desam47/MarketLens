@@ -192,21 +192,12 @@ async def calculate_metric(request: ToolRequest) -> ToolResult:
 
 def _sync_resolve_template(db: Session, template_id: int | None):
     """Synchronous helper: resolve which AI template to use for a call."""
-    from backend.models import AITemplate
+    from backend.api.ai_templates.router import _resolve_template_for_request
 
-    if template_id is not None:
-        tmpl_obj = db.query(AITemplate).filter(AITemplate.id == template_id).first()
-        if tmpl_obj is None:
-            raise HTTPException(
-                status_code=404,
-                detail=f"AI template {template_id} not found",
-            )
-        return tmpl_obj.id, tmpl_obj
-
-    # A default template is a library/UI preference, not an implicit change
-    # to production analysis behavior. Built-in prompts remain authoritative
-    # unless the caller selects a template explicitly.
-    return None, None
+    tmpl = _resolve_template_for_request(db, template_id)
+    if tmpl is None:
+        return None, None
+    return tmpl.id, tmpl
 
 
 def _issue_verified_plan_id(
@@ -237,7 +228,7 @@ def _issue_verified_plan_id(
     status_code=status.HTTP_200_OK,
 )
 async def analyze(
-    symbol: str = Query(..., min_length=1, max_length=10),
+    symbol: str = Query(..., min_length=1, max_length=10, pattern=r"^[A-Za-z0-9.\-]+$"),
     timeframe: str = Query(default="1d", pattern=r"^(1d|1h|4h|15m|5m|1m)$"),
     max_tokens: int | None = Query(default=None, ge=100, le=8192),
     temperature: float | None = Query(default=None, ge=0.0, le=2.0),
@@ -368,7 +359,7 @@ async def analyze(
 
 @router.post("/analyze/stream")
 async def analyze_stream(
-    symbol: str = Query(..., min_length=1, max_length=10),
+    symbol: str = Query(..., min_length=1, max_length=10, pattern=r"^[A-Za-z0-9.\-]+$"),
     timeframe: str = Query(default="1d", pattern=r"^(1d|1h|4h|15m|5m|1m)$"),
     max_tokens: int | None = Query(default=None, ge=100, le=8192),
     temperature: float | None = Query(default=None, ge=0.0, le=2.0),

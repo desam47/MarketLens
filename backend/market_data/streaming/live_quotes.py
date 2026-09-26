@@ -21,35 +21,38 @@ class LiveQuoteCache:
                ask_size: float | None = None, provider: str = "webull",
                event_type: str = "snapshot") -> dict[str, Any] | None:
         symbol = symbol.upper()
+        ts_str = timestamp.isoformat() if hasattr(timestamp, "isoformat") else timestamp
         with self._lock:
+            # Hold the lock for the full read-build-write cycle so concurrent
+            # updates for the same symbol can't race between the two acquisitions
+            # that the previous split-lock design had.
             previous = self._values.get(symbol, {})
-        payload = {
-            "price": price,
-            "volume": volume if volume is not None else previous.get("volume"),
-            "bid": bid if bid is not None else previous.get("bid"),
-            "ask": ask if ask is not None else previous.get("ask"),
-            "bid_size": bid_size if bid_size is not None else previous.get("bid_size"),
-            "ask_size": ask_size if ask_size is not None else previous.get("ask_size"),
-            "timestamp": timestamp.isoformat() if hasattr(timestamp, "isoformat") else timestamp,
-            "received_at": time.time(), "provider": provider, "event_type": event_type,
-        }
-        # Keep lightweight BBO-derived values beside the raw quote.  They are
-        # shared by the scanner, alerts, and UI, so consumers do not each need
-        # their own stateful spread calculation.
-        current_bid, current_ask = payload["bid"], payload["ask"]
-        if (
-            isinstance(current_bid, (int, float))
-            and isinstance(current_ask, (int, float))
-            and current_bid > 0
-            and current_ask >= current_bid
-        ):
-            midpoint = (current_bid + current_ask) / 2
-            spread_bps = ((current_ask - current_bid) / midpoint) * 10_000 if midpoint else 0.0
-            payload["spread_bps"] = round(spread_bps, 3)
-            previous_spread = previous.get("spread_bps")
-            if isinstance(previous_spread, (int, float)):
-                payload["spread_change_bps"] = round(spread_bps - previous_spread, 3)
-        with self._lock:
+            payload = {
+                "price": price,
+                "volume": volume if volume is not None else previous.get("volume"),
+                "bid": bid if bid is not None else previous.get("bid"),
+                "ask": ask if ask is not None else previous.get("ask"),
+                "bid_size": bid_size if bid_size is not None else previous.get("bid_size"),
+                "ask_size": ask_size if ask_size is not None else previous.get("ask_size"),
+                "timestamp": ts_str,
+                "received_at": time.time(), "provider": provider, "event_type": event_type,
+            }
+            # Keep lightweight BBO-derived values beside the raw quote.  They are
+            # shared by the scanner, alerts, and UI, so consumers do not each need
+            # their own stateful spread calculation.
+            current_bid, current_ask = payload["bid"], payload["ask"]
+            if (
+                isinstance(current_bid, (int, float))
+                and isinstance(current_ask, (int, float))
+                and current_bid > 0
+                and current_ask >= current_bid
+            ):
+                midpoint = (current_bid + current_ask) / 2
+                spread_bps = ((current_ask - current_bid) / midpoint) * 10_000 if midpoint else 0.0
+                payload["spread_bps"] = round(spread_bps, 3)
+                previous_spread = previous.get("spread_bps")
+                if isinstance(previous_spread, (int, float)):
+                    payload["spread_change_bps"] = round(spread_bps - previous_spread, 3)
             # Webull can replay a message after reconnect. Suppress an exact
             # duplicate before it fans out to every browser and tape engine.
             if previous and all(previous.get(key) == payload.get(key) for key in (

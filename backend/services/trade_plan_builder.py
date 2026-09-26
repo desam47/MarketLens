@@ -206,14 +206,31 @@ def _volatility(bars: Sequence[dict], symbol: str, timeframe: str) -> dict[str, 
 def _empirical(
     db: Session, symbol: str, timeframe: str, direction: Direction, min_sample: int
 ) -> dict[str, Any]:
-    """Adverse/favorable excursion distribution of comparable past signals."""
-    rows = SignalRepository(db).fetch_excursion_rows(
-        symbol=symbol,
-        timeframe=timeframe,
-        trend_state=DIRECTION_TREND_STATE[direction],
-    )
+    """Adverse/favorable excursion distribution of comparable past signals.
+
+    When the symbol-specific slice is too thin, a pooled all-symbol baseline
+    is attached under ``baseline`` so the UI can show what comparable setups
+    across all tracked names look like without silently using a weak number.
+    """
+    repo = SignalRepository(db)
+    trend_state = DIRECTION_TREND_STATE[direction]
+    rows = repo.fetch_excursion_rows(symbol=symbol, timeframe=timeframe, trend_state=trend_state)
     stats = excursion_distribution(rows, min_sample=min_sample)
-    return {"available": True, **stats}
+    result: dict[str, Any] = {"available": True, **stats}
+
+    if not stats["sufficient"]:
+        all_rows = repo.fetch_excursion_rows(symbol=None, timeframe=timeframe, trend_state=trend_state)
+        all_stats = excursion_distribution(all_rows, min_sample=min_sample)
+        if all_stats["sufficient"]:
+            result["baseline"] = {
+                "label": f"All symbols — {timeframe} {direction}",
+                "sample_size": all_stats["sample_size"],
+                "confidence": all_stats["confidence"],
+                "adverse_excursion_pct": all_stats["adverse_excursion_pct"],
+                "favorable_excursion_pct": all_stats["favorable_excursion_pct"],
+            }
+
+    return result
 
 
 # --- Source D: options-implied ----------------------------------------------
@@ -501,10 +518,19 @@ async def build_draft_plan(
 
     empirical = sources["empirical"]
     if empirical.get("available") and not empirical.get("sufficient"):
-        warnings.append(
-            f"Only {empirical['sample_size']} comparable signals "
-            f"(need {empirical['min_sample']}); no empirical stop offered."
-        )
+        n = empirical["sample_size"]
+        if n == 0:
+            warnings.append(
+                f"No {direction} signals with completed outcomes exist for {sym} {timeframe} "
+                f"in the historical database — the trend engine may never have called this "
+                f"direction on this symbol/timeframe, or outcomes haven't been recorded yet. "
+                f"No empirical stop offered."
+            )
+        else:
+            warnings.append(
+                f"Only {n} comparable signals "
+                f"(need {empirical['min_sample']}); no empirical stop offered."
+            )
 
     stops = _collect_stops(sources, entry, direction)
     targets = _collect_targets(sources, entry, direction)

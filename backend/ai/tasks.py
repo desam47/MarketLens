@@ -16,7 +16,6 @@ Or, if you're running inside the project (with the venv active)::
 
 from __future__ import annotations
 
-import json
 import logging
 import traceback
 
@@ -27,8 +26,6 @@ from backend.ai.analyze import analyze_symbol
 from backend.ai.sync_bridge import run_sync
 from backend.api.ai_templates.router import resolve_and_render
 from backend.database import SessionLocal
-from backend.models import AIAnalysisJob
-from backend.utils.timezone import now_ny
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +53,7 @@ def analyze_symbol_task(
     template_id: int | None = None,
     template_name: str | None = None,
     job_id: str | None = None,
+    portfolio_symbols: list[str] | None = None,
 ) -> dict:
     """Run an AI analysis for ``symbol`` and persist the result.
 
@@ -73,6 +71,8 @@ def analyze_symbol_task(
     job_id : str | None
         RQ job ID for status updates. Optional — if absent we skip the
         DB updates (useful for direct invocation in tests).
+    portfolio_symbols : list[str] | None
+        Optional peer tickers for cross-ticker context (O10).
 
     Returns
     -------
@@ -84,7 +84,7 @@ def analyze_symbol_task(
     """
 
     if not job_id:
-        return _run_direct(symbol, timeframe, template_id, template_name)
+        return _run_direct(symbol, timeframe, template_id, template_name, portfolio_symbols)
 
     _update_status(job_id, "started")
 
@@ -115,6 +115,7 @@ def analyze_symbol_task(
                 symbol=symbol,
                 timeframe=timeframe,
                 system_prompt_override=rendered_system,
+                portfolio_symbols=portfolio_symbols,
             )
         )
     except Exception as exc:  # noqa: BLE001
@@ -133,6 +134,7 @@ def _run_direct(
     timeframe: str,
     template_id: int | None,
     template_name: str | None,
+    portfolio_symbols: list[str] | None = None,
 ) -> dict:
     """Run the analysis without touching the DB job table (used by tests)."""
 
@@ -153,6 +155,7 @@ def _run_direct(
             symbol=symbol,
             timeframe=timeframe,
             system_prompt_override=rendered_system,
+            portfolio_symbols=portfolio_symbols,
         )
     )
     return _job_payload(result, template_id, template_name)
@@ -187,25 +190,12 @@ def _update_status(
     error: str | None = None,
 ) -> None:
     """Update the AIAnalysisJob row for ``job_id``."""
+    from backend.repositories.ai_analysis_job_repository import AIAnalysisJobRepository
+
     db = SessionLocal()
     try:
-        record = db.query(AIAnalysisJob).filter(AIAnalysisJob.job_id == job_id).first()
-        if record is None:
-            return
-        # A queued job can race with cancellation. Do not let a worker that
-        # starts after the cancellation resurrect the terminal record.
-        if record.status == "cancelled" and status != "cancelled":
-            return
-        record.status = status
-        if status == "started":
-            record.started_at = now_ny()
-        elif status in ("finished", "failed"):
-            record.completed_at = now_ny()
-        if result is not None:
-            record.result = json.dumps(result)
-        if error is not None:
-            record.error = error
-        db.commit()
+        repo = AIAnalysisJobRepository(db)
+        repo.update_status(job_id, status, result=result, error=error)
     except Exception as exc:  # noqa: BLE001
         db.rollback()
         logger.error("Failed to update job %s to %s: %s", job_id, status, exc)

@@ -20,13 +20,14 @@ import asyncio
 import json
 import logging
 import threading
-from typing import Any, Literal, cast
+from typing import Annotated, Any, Literal, cast
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
-from ...models import ChatMessage
+from ..rate_limit import _ai_limiter, check_rate_limit
+
 from ...models.chat import UNIVERSAL_SYMBOL
 from ...repositories.chat_repository import ChatRepository
 
@@ -116,7 +117,9 @@ class ChatPreferences(BaseModel):
     model_config = {"extra": "forbid"}
 
     mode: Literal["day_trading", "swing_trading", "options", "long_term_investing"] | None = None
-    preferred_timeframes: list[str] = Field(default_factory=list, max_length=10)
+    preferred_timeframes: list[Annotated[str, Field(max_length=20)]] = Field(
+        default_factory=list, max_length=10
+    )
     default_session: Literal["premarket", "regular", "after_hours", "auto"] | None = None
     risk_per_trade_percent: float | None = Field(default=None, ge=0, le=100)
     primary_watchlist: str | None = Field(default=None, max_length=120)
@@ -133,11 +136,23 @@ class ChatChartState(BaseModel):
     timeframe: str = Field(default="1d", min_length=1, max_length=20)
     session: str = Field(default="all", min_length=1, max_length=20)
     chart_type: str | None = Field(default=None, max_length=30)
-    active_indicators: list[str] = Field(default_factory=list, max_length=20)
+    active_indicators: list[Annotated[str, Field(max_length=80)]] = Field(
+        default_factory=list, max_length=20
+    )
     visible_range: dict[str, float] | None = None
-    selected_candle: dict[str, Any] | None = None
+    selected_candle: dict[str, float | str | int | None] | None = None
     drawings: list[dict[str, Any]] = Field(default_factory=list, max_length=50)
     updated_at: str = Field(..., max_length=80)
+
+    @model_validator(mode="after")
+    def _check_chart_payload_sizes(self) -> "ChatChartState":
+        if self.visible_range and len(json.dumps(self.visible_range)) > 500:
+            raise ValueError("visible_range payload exceeds 500-character limit")
+        if self.selected_candle and len(json.dumps(self.selected_candle)) > 1000:
+            raise ValueError("selected_candle payload exceeds 1000-character limit")
+        if self.drawings and len(json.dumps(self.drawings)) > 50_000:
+            raise ValueError("drawings payload exceeds 50 KB limit")
+        return self
 
 
 ChatRegenerationMode = Literal[
@@ -274,17 +289,17 @@ class NotebookResponse(BaseModel):
 
 
 class CreateNotebookRequest(BaseModel):
-    client_key: str = Field(..., min_length=8, max_length=80)
+    client_key: str = Field(..., min_length=32, max_length=80)
     name: str = Field(..., min_length=1, max_length=120)
 
 
 class RenameNotebookRequest(BaseModel):
-    client_key: str = Field(..., min_length=8, max_length=80)
+    client_key: str = Field(..., min_length=32, max_length=80)
     name: str = Field(..., min_length=1, max_length=120)
 
 
 class SaveNotebookItemRequest(BaseModel):
-    client_key: str = Field(..., min_length=8, max_length=80)
+    client_key: str = Field(..., min_length=32, max_length=80)
     message_id: int = Field(..., gt=0)
     question: str = Field(default="", max_length=2000)
 
@@ -440,29 +455,15 @@ async def get_session_for_symbol(
     """
     repo = ChatRepository()
     try:
-        from backend.models import ChatSession
-
         if symbol is None:
-
-            def query():
-                return (
-                    repo.db.query(ChatSession)
-                    .filter(ChatSession.scope == "universal")
-                    .order_by(ChatSession.updated_at.desc())
-                    .first()
-                )
+            session = await asyncio.to_thread(
+                repo.get_latest_session_by_scope, "universal"
+            )
         else:
             sym = symbol.upper()
-
-            def query():
-                return (
-                    repo.db.query(ChatSession)
-                    .filter(ChatSession.symbol == sym, ChatSession.scope == "symbol")
-                    .order_by(ChatSession.updated_at.desc())
-                    .first()
-                )
-
-        session = await asyncio.to_thread(query)
+            session = await asyncio.to_thread(
+                repo.get_latest_session_by_scope, "symbol", sym
+            )
         if session is None:
             where = symbol.upper() if symbol else "the universal chat"
             raise HTTPException(status_code=404, detail=f"No chat session for {where}")
@@ -600,7 +601,7 @@ async def list_regression_fixtures(limit: int = Query(default=100, ge=1, le=500)
 
 
 @router.get("/notebooks", response_model=list[NotebookResponse])
-async def list_notebooks(client_key: str = Query(..., min_length=8, max_length=80)):
+async def list_notebooks(client_key: str = Query(..., min_length=32, max_length=80)):
     repo = ChatRepository()
     try:
         notebooks = await asyncio.to_thread(repo.list_notebooks, client_key)
@@ -639,7 +640,7 @@ async def rename_notebook(notebook_id: int, payload: RenameNotebookRequest):
 @router.delete("/notebooks/{notebook_id}")
 async def delete_notebook(
     notebook_id: int,
-    client_key: str = Query(..., min_length=8, max_length=80),
+    client_key: str = Query(..., min_length=32, max_length=80),
 ):
     repo = ChatRepository()
     try:
@@ -663,20 +664,14 @@ async def save_notebook_item(notebook_id: int, payload: SaveNotebookItemRequest)
             raise HTTPException(status_code=404, detail="Assistant message not found")
         question = payload.question
         if not question:
-            def previous_user_content() -> str | None:
-                row = (
-                    repo.db.query(ChatMessage.content)
-                    .filter(
-                        ChatMessage.session_id == message.session_id,
-                        ChatMessage.id < message.id,
-                        ChatMessage.role == "user",
-                    )
-                    .order_by(ChatMessage.id.desc())
-                    .first()
+            question = (
+                await asyncio.to_thread(
+                    repo.get_preceding_user_message_content,
+                    message.session_id,
+                    message.id,
                 )
-                return row[0] if row is not None else None
-
-            question = await asyncio.to_thread(previous_user_content) or "Saved answer"
+                or "Saved answer"
+            )
         blocks = []
         try:
             parsed = json.loads(message.response_blocks or "[]")
@@ -740,7 +735,7 @@ async def save_notebook_item(notebook_id: int, payload: SaveNotebookItemRequest)
 async def delete_notebook_item(
     notebook_id: int,
     item_id: int,
-    client_key: str = Query(..., min_length=8, max_length=80),
+    client_key: str = Query(..., min_length=32, max_length=80),
 ):
     repo = ChatRepository()
     try:
@@ -758,7 +753,11 @@ async def delete_notebook_item(
 
 
 @router.post("/sessions/{session_id}/messages", response_model=MessageResponse)
-async def send_message(session_id: int, payload: SendMessageRequest):
+async def send_message(
+    session_id: int,
+    payload: SendMessageRequest,
+    _rl: None = Depends(check_rate_limit(_ai_limiter)),
+):
     """Send a message and get the AI's reply.
 
     Returns only the assistant's reply message (the caller already
@@ -775,9 +774,14 @@ async def send_message(session_id: int, payload: SendMessageRequest):
     finally:
         repo.close()
 
-    message, grounded, focus, partial, unavailable = await asyncio.to_thread(
-        answer_chat_message, session_id, payload.content, **_turn_kwargs(payload)
-    )
+    try:
+        message, grounded, focus, partial, unavailable = await asyncio.to_thread(
+            answer_chat_message, session_id, payload.content, **_turn_kwargs(payload)
+        )
+    except ValueError as exc:
+        if "not found" in str(exc).lower():
+            raise HTTPException(status_code=404, detail="Chat session not found") from exc
+        raise
     return _message_to_response(
         message,
         grounded=grounded,
@@ -841,7 +845,11 @@ def _put_sse_item(
 
 
 @router.post("/sessions/{session_id}/messages/stream")
-async def send_message_stream(session_id: int, payload: SendMessageRequest):
+async def send_message_stream(
+    session_id: int,
+    payload: SendMessageRequest,
+    _rl: None = Depends(check_rate_limit(_ai_limiter)),
+):
     """Send a message and stream the assistant's reply over SSE.
 
     Frames (``text/event-stream``):

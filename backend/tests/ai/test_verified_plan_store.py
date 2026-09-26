@@ -80,3 +80,39 @@ def test_expired_handle_cannot_be_retrieved():
         )
         assert plan_id is not None
         assert store.get_verified_plan(plan_id) is None
+
+
+def test_max_entries_evicts_oldest_when_full():
+    """When the store is at _MAX_ENTRIES, adding one more evicts the oldest."""
+    import backend.ai.verified_plan_store as _m
+
+    original_max = _m._MAX_ENTRIES
+    _m._MAX_ENTRIES = 3
+    try:
+        ids = []
+        for i in range(3):
+            pid = store.issue_verified_plan(
+                symbol=f"SYM{i}",
+                timeframe="1d",
+                provider="ollama",
+                model="llama3.2",
+                plan=_plan(),
+                validation={"status": "verified"},
+            )
+            ids.append(pid)
+
+        first_id = ids[0]
+        assert store.get_verified_plan(first_id) is not None
+
+        # Adding a 4th entry must evict the first.
+        store.issue_verified_plan(
+            symbol="NEW",
+            timeframe="1d",
+            provider="ollama",
+            model="llama3.2",
+            plan=_plan(),
+            validation={"status": "verified"},
+        )
+        assert store.get_verified_plan(first_id) is None
+    finally:
+        _m._MAX_ENTRIES = original_max

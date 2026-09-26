@@ -31,6 +31,7 @@ from statistics import fmean
 
 from backend.config.settings import settings
 from backend.database import SessionLocal
+from backend.repositories.trade_plan_repository import TradePlanRepository
 from backend.utils.timezone import now_ny
 
 logger = logging.getLogger(__name__)
@@ -62,22 +63,12 @@ def record_confirmed_trade_plan(
     if not settings.ai_trade_plan_tracking.enabled:
         return None, False
 
-    from backend.models.ai_trade_plan_outcome import AITradePlanOutcome
-
     targets_json = json.dumps([float(value) for value in plan.targets], separators=(",", ":"))
     db = SessionLocal()
     try:
-        candidates = (
-            db.query(AITradePlanOutcome)
-            .filter(
-                AITradePlanOutcome.symbol == symbol.upper(),
-                AITradePlanOutcome.status == "open",
-                AITradePlanOutcome.recommendation == plan.recommendation,
-                AITradePlanOutcome.conviction == plan.conviction,
-                AITradePlanOutcome.time_horizon == plan.time_horizon,
-                AITradePlanOutcome.timeframe == timeframe,
-            )
-            .all()
+        repo = TradePlanRepository(db)
+        candidates = repo.find_open_duplicates(
+            symbol, plan.recommendation, plan.conviction, plan.time_horizon, timeframe
         )
         for row in candidates:
             if (
@@ -88,8 +79,8 @@ def record_confirmed_trade_plan(
             ):
                 return row, True
 
-        row = AITradePlanOutcome(
-            symbol=symbol.upper(),
+        row = repo.create(
+            symbol=symbol,
             recommendation=plan.recommendation,
             conviction=plan.conviction,
             time_horizon=plan.time_horizon,
@@ -98,14 +89,11 @@ def record_confirmed_trade_plan(
             stop_loss=plan.stop_loss,
             targets_json=targets_json,
             risk_reward=plan.risk_reward,
-            provider=provider[:50],
-            model=model[:100],
-            timeframe=timeframe[:8],
-            analysis_id=analysis_id[:64],
+            provider=provider,
+            model=model,
+            timeframe=timeframe,
+            analysis_id=analysis_id,
         )
-        db.add(row)
-        db.commit()
-        db.refresh(row)
         return row, False
     finally:
         db.close()
@@ -242,10 +230,8 @@ def _grade_once(db) -> int:
     try/except — one broken row (bad JSON, no bars for a delisted
     symbol, ...) never blocks the rest of the batch. Returns how many
     rows resolved this pass."""
-    from backend.models.ai_trade_plan_outcome import AITradePlanOutcome
-
     today = now_ny().date()
-    rows = db.query(AITradePlanOutcome).filter(AITradePlanOutcome.status == "open").all()
+    rows = TradePlanRepository(db).get_open_rows()
     resolved = 0
     for row in rows:
         try:
@@ -282,33 +268,14 @@ def get_track_record(symbol: str, limit: int = 20) -> dict:
     if not settings.ai_trade_plan_tracking.enabled:
         return {}
 
-    from sqlalchemy import func
-
-    from backend.models.ai_trade_plan_outcome import AITradePlanOutcome
-
-    sym = symbol.upper()
     db = SessionLocal()
     try:
-        rows = (
-            db.query(AITradePlanOutcome)
-            .filter(
-                AITradePlanOutcome.symbol == sym, AITradePlanOutcome.status.in_(("win", "loss"))
-            )
-            .order_by(AITradePlanOutcome.resolved_at.desc())
-            .limit(limit)
-            .all()
-        )
+        repo = TradePlanRepository(db)
+        rows = repo.get_resolved_rows(symbol, limit)
         if not rows:
             return {}
 
-        # One grouped pass yields every status bucket at once — no
-        # second COUNT(*) round-trip for open rows.
-        status_counts = dict(
-            db.query(AITradePlanOutcome.status, func.count())
-            .filter(AITradePlanOutcome.symbol == sym)
-            .group_by(AITradePlanOutcome.status)
-            .all()
-        )
+        status_counts = repo.get_status_counts(symbol)
 
         wins = [r for r in rows if r.status == "win"]
         losses = [r for r in rows if r.status == "loss"]

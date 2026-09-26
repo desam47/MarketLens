@@ -240,8 +240,8 @@ class MinTimeframeBullish(Filter):
     """At least N timeframes are bullish with minimum confidence."""
 
     def __init__(self, min_count: int = 3, min_confidence: float = 0.5):
-        self.min_count = min_count
-        self.min_confidence = min_confidence
+        self.min_count = int(min_count)
+        self.min_confidence = float(min_confidence)
 
     def matches(self, result: ScanResult) -> bool:
         count = 0
@@ -261,8 +261,8 @@ class MinTimeframeBearish(Filter):
     """At least N timeframes are bearish with minimum confidence."""
 
     def __init__(self, min_count: int = 3, min_confidence: float = 0.5):
-        self.min_count = min_count
-        self.min_confidence = min_confidence
+        self.min_count = int(min_count)
+        self.min_confidence = float(min_confidence)
 
     def matches(self, result: ScanResult) -> bool:
         count = 0
@@ -282,8 +282,8 @@ class MTFAlignment(Filter):
     """All available timeframes agree on the same direction."""
 
     def __init__(self, min_timeframes: int = 3, min_confidence: float = 0.5):
-        self.min_timeframes = min_timeframes
-        self.min_confidence = min_confidence
+        self.min_timeframes = int(min_timeframes)
+        self.min_confidence = float(min_confidence)
 
     def matches(self, result: ScanResult) -> bool:
         if not result.trend_signals:
@@ -314,7 +314,7 @@ class RSIOversold(Filter):
     """RSI is below threshold (oversold)."""
 
     def __init__(self, threshold: float = 30.0):
-        self.threshold = threshold
+        self.threshold = float(threshold)
 
     def matches(self, result: ScanResult) -> bool:
         rsi = result.indicator_values.get("rsi")
@@ -328,7 +328,7 @@ class RSIOverbought(Filter):
     """RSI is above threshold (overbought)."""
 
     def __init__(self, threshold: float = 70.0):
-        self.threshold = threshold
+        self.threshold = float(threshold)
 
     def matches(self, result: ScanResult) -> bool:
         rsi = result.indicator_values.get("rsi")
@@ -364,7 +364,7 @@ class HighVolume(Filter):
     """Volume is above a given threshold."""
 
     def __init__(self, min_volume: int = 1_000_000):
-        self.min_volume = min_volume
+        self.min_volume = int(min_volume)
 
     def matches(self, result: ScanResult) -> bool:
         vol = result.indicator_values.get("volume")
@@ -420,7 +420,7 @@ class ADXStrong(Filter):
     """ADX is above a threshold (strong trend)."""
 
     def __init__(self, threshold: float = 25.0):
-        self.threshold = threshold
+        self.threshold = float(threshold)
 
     def matches(self, result: ScanResult) -> bool:
         adx = result.indicator_values.get("adx")
@@ -468,8 +468,8 @@ class OversoldReversal(Filter):
     """RSI was oversold and is now turning higher with price confirmation."""
 
     def __init__(self, threshold: float = 35.0, min_rsi_rise: float = 2.0):
-        self.threshold = threshold
-        self.min_rsi_rise = min_rsi_rise
+        self.threshold = float(threshold)
+        self.min_rsi_rise = float(min_rsi_rise)
 
     def matches(self, result: ScanResult) -> bool:
         rsi = result.indicator_values.get("rsi")

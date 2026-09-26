@@ -110,6 +110,31 @@ class ChatRepository:
     def get_session(self, session_id: int) -> ChatSession | None:
         return self.db.query(ChatSession).filter(ChatSession.id == session_id).first()
 
+    def get_latest_session_by_scope(
+        self, scope: str, symbol: str | None = None
+    ) -> ChatSession | None:
+        """Return the most-recently-updated session matching scope (and symbol if given)."""
+        q = self.db.query(ChatSession).filter(ChatSession.scope == scope)
+        if symbol is not None:
+            q = q.filter(ChatSession.symbol == symbol)
+        return q.order_by(ChatSession.updated_at.desc()).first()
+
+    def get_preceding_user_message_content(
+        self, session_id: int, before_id: int
+    ) -> str | None:
+        """Return the content of the most recent user message before ``before_id``."""
+        row = (
+            self.db.query(ChatMessage.content)
+            .filter(
+                ChatMessage.session_id == session_id,
+                ChatMessage.id < before_id,
+                ChatMessage.role == "user",
+            )
+            .order_by(ChatMessage.id.desc())
+            .first()
+        )
+        return row[0] if row is not None else None
+
     def set_planner_state(self, session_id: int, state_json: str) -> None:
         session = self.get_session(session_id)
         if session is None:

@@ -216,6 +216,13 @@ class Scanner:
                 result.explanation = {}
 
         self.scan_results[symbol] = result
+        # Evict oldest entries when the cache exceeds the cap so the singleton
+        # doesn't grow unbounded on long-running servers that scan many symbols.
+        _MAX_SCAN_RESULTS = 500
+        if len(self.scan_results) > _MAX_SCAN_RESULTS:
+            overflow = len(self.scan_results) - _MAX_SCAN_RESULTS
+            for evict_sym in list(self.scan_results.keys())[:overflow]:
+                del self.scan_results[evict_sym]
         return result
 
     def _calculate_indicators(
@@ -335,6 +342,11 @@ class Scanner:
             logger.debug("Benchmark history unavailable for %s: %s", benchmark, exc)
             bars = []
         self._benchmark_bars_cache[benchmark] = (now, bars)
+        # Prune expired entries — benchmarks are few, but clean up TTL-expired ones.
+        self._benchmark_bars_cache = {
+            k: v for k, v in self._benchmark_bars_cache.items()
+            if now - v[0] < self._benchmark_bars_ttl
+        }
         return bars
 
     @staticmethod
@@ -669,7 +681,7 @@ class Scanner:
             if adx is not None:
                 # Normalize ADX: 0-25 = weak, 25-50 = moderate, 50-75 = strong, 75+ = very strong
                 if adx >= 75:
-                    trend_score = 90 + (adx - 75) * 0.4  # 90-130, clamped to 100
+                    trend_score = min(100, 90 + (adx - 75) * 0.4)  # 90-100
                 elif adx >= 50:
                     trend_score = 60 + (adx - 50) * 1.2  # 60-90
                 elif adx >= 25:
@@ -710,12 +722,15 @@ class Scanner:
             volatility_score = min(100, atr_pct * 20)
             result.add_score("volatility", volatility_score)
 
-            # Volume score (based on volume relative to average). Magnitude only.
-            volume = result.indicator_values.get("volume", 0) or 0
-            if volume > 0:
-                volume_score = min(100, (volume / 1000000) * 10)  # Rough normalization
+            # Volume score: relative to the 20-bar trailing average (volume_ratio),
+            # not absolute share count. ratio=1.0 → score=50; ratio=2.0 → score=100.
+            volume_ratio = result.indicator_values.get("volume_ratio")
+            if volume_ratio is not None and volume_ratio > 0:
+                volume_score = min(100, volume_ratio * 50)
             else:
-                volume_score = 0
+                # Fallback for symbols with no historical average yet.
+                volume = result.indicator_values.get("volume", 0) or 0
+                volume_score = min(100, (volume / 1_000_000) * 10) if volume > 0 else 0
             result.add_score("volume", volume_score)
 
             # RSI score: oversold (< 30) = positive (bullish bounce potential);
@@ -854,6 +869,11 @@ class Scanner:
                     else:
                         snap = get_tape_engine(result.symbol, seed=False).get_snapshot()
                         self._tape_cache[result.symbol] = (now, snap)
+                        # Prune expired entries to keep the tape cache bounded.
+                        self._tape_cache = {
+                            k: v for k, v in self._tape_cache.items()
+                            if now - v[0] < self._tape_cache_ttl * 10
+                        }
                     # Persist live metrics on the scan result so the
                     # composable filter endpoint can evaluate the same shared
                     # microstructure snapshot without additional stream work.
@@ -1097,10 +1117,13 @@ class Scanner:
         if symbols is None:
             symbols = list(self.scan_results.keys())
 
-        # Scan any symbols we haven't scanned yet
+        # Scan any symbols we haven't scanned yet; collect new results for alert dispatch.
+        newly_scanned: list[ScanResult] = []
         for symbol in symbols:
             if symbol not in self.scan_results:
-                self.scan_symbol(symbol)
+                newly_scanned.append(self.scan_symbol(symbol))
+        if newly_scanned:
+            self._notify_alerts(newly_scanned)
 
         # Calculate total scores and rank
         ranked = []

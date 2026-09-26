@@ -517,5 +517,102 @@ class TestScanner(unittest.TestCase):
         self.assertEqual(no_signals, [])
 
 
+class TestVolumeScoringRelative(unittest.TestCase):
+    """Volume score must use volume_ratio (relative), not absolute share count."""
+
+    def setUp(self):
+        self.scanner = Scanner()
+
+    def _score(self, volume: int, volume_ratio: float | None) -> float:
+        result = ScanResult("TEST", datetime.now())
+        result.add_indicator("volume", volume)
+        if volume_ratio is not None:
+            result.add_indicator("volume_ratio", volume_ratio)
+        self.scanner._calculate_scores(result)
+        return result.scores.get("volume", 0.0)
+
+    def test_high_ratio_small_cap_scores_higher_than_low_ratio_large_cap(self):
+        """Small-cap at 2× average must outscore large-cap at 0.5× average."""
+        small_cap_2x = self._score(volume=200_000, volume_ratio=2.0)
+        large_cap_half = self._score(volume=25_000_000, volume_ratio=0.5)
+        self.assertGreater(small_cap_2x, large_cap_half)
+
+    def test_volume_ratio_2x_scores_100(self):
+        """ratio=2.0 should reach the 100 cap."""
+        score = self._score(volume=200_000, volume_ratio=2.0)
+        self.assertEqual(score, 100.0)
+
+    def test_volume_ratio_1x_scores_50(self):
+        """ratio=1.0 (exactly average) should score 50."""
+        score = self._score(volume=1_000_000, volume_ratio=1.0)
+        self.assertEqual(score, 50.0)
+
+    def test_no_volume_ratio_falls_back_to_absolute(self):
+        """When volume_ratio is absent, falls back gracefully (score > 0)."""
+        score = self._score(volume=1_000_000, volume_ratio=None)
+        self.assertGreater(score, 0)
+
+
+class TestSignedTotalScoreEdgeCases(unittest.TestCase):
+    """calculate_signed_total_score edge cases."""
+
+    def test_no_weighted_scores_returns_zero(self):
+        """A result with only magnitude-only scores (no momentum/rsi) returns 0.0."""
+        result = ScanResult("TEST", datetime.now())
+        result.add_score("trend_strength", 70.0)
+        result.add_score("volatility", 40.0)
+        # Default weights only include momentum and rsi; neither is present.
+        total = result.calculate_signed_total_score({"momentum": 1.0, "rsi": 1.0})
+        self.assertEqual(total, 0.0)
+
+    def test_single_weighted_score(self):
+        result = ScanResult("TEST", datetime.now())
+        result.add_score("momentum", 60.0)
+        total = result.calculate_signed_total_score({"momentum": 1.0})
+        self.assertEqual(total, 60.0)
+
+
+class TestAlertDispatchOnFirstSignalsScan(unittest.TestCase):
+    """GET /signals/{symbol} must dispatch to alerts_engine on first scan."""
+
+    def setUp(self):
+        from fastapi.testclient import TestClient
+        from backend.api.main import app
+        from backend.api import ttl_cache as _ttl_cache_module
+        self.client = TestClient(app)
+        self._cache_mod = _ttl_cache_module
+
+        self.scanner_patch = patch("backend.api.scanner.router.market_scanner")
+        self.mock_scanner = self.scanner_patch.start()
+        # Simulate a symbol not yet in cache.
+        self.mock_scanner.get_scan_result.return_value = None
+        result = ScanResult("AAPL", datetime.now())
+        result.signals = ["RSI_OVERSOLD"]
+        self.mock_scanner.scan_symbol.return_value = result
+
+        self.alerts_patch = patch("backend.alerts.engine.alerts_engine")
+        self.mock_engine = self.alerts_patch.start()
+
+    def tearDown(self):
+        self.scanner_patch.stop()
+        self.alerts_patch.stop()
+        self._cache_mod._scan_cache.clear()
+
+    def test_alerts_notified_on_first_scan(self):
+        response = self.client.get("/api/scanner/signals/AAPL")
+        self.assertEqual(response.status_code, 200)
+        self.mock_scanner.scan_symbol.assert_called_once()
+        self.mock_engine.evaluate_scan_result.assert_called_once()
+
+    def test_alerts_not_called_when_result_cached(self):
+        result = ScanResult("AAPL", datetime.now())
+        result.signals = ["RSI_OVERSOLD"]
+        self.mock_scanner.get_scan_result.return_value = result
+        response = self.client.get("/api/scanner/signals/AAPL")
+        self.assertEqual(response.status_code, 200)
+        self.mock_scanner.scan_symbol.assert_not_called()
+        self.mock_engine.evaluate_scan_result.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

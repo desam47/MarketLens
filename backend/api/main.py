@@ -43,6 +43,7 @@ from backend.api.security_headers import SecurityHeadersMiddleware
 from backend.api.signals.router import router as signals_router
 from backend.api.strategy_lab.router import router as strategy_lab_router
 from backend.api.trade_plan.router import router as trade_plan_router
+from backend.api.journal.router import router as journal_router
 from backend.api.structured_logging import configure_logging
 from backend.api.system.router import RequestCounterMiddleware
 from backend.api.system.router import router as system_router
@@ -544,6 +545,7 @@ app.include_router(nl_search_router)
 app.include_router(aux_data_router)
 app.include_router(strategy_lab_router)
 app.include_router(trade_plan_router)
+app.include_router(journal_router)
 app.include_router(custom_indicators_router)
 app.include_router(drawing_tools_router)
 app.include_router(ai_templates_router)

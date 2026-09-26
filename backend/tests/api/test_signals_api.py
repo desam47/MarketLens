@@ -112,7 +112,7 @@ class TestSignalsAPI(unittest.TestCase):
             return_20b=4.0,
             mfe=3.0,
             mae=-1.0,
-            _outcome_missing=False,
+            outcome_computed=True,
         )
         defaults.update(fields)
         with self.Session() as db:

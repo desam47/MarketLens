@@ -32,7 +32,7 @@ def _patch_background():
     global _FAKE_JOBS
     _FAKE_JOBS.clear()
 
-    def fake_enqueue(symbol, timeframe, template_id, template_name):
+    def fake_enqueue(symbol, timeframe, template_id, template_name, portfolio_symbols=None):
         global _MOCK_JOB_COUNTER
         _MOCK_JOB_COUNTER += 1
         job_id = f"mock-rq-job-{_MOCK_JOB_COUNTER:04d}"
@@ -301,3 +301,49 @@ def test_cancel_started_job_returns_conflict(client):
         resp = client.post(f"/api/ai/jobs/{job_id}/cancel")
     assert resp.status_code == 409
     assert "already started" in resp.json()["detail"]
+
+
+def test_cancel_finished_job_returns_conflict(client):
+    """Cancelling an already-finished job should return 409."""
+    job_id = _enqueue_and_get_job_id(client, "AAPL")
+    payload = {
+        "id": 6,
+        "job_id": job_id,
+        "status": "finished",
+        "result": {"summary": "done", "trend": "bullish"},
+        "error": None,
+        "symbol": "AAPL",
+        "timeframe": "1d",
+        "template_id": None,
+        "template_name": None,
+        "created_at": "2024-01-01T00:00:00Z",
+        "started_at": "2024-01-01T00:00:01Z",
+        "completed_at": "2024-01-01T00:00:10Z",
+        "cancelled": False,
+    }
+    with patch("backend.api.ai.jobs.cancel_job", return_value=payload):
+        resp = client.post(f"/api/ai/jobs/{job_id}/cancel")
+    assert resp.status_code == 409
+
+
+def test_enqueue_job_forwards_portfolio_symbols(client):
+    """portfolio_symbols must be passed through to enqueue_analyze_job."""
+    captured = {}
+
+    def spy_enqueue(symbol, timeframe, template_id, template_name, portfolio_symbols=None):
+        captured["portfolio_symbols"] = portfolio_symbols
+        return "mock-rq-job-9999"
+
+    with patch("backend.api.ai.jobs.enqueue_analyze_job", side_effect=spy_enqueue):
+        resp = client.post(
+            "/api/ai/jobs",
+            json={"symbol": "AAPL", "portfolio_symbols": ["MSFT", "GOOG"]},
+        )
+    assert resp.status_code == 202
+    assert captured["portfolio_symbols"] == ["MSFT", "GOOG"]
+
+
+def test_enqueue_job_rejects_invalid_symbol_chars(client):
+    """symbol field must match the character-class regex."""
+    resp = client.post("/api/ai/jobs", json={"symbol": "A;CAT"})
+    assert resp.status_code == 422

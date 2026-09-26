@@ -1045,8 +1045,17 @@ class WebullProvider(BaseMarketDataProvider):
         bars = self.get_historical_bars(sym, timeframe=timeframe, range_="1y")
         if not bars:
             raise ValueError(f"No {timeframe} bar data for {sym}")
-        target = timestamp.timestamp()
-        closest = min(bars, key=lambda b: abs(b.timestamp.timestamp() - target))
+        # Normalise both sides through UTC-aware to avoid platform-TZ dependency
+        # in datetime.timestamp() when timestamps are naive NY.
+        if timestamp.tzinfo is None:
+            target_aware = timestamp.replace(tzinfo=_NY_TZ)
+        else:
+            target_aware = timestamp
+        target_epoch = target_aware.timestamp()
+        def _bar_epoch(b) -> float:
+            ts = b.timestamp
+            return ts.replace(tzinfo=_NY_TZ).timestamp() if ts.tzinfo is None else ts.timestamp()
+        closest = min(bars, key=lambda b: abs(_bar_epoch(b) - target_epoch))
         return closest
 
     # ---------------------------------------------------------------- market status

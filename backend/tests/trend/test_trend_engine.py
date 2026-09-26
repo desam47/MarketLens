@@ -411,8 +411,10 @@ class TestTrendEngineArchitecture(unittest.TestCase):
         five_minute = scoring_profile_for_timeframe(Timeframe.FIVE_MINUTE)
         one_hour = scoring_profile_for_timeframe(Timeframe.ONE_HOUR)
 
-        self.assertEqual(one_minute.id, "directional_core")
-        self.assertEqual(one_minute.component_count, 3)
+        # TREND_SIGNAL_V2=true: 1m/2m/3m gain SuperTrend + ADX and upgrade
+        # to the same intraday_directional profile as 5m.
+        self.assertEqual(one_minute.id, "intraday_directional")
+        self.assertEqual(one_minute.component_count, 4)
         self.assertEqual(five_minute.id, "intraday_directional")
         self.assertEqual(five_minute.component_count, 4)
         self.assertEqual(one_hour.id, "full_technical")
@@ -1177,7 +1179,7 @@ class TestTrendAttributionAndKeyLevels(unittest.TestCase):
         self.assertGreaterEqual(bands["upper"], bands["middle"])
         self.assertGreaterEqual(bands["middle"], bands["lower"])
 
-    def test_short_horizon_timeframe_has_no_supertrend_or_bollinger_levels(self):
+    def test_short_horizon_timeframe_has_supertrend_but_no_bollinger_levels(self):
         engine = TrendEngine("SPY")
         tf = Timeframe.ONE_MINUTE
         base = datetime(2026, 1, 1, 10, 0)
@@ -1197,8 +1199,9 @@ class TestTrendAttributionAndKeyLevels(unittest.TestCase):
             )
         signal = engine.get_current_trend(tf)
         self.assertIsNotNone(signal)
-        # 1m omits SuperTrend and Bollinger, so no levels for them.
-        self.assertNotIn("supertrend", signal.key_levels)
+        # TREND_SIGNAL_V2=true: 1m includes SuperTrend as a direction gate but
+        # still omits Bollinger (not in the fast-TF indicator set).
+        self.assertIn("supertrend", signal.key_levels)
         self.assertNotIn("bollinger", signal.key_levels)
 
 

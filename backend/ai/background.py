@@ -112,6 +112,7 @@ def enqueue_analyze_job(
     timeframe: str = "1d",
     template_id: int | None = None,
     template_name: str | None = None,
+    portfolio_symbols: list[str] | None = None,
 ) -> str | None:
     """Enqueue an ``analyze_symbol_task`` and return the RQ job ID.
 
@@ -123,7 +124,6 @@ def enqueue_analyze_job(
     """
     from backend.ai.tasks import analyze_symbol_task
     from backend.database import SessionLocal
-    from backend.models import AIAnalysisJob
 
     queue = get_queue()
     if queue is None:
@@ -138,23 +138,18 @@ def enqueue_analyze_job(
             "template_id": template_id,
             "template_name": template_name,
             "job_id": job_id,
+            "portfolio_symbols": portfolio_symbols,
         },
         job_id=job_id,
         result_ttl=settings.background.result_ttl,
     )
 
+    from backend.repositories.ai_analysis_job_repository import AIAnalysisJobRepository
+
     db = SessionLocal()
     try:
-        record = AIAnalysisJob(
-            job_id=job_id,
-            symbol=symbol.upper(),
-            timeframe=timeframe,
-            template_id=template_id,
-            template_name=template_name,
-            status="queued",
-        )
-        db.add(record)
-        db.commit()
+        repo = AIAnalysisJobRepository(db)
+        repo.create(job_id, symbol.upper(), timeframe, template_id, template_name)
     except Exception as exc:  # noqa: BLE001
         db.rollback()
         logger.error("Failed to persist AIAnalysisJob for rq_id=%s: %s", rq_job.id, exc)
@@ -218,11 +213,11 @@ def get_job_status(job_id: str) -> dict[str, Any] | None:
     - ``created_at`` / ``started_at`` / ``completed_at`` (ISO strings)
     """
     from backend.database import SessionLocal
-    from backend.models import AIAnalysisJob
+    from backend.repositories.ai_analysis_job_repository import AIAnalysisJobRepository
 
     db = SessionLocal()
     try:
-        record = db.query(AIAnalysisJob).filter(AIAnalysisJob.job_id == job_id).first()
+        record = AIAnalysisJobRepository(db).find_by_job_id(job_id)
         if record is None:
             return None
 
@@ -273,11 +268,11 @@ def cancel_job(job_id: str) -> dict[str, Any] | None:
     cancelled in RQ and marked terminal in our database.
     """
     from backend.database import SessionLocal
-    from backend.models import AIAnalysisJob
+    from backend.repositories.ai_analysis_job_repository import AIAnalysisJobRepository
 
     db = SessionLocal()
     try:
-        record = db.query(AIAnalysisJob).filter(AIAnalysisJob.job_id == job_id).first()
+        record = AIAnalysisJobRepository(db).find_by_job_id(job_id)
         if record is None:
             return None
         if record.status in ("finished", "failed", "cancelled"):

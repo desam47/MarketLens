@@ -17,7 +17,6 @@ from sqlalchemy.orm import Session
 from backend.database import SessionLocal
 from backend.engines.market_calendar import aggregate_bar_session, us_market_calendar
 from backend.market_data.hourly_bars import (
-    aggregate_1h_to_4h,
     build_1h_from_1m,
     closed_provider_hours,
     hour_session,
@@ -630,72 +629,6 @@ class MarketDataIngestionService:
     # so the scan cost grew unbounded with total retained history instead
     # of staying flat. full_history=True (startup / explicit backfill
     # calls only) restores the unwindowed full scan.
-    _4H_RESAMPLE_WINDOW_DAYS = 10
-    _1WK_RESAMPLE_WINDOW_DAYS = 60
-
-    async def _resample_1h_to_4h_and_upsert(
-        self, _symbol: str | None = None, full_history: bool = False
-    ) -> int:
-        """Read 1h bars → aggregate to 4h (NY market hours) → upsert.
-
-        4h buckets: 00:00-03:59, 04:00-07:59, 08:00-11:59, 12:00-15:59,
-        16:00-19:59, 20:00-23:59 ET.  Only confirmed-closed buckets
-        (end-time < now) are written.
-
-        If ``_symbol`` is provided, resample only that symbol instead of
-        ``self.symbols`` (used by backfill_service for newly added symbols).
-
-        By default only the last ``_4H_RESAMPLE_WINDOW_DAYS`` of 1h bars
-        are scanned (see the class-level comment above); pass
-        ``full_history=True`` for a one-time full backfill (startup).
-        """
-        from backend.repositories.bar_repository import upsert_bars
-
-        symbols_to_process = [_symbol] if _symbol else self.symbols
-        written = 0
-        analysis_bars: list[Bar] = []
-        db = SessionLocal()
-        try:
-            for symbol in symbols_to_process:
-                query = db.query(BarModel).filter(
-                    and_(
-                        BarModel.symbol == symbol.upper(),
-                        BarModel.timeframe == "1h",
-                    )
-                )
-                if not full_history:
-                    cutoff = datetime.now(_NY_TZ).replace(tzinfo=None) - timedelta(
-                        days=self._4H_RESAMPLE_WINDOW_DAYS
-                    )
-                    query = query.filter(BarModel.timestamp >= cutoff)
-                rows = query.order_by(BarModel.timestamp.asc()).all()
-                if len(rows) < 4:
-                    continue
-
-                # Live in-progress bucket, same convention as 1d/1h/sub-hour:
-                # written INCOMPLETE and refreshed each pass until it closes.
-                # See hourly_bars.aggregate_1h_to_4h for the bucket rules.
-                now = datetime.now(_NY_TZ).replace(tzinfo=None)
-                to_write = aggregate_1h_to_4h(symbol, (self._model_to_bar(r) for r in rows), now)
-                if to_write:
-                    written += upsert_bars(db, to_write)
-                    analysis_bars.extend(to_write)
-                # Small delay between symbols to avoid bursts
-                await asyncio.sleep(0.05)
-            db.commit()
-            self._dispatch_latest_analysis_bars(analysis_bars)
-            if written:
-                from backend.market_data.services.cache import _redis_cache
-
-                for symbol in symbols_to_process:
-                    _redis_cache.invalidate_bars_for_symbol(symbol)
-        except Exception:
-            db.rollback()
-            raise
-        finally:
-            db.close()
-        return written
-
     # ------------------------------------------------------------------
     # 1h → 4h aggregation (aligned to NY market-hour boundaries)
     # ------------------------------------------------------------------
@@ -1466,8 +1399,14 @@ class MarketDataIngestionService:
                 )
                 fb_bars = [n for n in (normalize_fn(b, fb_name) for b in fb_raw) if n is not None]
                 if fb_bars:
+                    # Fill gaps from the fallback without overwriting valid
+                    # primary-provider bars. dict.update() would replace primary
+                    # bars at the same timestamp with potentially lower-quality
+                    # fallback bars — instead, only insert timestamps absent from
+                    # the primary result.
                     by_ts = {b.timestamp: b for b in bars}
-                    by_ts.update({b.timestamp: b for b in fb_bars})
+                    for b in fb_bars:
+                        by_ts.setdefault(b.timestamp, b)
                     bars = list(by_ts.values())
                     provider = None  # mixed source — normalize_fn gets "fallback"
                     break

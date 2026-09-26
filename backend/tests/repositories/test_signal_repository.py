@@ -50,12 +50,13 @@ class TestSignalRepository(unittest.TestCase):
             return_20b=5.0,
             mfe=3.0,
             mae=-1.5,
-            _outcome_missing=False,
+            outcome_computed=True,
         )
         defaults.update(fields)
-        # If a test sets return_5b=None explicitly, mark outcome as missing
-        if "return_5b" in fields and fields["return_5b"] is None:
-            defaults["_outcome_missing"] = True
+        # Mark pending if any outcome field is explicitly set to None.
+        outcome_fields = ("return_5b", "return_10b", "return_20b", "mfe", "mae")
+        if any(fields.get(f) is None for f in outcome_fields if f in fields):
+            defaults["outcome_computed"] = False
         with self.Session() as db:
             s = HistoricalSignal(**defaults)
             db.add(s)
@@ -289,7 +290,7 @@ class TestSignalRepository(unittest.TestCase):
         self.assertEqual(updated.return_20b, 5.0)
         self.assertEqual(updated.mfe, 3.0)
         self.assertEqual(updated.mae, -1.0)
-        self.assertEqual(updated._outcome_missing, False)
+        self.assertEqual(updated.outcome_computed, True)
 
     def test_update_outcomes_returns_none_for_missing_id(self):
         with self.Session() as db:

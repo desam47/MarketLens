@@ -140,15 +140,20 @@ class SignalRepository:
             from sqlalchemy.dialects.postgresql import insert as dialect_insert
         else:
             from sqlalchemy.dialects.sqlite import insert as dialect_insert
-        # A Core insert on the table reports rowcount; records use ORM attribute
-        # names, so map each to its column (``_outcome_missing`` is "outcome_computed").
+        # A Core insert on the table reports rowcount; records use ORM attribute names
+        # (e.g. ``outcome_computed`` → SQL column ``outcome_computed``).
         attrs = HistoricalSignal.__mapper__.column_attrs
         rows = [{attrs[key].columns[0].name: value for key, value in record.items()} for record in records]
         statement = dialect_insert(HistoricalSignal.__table__).on_conflict_do_nothing(
             index_elements=["symbol", "timeframe", "timestamp"]
         )
         result = self.db.execute(statement, rows)
-        return max(int(result.rowcount or 0), 0)
+        # SQLite executemany with ON CONFLICT DO NOTHING may return rowcount=-1
+        # (driver reports "unknown rows affected"). Fall back to input count as
+        # an optimistic upper bound — correct when no conflicts occur, which is
+        # the common case; only logging/return values are affected, not data.
+        count = int(result.rowcount) if result.rowcount >= 0 else len(rows)
+        return max(count, 0)
 
     def get_by_id(self, signal_id: int) -> HistoricalSignal | None:
         return self.db.query(HistoricalSignal).filter(HistoricalSignal.id == signal_id).first()
@@ -173,22 +178,38 @@ class SignalRepository:
         Returns a mapping of timeframe -> signal. Timeframes with no
         signal are omitted from the result; callers can detect "no data
         for this symbol" by checking whether the dict is empty.
+
+        Uses a single subquery (MAX timestamp per TF) instead of one
+        round-trip per timeframe.
         """
         symbol = symbol.upper()
-        latest: dict[str, HistoricalSignal] = {}
-        for tf in timeframes:
-            signal = (
-                self.db.query(HistoricalSignal)
-                .filter(
-                    HistoricalSignal.symbol == symbol,
-                    HistoricalSignal.timeframe == tf,
-                )
-                .order_by(desc(HistoricalSignal.timestamp))
-                .first()
+        if not timeframes:
+            return {}
+        sub = (
+            self.db.query(
+                HistoricalSignal.timeframe,
+                func.max(HistoricalSignal.timestamp).label("max_ts"),
             )
-            if signal is not None:
-                latest[tf] = signal
-        return latest
+            .filter(
+                HistoricalSignal.symbol == symbol,
+                HistoricalSignal.timeframe.in_(timeframes),
+            )
+            .group_by(HistoricalSignal.timeframe)
+            .subquery()
+        )
+        rows = (
+            self.db.query(HistoricalSignal)
+            .join(
+                sub,
+                and_(
+                    HistoricalSignal.timeframe == sub.c.timeframe,
+                    HistoricalSignal.timestamp == sub.c.max_ts,
+                ),
+            )
+            .filter(HistoricalSignal.symbol == symbol)
+            .all()
+        )
+        return {str(r.timeframe): r for r in rows}
 
     def get_history(
         self,
@@ -319,7 +340,10 @@ class SignalRepository:
         symbol that no longer receives bars) are skipped instead of refilling
         every batch, so they never block newer rows that can be completed.
         """
-        pending = outcome_pending_filter()
+        # Use the indexed outcome_computed column (TRUE = complete, FALSE/NULL = pending)
+        # instead of a 5-column OR-of-NULLs full scan. outcome_pending_filter() remains
+        # available for research queries that need the precise NULL check.
+        pending = HistoricalSignal.outcome_computed.isnot(True)
         pairs = self.db.query(HistoricalSignal.symbol, HistoricalSignal.timeframe).filter(pending).distinct().all()
         candidates: list[HistoricalSignal] = []
         for symbol, timeframe in pairs:
@@ -385,7 +409,7 @@ class SignalRepository:
         signal.return_20b = return_20b
         signal.mfe = mfe
         signal.mae = mae
-        signal._outcome_missing = not all(
+        signal.outcome_computed = all(
             value is not None
             for value in (return_5b, return_10b, return_20b, mfe, mae)
         )

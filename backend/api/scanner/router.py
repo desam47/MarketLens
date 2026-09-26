@@ -135,6 +135,7 @@ class _WatchlistIntelligenceResponse(BaseModel):
     top_bearish: list[_WatchlistIntelligenceEntry] = Field(default_factory=list)
     breakouts: list[_WatchlistIntelligenceEntry] = Field(default_factory=list)
     deteriorating: list[_WatchlistIntelligenceEntry] = Field(default_factory=list)
+    weakest: list[_WatchlistIntelligenceEntry] = Field(default_factory=list)
     volume_spikes: list[_WatchlistIntelligenceEntry] = Field(default_factory=list)
     relative_strength: list[_WatchlistIntelligenceEntry] = Field(default_factory=list)
     mtf_alignment: list[_WatchlistIntelligenceEntry] = Field(default_factory=list)
@@ -909,15 +910,23 @@ async def get_signals_for_symbol(symbol: str):
     """Return the trading signals from the most recent scan of ``symbol``.
 
     Triggers a fresh scan if the symbol is not already in the cache.
+    Alert engine is notified on a first scan so signal_equals alerts fire.
     """
     result = market_scanner.get_scan_result(symbol.upper())
     if result is None:
-        # First read for this symbol: scan it.
+        # First read for this symbol: scan it and notify alerts (same
+        # contract as the /{symbol} path via _scan_and_notify).
         try:
             result = market_scanner.scan_symbol(symbol.upper())
         except Exception as e:
             logger.error(f"Error scanning symbol {symbol}: {e}")
             raise HTTPException(status_code=500, detail=str(e)) from e
+        try:
+            from backend.alerts.engine import alerts_engine
+
+            alerts_engine.evaluate_scan_result(result)
+        except Exception:
+            logger.debug("Alert evaluation unavailable for signals endpoint", exc_info=True)
     return result.signals or []
 
 

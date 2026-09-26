@@ -593,5 +593,123 @@ class TestAIManagerRuntimeToggle(unittest.TestCase):
         self.assertFalse(asyncio.run(mgr.is_available()))
 
 
+class TestCalculateEndpoint(unittest.TestCase):
+    """HTTP-layer coverage for POST /api/ai/calculate."""
+
+    def test_calculate_position_size_returns_200(self):
+        resp = client.post(
+            "/api/ai/calculate",
+            json={
+                "tool_name": "calculate",
+                "arguments": {
+                    "calculation": "position_size",
+                    "entry_price": 220,
+                    "stop_price": 212,
+                    "account_value": 100_000,
+                    "risk_percent": 1,
+                },
+            },
+        )
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["tool_name"], "calculate")
+        self.assertEqual(data["data"]["values"]["shares"], 125)
+
+    def test_calculate_unknown_tool_422(self):
+        resp = client.post(
+            "/api/ai/calculate",
+            json={"tool_name": "no_such_tool", "arguments": {}},
+        )
+        self.assertEqual(resp.status_code, 422)
+
+    def test_calculate_rejects_bad_tool_name_pattern(self):
+        resp = client.post(
+            "/api/ai/calculate",
+            json={"tool_name": "Bad-Tool!", "arguments": {}},
+        )
+        self.assertEqual(resp.status_code, 422)
+
+
+class TestSymbolRegexValidation(unittest.TestCase):
+    """The symbol regex rejects unsafe characters on both analyze endpoints."""
+
+    def test_analyze_rejects_symbol_with_injection_chars(self):
+        resp = client.post("/api/ai/analyze?symbol=A%3BCAT")  # A;CAT
+        self.assertEqual(resp.status_code, 422)
+
+    def test_analyze_stream_rejects_symbol_with_injection_chars(self):
+        with client.stream("POST", "/api/ai/analyze/stream?symbol=A%3BCAT") as resp:
+            self.assertEqual(resp.status_code, 422)
+
+    def test_analyze_accepts_valid_ticker_with_dot(self):
+        """BRK.B-style tickers must be allowed."""
+        from backend.ai.prompt import UncertaintyResponse
+
+        with patch("backend.api.ai.router.analyze_symbol") as mock_analyze:
+            mock_analyze.return_value = UncertaintyResponse(summary="x")
+            resp = client.post("/api/ai/analyze?symbol=BRK.B")
+        self.assertEqual(resp.status_code, 200)
+
+
+class TestStreamExtended(unittest.TestCase):
+    """Additional stream coverage: template forwarding and force_refresh."""
+
+    @patch("backend.api.ai.router.analyze_symbol_stream")
+    @patch("backend.api.ai.router._sync_resolve_template")
+    def test_stream_forwards_template_id(self, mock_resolve, mock_stream):
+        from backend.ai.prompt import AnalysisResponse
+
+        mock_resolve.return_value = (42, None)
+
+        async def _gen():
+            yield ("meta", {"symbol": "AAPL", "timeframe": "1d", "track_record": {}, "model": None})
+            yield ("final", {
+                "summary": "x", "trend": "bullish", "confidence": 0.8,
+                "supporting_factors": [], "risk_factors": [], "key_levels": [],
+                "trade_plan": None, "provider": "ollama", "model": "llama3.2",
+                "is_uncertain": False, "uncertainty_reason": "none",
+                "market_regime": {}, "timeframe_scores": {}, "track_record": {},
+                "correlation_context": {},
+            })
+
+        mock_stream.return_value = _gen()
+
+        with client.stream(
+            "POST", "/api/ai/analyze/stream?symbol=AAPL&template_id=42"
+        ) as resp:
+            resp.read()
+
+        # _sync_resolve_template must have been called with template_id=42.
+        resolve_args = mock_resolve.call_args[0]  # (db, template_id)
+        self.assertEqual(resolve_args[1], 42)
+
+    @patch("backend.api.ai.router.analyze_symbol_stream")
+    @patch("backend.api.ai.router._sync_resolve_template")
+    def test_stream_forwards_force_refresh(self, mock_resolve, mock_stream):
+        mock_resolve.return_value = (None, None)
+
+        async def _gen():
+            yield ("meta", {"symbol": "AAPL", "timeframe": "1d", "track_record": {}, "model": None})
+            yield ("final", {
+                "summary": "x", "trend": "bullish", "confidence": 0.8,
+                "supporting_factors": [], "risk_factors": [], "key_levels": [],
+                "trade_plan": None, "provider": "ollama", "model": "llama3.2",
+                "is_uncertain": False, "uncertainty_reason": "none",
+                "market_regime": {}, "timeframe_scores": {}, "track_record": {},
+                "correlation_context": {},
+            })
+
+        mock_stream.return_value = _gen()
+
+        with client.stream(
+            "POST", "/api/ai/analyze/stream?symbol=AAPL&force_refresh=true"
+        ) as resp:
+            resp.read()
+
+        call_kwargs = mock_stream.call_args.kwargs
+        self.assertTrue(call_kwargs.get("force_refresh"))
+
+
 if __name__ == "__main__":
     unittest.main()

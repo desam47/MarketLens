@@ -100,12 +100,14 @@ function CandidateTable({
   candidates,
   entry,
   selectedStop,
+  selectedTargetPrices,
   emptyNote,
 }: {
   title: string;
   candidates: PriceCandidate[];
   entry: number | null;
   selectedStop: number | null;
+  selectedTargetPrices?: number[];
   emptyNote: string;
 }) {
   if (candidates.length === 0) {
@@ -133,13 +135,17 @@ function CandidateTable({
           </thead>
           <tbody>
             {candidates.map((candidate, index) => {
-              const isSelected = selectedStop != null && candidate.price === selectedStop;
+              const isSelectedStop = selectedStop != null && candidate.price === selectedStop;
+              const targetIdx = selectedTargetPrices?.findIndex(
+                p => Math.abs(p - candidate.price) < 1e-4,
+              ) ?? -1;
               const rr = showRR ? rewardRisk(candidate.price, entry!, selectedStop!) : null;
               return (
                 <tr key={`${candidate.source}-${candidate.price}-${index}`}>
                   <td>
                     <strong>{sourceLabel(candidate.source)}</strong>
-                    {isSelected && <span className="risk-updated"> selected</span>}
+                    {isSelectedStop && <span className="risk-updated"> ✓ selected</span>}
+                    {targetIdx >= 0 && <span className="positive"> T{targetIdx + 1}</span>}
                   </td>
                   <td>{money(candidate.price, 4)}</td>
                   <td>{pct(candidate.distance_pct)}</td>
@@ -194,14 +200,33 @@ function SampleQualityBanner({ draft }: { draft: TradePlanDraft }) {
     );
   }
 
+  const baseline = (empirical as any).baseline;
   return (
     <div className="card risk-notice">
       <h3>Empirical sample — insufficient</h3>
       <p>
         Only <strong>{empirical.sample_size}</strong> comparable signals (need{' '}
-        {empirical.min_sample}). No empirical stop is offered; the plan falls back to
+        {empirical.min_sample}); no empirical stop is offered. The plan falls back to
         structural and volatility levels.
       </p>
+      {baseline ? (
+        <p>
+          <small>
+            Wider baseline: <strong>{baseline.label}</strong> —{' '}
+            {baseline.sample_size.toLocaleString()} signals, confidence{' '}
+            <strong>{baseline.confidence}</strong>
+            {baseline.adverse_excursion_pct && (
+              <> · p75 adverse {baseline.adverse_excursion_pct.p75.toFixed(2)}%</>
+            )}
+            {baseline.favorable_excursion_pct && (
+              <> · median favourable {baseline.favorable_excursion_pct.p50.toFixed(2)}%</>
+            )}
+            . For context only — this is not conditioned on {draft.symbol}.
+          </small>
+        </p>
+      ) : (
+        <p><small>No wider baseline available for this timeframe and direction.</small></p>
+      )}
     </div>
   );
 }
@@ -279,29 +304,83 @@ export function TradePlanningPage({ navigation }: { navigation?: NavigationState
     return (riskDollars / store.accountValue) * 100;
   }, [riskDollars, store.accountValue]);
 
+  // Sync saved plans from backend on mount — merge with any localStorage plans
+  // that haven't reached the server yet (e.g. created while offline).
+  useEffect(() => {
+    api.listSavedPlans().then(remote => {
+      setStore(prev => {
+        const remoteIds = new Set(remote.map((p: any) => p.id));
+        const localOnly = prev.plans.filter(p => !remoteIds.has(p.id));
+        const merged = [
+          ...remote.map((p: any) => ({
+            id: p.id,
+            symbol: p.symbol,
+            side: p.side as TradeDirection,
+            timeframe: p.timeframe,
+            entryPrice: p.entryPrice,
+            stopPrice: p.stopPrice,
+            targetPrice: p.targetPrice,
+            quantity: p.quantity,
+            stopSource: p.stopSource,
+            rewardRisk: p.rewardRisk ?? null,
+            thesis: p.thesis ?? '',
+            createdAt: p.createdAt ?? new Date().toISOString(),
+          })),
+          ...localOnly,
+        ];
+        return { ...prev, plans: merged };
+      });
+    }).catch(() => { /* backend unavailable — localStorage is the source of truth */ });
+  }, []);
+
   const savePlan = () => {
-    if (!draft || !selected || !plan?.position_size) return;
-    const firstTarget = plan.targets[0];
+    if (!draft) return;
+    const firstTarget = plan?.targets[0];
+    // Use auto-selected levels when available; fall back to first candidate when
+    // the auto-selector refused (e.g. no target clears the minimum R:R gate).
+    const saveEntry = selected?.entry_zone_low ?? draft.current_price ?? 0;
+    const saveStop = selected?.stop_price ?? draft.candidate_stops[0]?.price ?? saveEntry;
+    const saveTarget =
+      firstTarget?.price ??
+      selected?.targets[0] ??
+      draft.candidate_targets[0]?.price ??
+      saveEntry;
+    const saveStopSource = selected?.stop_source ?? draft.candidate_stops[0]?.source ?? 'manual';
     const saved: SavedPlan = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       symbol: draft.symbol,
       side: draft.direction,
       timeframe: draft.timeframe,
-      entryPrice: selected.entry_zone_low,
-      stopPrice: selected.stop_price,
-      targetPrice: firstTarget?.price ?? selected.targets[0],
-      quantity: Math.floor(plan.position_size?.shares ?? 0),
-      stopSource: selected.stop_source,
+      entryPrice: saveEntry,
+      stopPrice: saveStop,
+      targetPrice: saveTarget,
+      quantity: Math.floor(plan?.position_size?.shares ?? 0),
+      stopSource: saveStopSource,
       rewardRisk: firstTarget?.risk_reward ?? null,
       thesis: thesis.trim(),
       createdAt: new Date().toISOString(),
     };
     setStore(previous => ({ ...previous, plans: [saved, ...previous.plans] }));
     setThesis('');
+    // Sync to backend (fire-and-forget — localStorage is already updated above).
+    api.upsertSavedPlan({
+      client_id: saved.id,
+      symbol: saved.symbol,
+      side: saved.side,
+      timeframe: saved.timeframe,
+      entry_price: saved.entryPrice,
+      stop_price: saved.stopPrice,
+      target_price: saved.targetPrice,
+      quantity: saved.quantity,
+      stop_source: saved.stopSource,
+      reward_risk: saved.rewardRisk,
+      thesis: saved.thesis,
+    }).catch(() => { /* best-effort */ });
   };
 
   const removePlan = (id: string) => {
     setStore(previous => ({ ...previous, plans: previous.plans.filter(p => p.id !== id) }));
+    api.deleteSavedPlan(id).catch(() => { /* best-effort */ });
   };
 
   return (
@@ -324,6 +403,7 @@ export function TradePlanningPage({ navigation }: { navigation?: NavigationState
               type="text"
               value={symbol}
               onChange={e => setSymbol(e.target.value.toUpperCase())}
+              onKeyDown={e => { if (e.key === 'Enter') buildDraft(); }}
               placeholder="SPY"
             />
           </label>
@@ -464,99 +544,99 @@ export function TradePlanningPage({ navigation }: { navigation?: NavigationState
             candidates={draft.candidate_targets}
             entry={entry}
             selectedStop={selected?.stop_price ?? null}
+            selectedTargetPrices={selected?.targets}
             emptyNote="No target candidate beyond entry."
           />
 
-          {plan && selected ? (
-            <div className="card">
-              <h3>Plan</h3>
-              <div className="session-stats">
-                <span><small>Entry</small><strong>{money(selected.entry_zone_low, 4)}</strong></span>
-                <span>
-                  <small>Stop ({sourceLabel(selected.stop_source)})</small>
-                  <strong>{money(selected.stop_price, 4)}</strong>
-                </span>
-                <span>
-                  <small>Shares</small>
-                  <strong>
-                    {plan.position_size?.shares != null
-                      ? Math.floor(plan.position_size.shares).toLocaleString()
-                      : '—'}
-                  </strong>
-                </span>
-                <span>
-                  <small>Risk</small>
-                  <strong>
-                    {money(riskDollars)}
-                    {riskOfAccount != null && ` (${riskOfAccount.toFixed(2)}%)`}
-                  </strong>
-                </span>
-                <span>
-                  <small>Position value</small>
-                  <strong>{money(plan.position_size?.position_value ?? null, 0)}</strong>
-                </span>
-              </div>
+          <div className="card">
+            <h3>Plan</h3>
+            {plan && selected ? (
+              <>
+                <div className="session-stats">
+                  <span><small>Entry</small><strong>{money(selected.entry_zone_low, 4)}</strong></span>
+                  <span>
+                    <small>Stop ({sourceLabel(selected.stop_source)})</small>
+                    <strong>{money(selected.stop_price, 4)}</strong>
+                  </span>
+                  <span>
+                    <small>Shares</small>
+                    <strong>
+                      {plan.position_size?.shares != null
+                        ? Math.floor(plan.position_size.shares).toLocaleString()
+                        : '—'}
+                    </strong>
+                  </span>
+                  <span>
+                    <small>Risk</small>
+                    <strong>
+                      {money(riskDollars)}
+                      {riskOfAccount != null && ` (${riskOfAccount.toFixed(2)}%)`}
+                    </strong>
+                  </span>
+                  <span>
+                    <small>Position value</small>
+                    <strong>{money(plan.position_size?.position_value ?? null, 0)}</strong>
+                  </span>
+                </div>
 
-              <div className="risk-table-wrap">
-                <table className="risk-table">
-                  <thead>
-                    <tr>
-                      <th scope="col">Target</th>
-                      <th scope="col">Price</th>
-                      <th scope="col">Reward</th>
-                      <th scope="col">R:R</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {plan.targets.map((target, index) => (
-                      <tr key={target.price}>
-                        <td>T{index + 1} <small>({sourceLabel(selected.target_sources[index] || '')})</small></td>
-                        <td>{money(target.price, 4)}</td>
-                        <td>{money(target.reward, 4)}</td>
-                        <td><strong>{target.risk_reward.toFixed(2)}:1</strong></td>
+                <div className="risk-table-wrap">
+                  <table className="risk-table">
+                    <thead>
+                      <tr>
+                        <th scope="col">Target</th>
+                        <th scope="col">Price</th>
+                        <th scope="col">Reward</th>
+                        <th scope="col">R:R</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    </thead>
+                    <tbody>
+                      {plan.targets.map((target, index) => (
+                        <tr key={target.price}>
+                          <td>T{index + 1} <small>({sourceLabel(selected.target_sources[index] || '')})</small></td>
+                          <td>{money(target.price, 4)}</td>
+                          <td>{money(target.reward, 4)}</td>
+                          <td><strong>{target.risk_reward.toFixed(2)}:1</strong></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
 
-              {plan.invalidation && <p><small>{plan.invalidation}</small></p>}
-              {!plan.position_size && (
-                <p className="risk-data-warning">
-                  <small>{plan.position_size_reason || 'Add account value and risk percentage to size this plan.'}</small>
-                </p>
-              )}
-              {plan.assumptions.length > 0 && (
-                <details>
-                  <summary>Assumptions and formulas</summary>
-                  <ul>
-                    {plan.assumptions.map(item => <li key={item}><small>{item}</small></li>)}
-                    {plan.formulas.map(item => <li key={item}><small><code>{item}</code></small></li>)}
-                  </ul>
-                </details>
-              )}
-
-              <label>
-                Thesis
-                <textarea
-                  value={thesis}
-                  onChange={e => setThesis(e.target.value)}
-                  rows={2}
-                  placeholder="Why this trade?"
-                />
-              </label>
-              <button className="btn" onClick={savePlan} disabled={!plan.position_size}>
-                Save plan
-              </button>
-            </div>
-          ) : (
-            <div className="card">
-              <h3>Plan</h3>
+                {plan.invalidation && <p><small>{plan.invalidation}</small></p>}
+                {!plan.position_size && (
+                  <p className="risk-data-warning">
+                    <small>{plan.position_size_reason || 'Add account value and risk percentage to size this plan.'}</small>
+                  </p>
+                )}
+                {plan.assumptions.length > 0 && (
+                  <details>
+                    <summary>Assumptions and formulas</summary>
+                    <ul>
+                      {plan.assumptions.map(item => <li key={item}><small>{item}</small></li>)}
+                      {plan.formulas.map(item => <li key={item}><small><code>{item}</code></small></li>)}
+                    </ul>
+                  </details>
+                )}
+              </>
+            ) : (
               <p className="empty-state">
-                No plan — no stop/target pairing pays for its own risk. See warnings above.
+                No auto-selected plan — see warnings above. You can still save the setup levels below.
               </p>
-            </div>
-          )}
+            )}
+
+            <label>
+              Thesis
+              <textarea
+                value={thesis}
+                onChange={e => setThesis(e.target.value)}
+                rows={2}
+                placeholder="Why this trade?"
+              />
+            </label>
+            <button className="btn" onClick={savePlan}>
+              Save plan
+            </button>
+          </div>
         </>
       )}
 

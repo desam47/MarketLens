@@ -90,3 +90,5 @@ from .signal import HistoricalSignal as HistoricalSignal
 from .watchlist import Watchlist as Watchlist
 from .watchlist import WatchlistSymbol as WatchlistSymbol
 from .workflow import ChatWorkflow as ChatWorkflow
+from .trade_journal_entry import TradeJournalEntry as TradeJournalEntry
+from .saved_trade_plan import SavedTradePlan as SavedTradePlan

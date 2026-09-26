@@ -1,4 +1,4 @@
-import React, { FormEvent, useEffect, useMemo, useState } from 'react';
+import React, { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import api, { HistoricalSignal, ScanResult, TapeSnapshot } from '../services/api';
 import type { NavigationState } from '../utils/appNavigation';
 
@@ -148,6 +148,11 @@ function journalNavigation(navigation?: NavigationState): { status?: TradeStatus
 export function TradeJournalPage({ navigation }: { navigation?: NavigationState }) {
   const initialNavigation = journalNavigation(navigation);
   const [entries, setEntries] = useState<JournalEntry[]>(readEntries);
+  // Track which entry ids have screenshots in localStorage so we can re-attach
+  // them after a remote fetch (screenshots never leave the client).
+  const screenshotMapRef = useRef<Map<string, string>>(
+    new Map(readEntries().filter(e => e.screenshotDataUrl).map(e => [e.id, e.screenshotDataUrl!]))
+  );
   const [editingId, setEditingId] = useState<string | null>(null);
   const [symbol, setSymbol] = useState(() => {
     if (navigation?.symbol) return navigation.symbol;
@@ -184,6 +189,25 @@ export function TradeJournalPage({ navigation }: { navigation?: NavigationState 
 
   useEffect(() => {
     try { window.localStorage.removeItem(PENDING_DRAFT_KEY); } catch { /* best effort */ }
+  }, []);
+
+  // On mount: fetch remote entries and merge, re-attaching any local screenshots.
+  useEffect(() => {
+    api.listJournalEntries().then(remote => {
+      setEntries(prev => {
+        const remoteIds = new Set(remote.map((e: any) => e.id));
+        const localOnly = prev.filter(e => !remoteIds.has(e.id));
+        const merged: JournalEntry[] = [
+          ...remote.map((e: any) => ({
+            ...e,
+            screenshotDataUrl: screenshotMapRef.current.get(e.id) ?? null,
+          })),
+          ...localOnly,
+        ];
+        return merged;
+      });
+    }).catch(() => { /* backend unavailable — localStorage is source of truth */ });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -259,6 +283,25 @@ export function TradeJournalPage({ navigation }: { navigation?: NavigationState 
       createdAt: existing?.createdAt || now, updatedAt: now,
     };
     setEntries(current => existing ? current.map(entry => entry.id === existing.id ? next : entry) : [next, ...current]);
+    if (next.screenshotDataUrl) screenshotMapRef.current.set(next.id, next.screenshotDataUrl);
+    // Sync to backend (no screenshot — too large for SQLite).
+    api.upsertJournalEntry({
+      client_id: next.id,
+      symbol: next.symbol,
+      side: next.side,
+      status: next.status,
+      entry_date: next.entryDate,
+      exit_date: next.exitDate,
+      quantity: next.quantity,
+      entry_price: next.entryPrice,
+      exit_price: next.exitPrice,
+      stop_price: next.stopPrice,
+      target_price: next.targetPrice,
+      thesis: next.thesis,
+      review_notes: next.reviewNotes,
+      signal_context: next.signalContext,
+      market_context: next.marketContext,
+    }).catch(() => { /* best-effort */ });
     resetForm(); setSaving(false);
   };
 
@@ -271,7 +314,11 @@ export function TradeJournalPage({ navigation }: { navigation?: NavigationState 
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const removeEntry = (id: string) => setEntries(current => current.filter(entry => entry.id !== id));
+  const removeEntry = (id: string) => {
+    setEntries(current => current.filter(entry => entry.id !== id));
+    screenshotMapRef.current.delete(id);
+    api.deleteJournalEntry(id).catch(() => { /* best-effort */ });
+  };
 
   const visibleEntries = useMemo(() => entries.filter(entry => (
     (filter === 'all' || entry.status === filter)

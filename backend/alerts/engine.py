@@ -128,6 +128,9 @@ class AlertsEngine:
         self._aux_lock = threading.Lock()
         self._aux_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="alerts-aux")
         self._aux_poll_interval_seconds = 60.0
+        # Cache for _compute_pct_change: symbol -> (result, computed_at_unix).
+        self._pct_change_cache: dict[str, tuple[float | None, float]] = {}
+        self._pct_change_ttl = 300.0  # 5 minutes
 
     # --- Public API (called from router and startup) --------------------
 
@@ -152,8 +155,24 @@ class AlertsEngine:
         db = SessionLocal()
         try:
             alerts = db.query(Alert).filter(Alert.is_enabled).all()
+            # Restore dedup state from recent triggers so alerts that fired
+            # before a restart don't immediately re-fire within their window.
+            cutoff = now_ny() - timedelta(seconds=DEDUP_WINDOW_SECONDS * 2)
+            recent_triggers = (
+                db.query(AlertTrigger.alert_id, AlertTrigger.symbol, AlertTrigger.triggered_at)
+                .filter(AlertTrigger.triggered_at >= cutoff)
+                .all()
+            )
         finally:
             db.close()
+
+        # Seed _fired_at from DB so dedup survives process restarts.
+        import calendar
+        for row in recent_triggers:
+            key = (row.alert_id, row.symbol.upper())
+            ts = calendar.timegm(row.triggered_at.timetuple()) if row.triggered_at else 0.0
+            if self._fired_at.get(key, 0) < ts:
+                self._fired_at[key] = float(ts)
 
         # Rebuild the alerts cache.
         self._alerts_cache = {a.id: a for a in alerts}
@@ -169,6 +188,8 @@ class AlertsEngine:
         # avoid duplicate registrations when multiple alerts share the same symbol.
         _price_registered: set[str] = set()
         _bar_registered: set[str] = set()
+        _micro_registered: set[str] = set()
+        current_micro_symbols = set(self._microstructure_alert_ids.keys())
 
         for alert in alerts:
             sym = alert.symbol.upper()
@@ -183,7 +204,9 @@ class AlertsEngine:
                 new_micro_symbols.add(sym)
                 if alert.id not in self._microstructure_alert_ids.setdefault(sym, []):
                     self._microstructure_alert_ids[sym].append(alert.id)
-                engine_registry.register("microstructure", sym, self._on_microstructure)
+                if sym not in current_micro_symbols and sym not in _micro_registered:
+                    engine_registry.register("microstructure", sym, self._on_microstructure)
+                    _micro_registered.add(sym)
             elif alert.condition_type in BAR_CONDITIONS:
                 new_bar_symbols.add(sym)
                 if not hasattr(self, "_bar_alert_ids"):
@@ -693,6 +716,7 @@ class AlertsEngine:
                 dedup_symbol = f"{dedup_symbol}:{earnings_date}"
         key = (alert.id, dedup_symbol)
         with self._lock:
+            now_ts = time.time()
             last = self._fired_at.get(key, 0)
             window = DEDUP_WINDOW_SECONDS
             if alert.condition_type == "signal_profile":
@@ -703,9 +727,13 @@ class AlertsEngine:
                     pass
             if alert.condition_type == "earnings_approaching" and last:
                 return False
-            if time.time() - last < window:
+            if now_ts - last < window:
                 return False
-            self._fired_at[key] = time.time()
+            self._fired_at[key] = now_ts
+            # Prune stale entries when the cache grows large to prevent unbounded growth.
+            if len(self._fired_at) > 10_000:
+                cutoff = now_ts - DEDUP_WINDOW_SECONDS * 2
+                self._fired_at = {k: v for k, v in self._fired_at.items() if v > cutoff}
 
         # Persist the trigger.
         self._persist_trigger(alert, price, extra_value)
@@ -882,7 +910,17 @@ class AlertsEngine:
             db.close()
 
     def _compute_pct_change(self, symbol: str, current_price: float) -> float | None:
-        """Compute the 1-day percent change from the latest stored quote."""
+        """Compute the 1-day percent change from the latest stored quote.
+
+        Result is cached for 5 minutes per symbol to avoid repeated DB queries
+        on every quote tick when multiple price-change alerts are enabled.
+        """
+        sym = symbol.upper()
+        now_ts = time.time()
+        cached_val, cached_at = self._pct_change_cache.get(sym, (None, 0.0))
+        if now_ts - cached_at < self._pct_change_ttl:
+            return cached_val
+
         db = SessionLocal()
         try:
             from backend.models import QuoteModel
@@ -902,11 +940,12 @@ class AlertsEngine:
                 .all()
             )
             if len(latest) < 2:
-                return None
-            old_price = float(latest[1].price or 0)
-            if old_price <= 0:
-                return None
-            return (current_price - old_price) / old_price * 100.0
+                result = None
+            else:
+                old_price = float(latest[1].price or 0)
+                result = None if old_price <= 0 else (current_price - old_price) / old_price * 100.0
+            self._pct_change_cache[sym] = (result, now_ts)
+            return result
         except Exception as e:
             logger.debug(f"Could not compute pct_change for {symbol}: {e}")
             return None

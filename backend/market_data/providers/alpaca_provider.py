@@ -124,6 +124,17 @@ def _ts_to_ny(dt: datetime) -> datetime:
     return dt.astimezone(NY).replace(tzinfo=None)
 
 
+def _naive_ny_to_utc_epoch(dt: datetime) -> float:
+    """Convert a naive NY datetime to a UTC epoch, avoiding platform-TZ dependency.
+
+    ``datetime.timestamp()`` on a naive datetime assumes the *platform local*
+    timezone, which differs from NY on UTC servers. This helper normalises
+    explicitly via ZoneInfo before calling ``.timestamp()``.
+    """
+    aware = dt.replace(tzinfo=NY)
+    return aware.timestamp()
+
+
 # Alpaca's IEX feed (free tier) occasionally returns a wildly bad bid or ask
 # for thin/illiquid symbols — found live 2026-09-16: CTNT (trading ~$0.04)
 # got bid=0.04 (correct) but ask=200.0 (garbage, presumably a stale/foreign
@@ -220,8 +231,14 @@ class AlpacaWebSocketClient:
             secret_key=self._secret_key,
             feed=feed,
         )
-        # Register the bar handler. The SDK calls this for every bar update.
-        stream.subscribe_bars(self._handle_bar_event)
+        # Register the bar handler for currently-subscribed symbols only.
+        # Passing no symbols to subscribe_bars subscribes to ALL symbols on the
+        # feed — instead we subscribe per-symbol so we receive only what we need.
+        symbols = [sym for sym, _ in self._subscribed]
+        if symbols:
+            stream.subscribe_bars(self._handle_bar_event, *symbols)
+        else:
+            stream.subscribe_bars(self._handle_bar_event)
         return stream
 
     # ---- bar handler (runs in SDK's asyncio thread) ----------------------
@@ -232,6 +249,9 @@ class AlpacaWebSocketClient:
         ``bar`` is an ``alpaca.data.models.Bar`` instance. We translate
         it to our internal ``Bar`` model and invoke the user callback.
         """
+        with self._lock:
+            if self._closed:
+                return
         try:
             our_bar = Bar(
                 symbol=str(bar.symbol).upper(),
@@ -241,7 +261,7 @@ class AlpacaWebSocketClient:
                 low=float(bar.low),
                 close=float(bar.close),
                 volume=int(bar.volume or 0),
-                timeframe="1min",  # WS bars are 1-minute
+                timeframe="1m",  # WS bars are 1-minute
                 provider="alpaca",
                 data_status=DataStatus.DELAYED,
             )
@@ -295,9 +315,17 @@ class AlpacaWebSocketClient:
             if key in self._subscribed:
                 return
             self._subscribed.add(key)
+            stream = self._stream
 
         if not self._api_key or not self._secret_key:
             return  # Not configured; skip.
+
+        # If the stream is already running, subscribe the new symbol directly.
+        if stream is not None:
+            try:
+                stream.subscribe_bars(self._handle_bar_event, symbol.upper())
+            except Exception:
+                logger.debug("Could not subscribe %s to running Alpaca WS stream", symbol)
 
         # Lazy-start the stream on first subscription.
         self._ensure_thread()
@@ -336,6 +364,16 @@ class AlpacaWebSocketClient:
         thread = self._thread
         if thread is not None and thread.is_alive():
             thread.join(timeout=5.0)
+            if thread.is_alive():
+                # The SDK stream did not stop within 5 seconds. The thread is
+                # a daemon thread so it will be killed when the process exits,
+                # but we still update our state so callers know we consider the
+                # connection closed. The thread will stop dispatching bar events
+                # to _on_bar once _closed is True (checked in _handle_bar_event).
+                logger.warning(
+                    "Alpaca WS background thread did not stop within 5s — "
+                    "marking closed; thread will exit when the process terminates."
+                )
         with self._lock:
             self._ws_connected = False
         try:
@@ -509,11 +547,13 @@ class AlpacaProvider(BaseMarketDataProvider):
             if not bars_list:
                 raise ValueError(f"No bar data for {symbol} at {timestamp}")
 
-            # Find bar closest to target timestamp.
-            target_ts = target.timestamp()
+            # Find bar closest to target timestamp. Use _naive_ny_to_utc_epoch
+            # rather than datetime.timestamp() so the comparison is correct
+            # regardless of platform local timezone.
+            target_ts = _naive_ny_to_utc_epoch(target)
             closest = min(
                 bars_list,
-                key=lambda b: abs(_ts_to_ny(b.timestamp).timestamp() - target_ts),
+                key=lambda b: abs(_naive_ny_to_utc_epoch(_ts_to_ny(b.timestamp)) - target_ts),
             )
             return self._bar_from_sdk(symbol, closest, timeframe)
 
@@ -672,7 +712,7 @@ class AlpacaProvider(BaseMarketDataProvider):
                     results[sym] = Quote(
                         symbol=sym,
                         price=0.0,
-                        timestamp=datetime.now(UTC),
+                        timestamp=_ts_to_ny(datetime.now(UTC)),
                         provider=self.name,
                         data_status=DataStatus.ERROR,
                     )
@@ -704,11 +744,14 @@ class AlpacaProvider(BaseMarketDataProvider):
         except Exception as exc:
             self._handle_error(exc, "Failed to get batch quotes")
             # On total failure, return ERROR quotes for all symbols.
+            # Use _ts_to_ny so timestamps are consistent (naive NY) with the
+            # success-path quotes — prevents TypeError when callers sort the batch.
+            now_ny = _ts_to_ny(datetime.now(UTC))
             return {
                 s.upper(): Quote(
                     symbol=s.upper(),
                     price=0.0,
-                    timestamp=datetime.now(UTC),
+                    timestamp=now_ny,
                     provider=self.name,
                     data_status=DataStatus.ERROR,
                 )

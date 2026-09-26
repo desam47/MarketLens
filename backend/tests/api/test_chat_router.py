@@ -787,6 +787,10 @@ class TestNotebookManagement(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(app)
 
+    # 32-char client keys (min_length raised from 8 to 32).
+    _KEY_A = "client-aaaaaaaaaaaaaaaaaaaaaaaaaaa"  # 32 chars
+    _KEY_B = "client-bbbbbbbbbbbbbbbbbbbbbbbbbbb"  # 32 chars
+
     @patch("backend.api.ai.chat_router.ChatRepository")
     def test_renames_owned_notebook(self, mock_repo_cls):
         mock_repo = MagicMock()
@@ -795,12 +799,12 @@ class TestNotebookManagement(unittest.TestCase):
 
         resp = self.client.patch(
             "/api/ai/chat/notebooks/8",
-            json={"client_key": "client-a-123456", "name": "Long ideas"},
+            json={"client_key": self._KEY_A, "name": "Long ideas"},
         )
 
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()["name"], "Long ideas")
-        mock_repo.rename_notebook.assert_called_once_with(8, "client-a-123456", "Long ideas")
+        mock_repo.rename_notebook.assert_called_once_with(8, self._KEY_A, "Long ideas")
 
     @patch("backend.api.ai.chat_router.ChatRepository")
     def test_deletes_owned_notebook_and_item(self, mock_repo_cls):
@@ -809,15 +813,15 @@ class TestNotebookManagement(unittest.TestCase):
         mock_repo.delete_notebook_item.return_value = True
         mock_repo_cls.return_value = mock_repo
 
-        notebook_response = self.client.delete("/api/ai/chat/notebooks/8?client_key=client-a-123456")
-        item_response = self.client.delete("/api/ai/chat/notebooks/8/items/13?client_key=client-a-123456")
+        notebook_response = self.client.delete(f"/api/ai/chat/notebooks/8?client_key={self._KEY_A}")
+        item_response = self.client.delete(f"/api/ai/chat/notebooks/8/items/13?client_key={self._KEY_A}")
 
         self.assertEqual(notebook_response.status_code, 200)
         self.assertEqual(notebook_response.json(), {"deleted": True})
         self.assertEqual(item_response.status_code, 200)
         self.assertEqual(item_response.json(), {"deleted": True})
-        mock_repo.delete_notebook.assert_called_once_with(8, "client-a-123456")
-        mock_repo.delete_notebook_item.assert_called_once_with(8, 13, "client-a-123456")
+        mock_repo.delete_notebook.assert_called_once_with(8, self._KEY_A)
+        mock_repo.delete_notebook_item.assert_called_once_with(8, 13, self._KEY_A)
 
     @patch("backend.api.ai.chat_router.ChatRepository")
     def test_notebook_management_returns_404_for_unowned_records(self, mock_repo_cls):
@@ -829,14 +833,194 @@ class TestNotebookManagement(unittest.TestCase):
 
         rename_response = self.client.patch(
             "/api/ai/chat/notebooks/8",
-            json={"client_key": "client-b-123456", "name": "Other ideas"},
+            json={"client_key": self._KEY_B, "name": "Other ideas"},
         )
-        notebook_response = self.client.delete("/api/ai/chat/notebooks/8?client_key=client-b-123456")
-        item_response = self.client.delete("/api/ai/chat/notebooks/8/items/13?client_key=client-b-123456")
+        notebook_response = self.client.delete(f"/api/ai/chat/notebooks/8?client_key={self._KEY_B}")
+        item_response = self.client.delete(f"/api/ai/chat/notebooks/8/items/13?client_key={self._KEY_B}")
 
         self.assertEqual(rename_response.status_code, 404)
         self.assertEqual(notebook_response.status_code, 404)
         self.assertEqual(item_response.status_code, 404)
+
+
+_KEY_32 = "test-client-key-0123456789abcdef"  # exactly 32 chars
+
+
+class TestGetSessionForSymbol(unittest.TestCase):
+    def setUp(self):
+        self.client = TestClient(app)
+
+    @patch("backend.api.ai.chat_router.ChatRepository")
+    def test_returns_universal_session_when_no_symbol(self, mock_repo_cls):
+        mock_repo = MagicMock()
+        mock_repo.get_latest_session_by_scope.return_value = _mock_session(
+            id=7, symbol="*", scope="universal"
+        )
+        mock_repo_cls.return_value = mock_repo
+
+        resp = self.client.get("/api/ai/chat/sessions")
+
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["id"], 7)
+        self.assertEqual(data["scope"], "universal")
+        # UNIVERSAL_SYMBOL sentinel must be stripped from the response.
+        self.assertIsNone(data["symbol"])
+        mock_repo.get_latest_session_by_scope.assert_called_once_with("universal")
+
+    @patch("backend.api.ai.chat_router.ChatRepository")
+    def test_returns_symbol_session_for_ticker(self, mock_repo_cls):
+        mock_repo = MagicMock()
+        mock_repo.get_latest_session_by_scope.return_value = _mock_session(
+            id=3, symbol="AAPL", scope="symbol"
+        )
+        mock_repo_cls.return_value = mock_repo
+
+        resp = self.client.get("/api/ai/chat/sessions?symbol=aapl")
+
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["symbol"], "AAPL")
+        self.assertEqual(data["scope"], "symbol")
+        mock_repo.get_latest_session_by_scope.assert_called_once_with("symbol", "AAPL")
+
+    @patch("backend.api.ai.chat_router.ChatRepository")
+    def test_404_when_no_session_exists(self, mock_repo_cls):
+        mock_repo = MagicMock()
+        mock_repo.get_latest_session_by_scope.return_value = None
+        mock_repo_cls.return_value = mock_repo
+
+        resp = self.client.get("/api/ai/chat/sessions?symbol=TSLA")
+
+        self.assertEqual(resp.status_code, 404)
+
+
+class TestRegressionFixtures(unittest.TestCase):
+    def setUp(self):
+        self.client = TestClient(app)
+
+    def _mock_fixture(self, id=1, message_id=10, rating="incorrect", category="wrong_data"):
+        f = MagicMock()
+        f.id = id
+        f.message_id = message_id
+        f.prompt = "What is AAPL trend?"
+        f.response = "AAPL is bullish."
+        f.rating = rating
+        f.category = category
+        f.comment = None
+        f.status = "open"
+        f.created_at = datetime(2026, 1, 1, tzinfo=UTC)
+        return f
+
+    @patch("backend.api.ai.chat_router.ChatRepository")
+    def test_promote_rated_message_returns_fixture(self, mock_repo_cls):
+        mock_repo = MagicMock()
+        mock_repo.get_message.return_value = _mock_message(id=10, role="assistant")
+        mock_repo.create_regression_fixture.return_value = self._mock_fixture()
+        mock_repo_cls.return_value = mock_repo
+
+        resp = self.client.post("/api/ai/chat/messages/10/regression-fixture")
+
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["message_id"], 10)
+        self.assertEqual(data["rating"], "incorrect")
+        mock_repo.create_regression_fixture.assert_called_once_with(10)
+
+    @patch("backend.api.ai.chat_router.ChatRepository")
+    def test_promote_without_feedback_returns_400(self, mock_repo_cls):
+        mock_repo = MagicMock()
+        mock_repo.get_message.return_value = _mock_message(id=10, role="assistant")
+        mock_repo.create_regression_fixture.return_value = None  # precondition not met
+        mock_repo_cls.return_value = mock_repo
+
+        resp = self.client.post("/api/ai/chat/messages/10/regression-fixture")
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("incorrect", resp.json()["detail"].lower())
+
+    @patch("backend.api.ai.chat_router.ChatRepository")
+    def test_promote_unknown_message_returns_404(self, mock_repo_cls):
+        mock_repo = MagicMock()
+        mock_repo.get_message.return_value = None
+        mock_repo_cls.return_value = mock_repo
+
+        resp = self.client.post("/api/ai/chat/messages/999/regression-fixture")
+
+        self.assertEqual(resp.status_code, 404)
+
+    @patch("backend.api.ai.chat_router.ChatRepository")
+    def test_list_regression_fixtures_returns_correct_shape(self, mock_repo_cls):
+        mock_repo = MagicMock()
+        mock_repo.get_regression_fixtures.return_value = [
+            self._mock_fixture(id=1, message_id=10),
+            self._mock_fixture(id=2, message_id=20, rating="not_useful", category=None),
+        ]
+        mock_repo_cls.return_value = mock_repo
+
+        resp = self.client.get("/api/ai/chat/regression-fixtures")
+
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(len(data), 2)
+        self.assertEqual(data[0]["rating"], "incorrect")
+        self.assertEqual(data[1]["rating"], "not_useful")
+        self.assertIsNone(data[1]["category"])
+        mock_repo.get_regression_fixtures.assert_called_once_with(100)
+
+
+class TestNotebookCreateList(unittest.TestCase):
+    def setUp(self):
+        self.client = TestClient(app)
+
+    @patch("backend.api.ai.chat_router.ChatRepository")
+    def test_creates_notebook(self, mock_repo_cls):
+        mock_repo = MagicMock()
+        mock_repo.create_notebook.return_value = _mock_notebook(id=5, name="Earnings plays")
+        mock_repo_cls.return_value = mock_repo
+
+        resp = self.client.post(
+            "/api/ai/chat/notebooks",
+            json={"client_key": _KEY_32, "name": "Earnings plays"},
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["id"], 5)
+        self.assertEqual(data["name"], "Earnings plays")
+        mock_repo.create_notebook.assert_called_once_with(_KEY_32, "Earnings plays")
+
+    @patch("backend.api.ai.chat_router.ChatRepository")
+    def test_lists_notebooks(self, mock_repo_cls):
+        mock_repo = MagicMock()
+        mock_repo.list_notebooks.return_value = [
+            _mock_notebook(id=1, name="Ideas"),
+            _mock_notebook(id=2, name="Swing"),
+        ]
+        mock_repo_cls.return_value = mock_repo
+
+        resp = self.client.get(f"/api/ai/chat/notebooks?client_key={_KEY_32}")
+
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(len(data), 2)
+        self.assertEqual(data[0]["name"], "Ideas")
+        mock_repo.list_notebooks.assert_called_once_with(_KEY_32)
+
+    def test_create_notebook_rejects_short_key(self):
+        resp = self.client.post(
+            "/api/ai/chat/notebooks",
+            json={"client_key": "tooshort", "name": "x"},
+        )
+        self.assertEqual(resp.status_code, 422)
+
+    def test_list_notebooks_rejects_missing_key(self):
+        resp = self.client.get("/api/ai/chat/notebooks")
+        self.assertEqual(resp.status_code, 422)
+
+    def test_list_notebooks_rejects_short_key(self):
+        resp = self.client.get("/api/ai/chat/notebooks?client_key=short")
+        self.assertEqual(resp.status_code, 422)
 
 
 if __name__ == "__main__":
@@ -882,12 +1066,14 @@ class TestNotebookItemSave(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
+        self._KEY_A = "client-aaaaaaaaaaaaaaaaaaaaaaaaaaa"  # 32 chars
+
         repo = ChatRepository()
         try:
             session = repo.create_session(None)
             repo.add_message(session.id, "user", "How is AAPL?")
             self.message_id = repo.add_message(session.id, "assistant", "AAPL is up.").id
-            self.notebook_id = repo.create_notebook("client-a-123456", "Research").id
+            self.notebook_id = repo.create_notebook(self._KEY_A, "Research").id
         finally:
             repo.close()
         self.client = TestClient(app)
@@ -907,7 +1093,7 @@ class TestNotebookItemSave(unittest.TestCase):
     def _save(self, question=""):
         return self.client.post(
             f"/api/ai/chat/notebooks/{self.notebook_id}/items",
-            json={"client_key": "client-a-123456", "message_id": self.message_id, "question": question},
+            json={"client_key": self._KEY_A, "message_id": self.message_id, "question": question},
         )
 
     def test_the_question_lookup_runs_off_the_event_loop(self):

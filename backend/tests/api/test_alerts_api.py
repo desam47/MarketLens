@@ -347,6 +347,68 @@ class TestAlertsAPI(unittest.TestCase):
         self.assertEqual(response.status_code, 404)
         self.assertEqual(response.json()["detail"], "Alert trigger not found")
 
+    # --- PUT /api/alerts/{id} — condition_type change transitions --------
+
+    def test_update_alert_bar_to_price_unregisters_old_then_registers_new(self):
+        """bar→price: old bar subscription must be unregistered; new price subscription added."""
+        existing = _mock_alert(
+            id=1, is_enabled=True, condition_type="volume_expansion", parameter="2.0"
+        )
+        updated = _mock_alert(
+            id=1, is_enabled=True, condition_type="price_above", parameter="200"
+        )
+        with patch("backend.api.alerts.router.AlertRepository") as MockRepo:
+            instance = MockRepo.return_value
+            instance.get_by_id.return_value = existing
+            instance.update.return_value = updated
+            response = self.client.put(
+                "/api/alerts/1",
+                json={"condition_type": "price_above", "parameter": "200"},
+            )
+        self.assertEqual(response.status_code, 200)
+        self.mock_engine.unregister_for_alert.assert_called_once_with(existing)
+        self.mock_engine.register_for_alert.assert_called_once_with(updated)
+
+    def test_update_alert_price_to_bar_unregisters_old_then_registers_new(self):
+        """price→bar: old price subscription must be unregistered; new bar subscription added."""
+        existing = _mock_alert(
+            id=2, is_enabled=True, condition_type="price_above", parameter="200"
+        )
+        updated = _mock_alert(
+            id=2, is_enabled=True, condition_type="volume_expansion", parameter="2.0"
+        )
+        with patch("backend.api.alerts.router.AlertRepository") as MockRepo:
+            instance = MockRepo.return_value
+            instance.get_by_id.return_value = existing
+            instance.update.return_value = updated
+            response = self.client.put(
+                "/api/alerts/2",
+                json={"condition_type": "volume_expansion", "parameter": "2.0"},
+            )
+        self.assertEqual(response.status_code, 200)
+        self.mock_engine.unregister_for_alert.assert_called_once_with(existing)
+        self.mock_engine.register_for_alert.assert_called_once_with(updated)
+
+    def test_update_alert_condition_type_change_while_disabled_skips_register(self):
+        """condition_type change on a disabled alert: unregister old, do NOT register new."""
+        existing = _mock_alert(
+            id=3, is_enabled=False, condition_type="price_above", parameter="100"
+        )
+        updated = _mock_alert(
+            id=3, is_enabled=False, condition_type="volume_expansion", parameter="2.0"
+        )
+        with patch("backend.api.alerts.router.AlertRepository") as MockRepo:
+            instance = MockRepo.return_value
+            instance.get_by_id.return_value = existing
+            instance.update.return_value = updated
+            response = self.client.put(
+                "/api/alerts/3",
+                json={"condition_type": "volume_expansion"},
+            )
+        self.assertEqual(response.status_code, 200)
+        self.mock_engine.unregister_for_alert.assert_called_once_with(existing)
+        self.mock_engine.register_for_alert.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

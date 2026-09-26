@@ -64,7 +64,10 @@ def _weekly_bucket_reference_time(timestamp: datetime) -> datetime:
 
 
 def _bar_reference_time(
-    timeframe: str, timestamp: datetime | None, provider: object | None
+    timeframe: str,
+    timestamp: datetime | None,
+    provider: object | None,
+    now: datetime | None = None,
 ) -> datetime | None:
     """Return the market-data as-of time used for display and freshness.
 
@@ -73,6 +76,8 @@ def _bar_reference_time(
     completed and became usable — which is what "As Of" should convey.
     A 5m bar that opened at 10:55 and closed at 11:00 should show
     "As Of 11:00", not "As Of 10:55".
+    When the bar is still forming (close_time > now), return the open time so
+    that age_seconds reflects how long ago the bar data was captured.
     """
     if timestamp is None:
         return None
@@ -83,10 +88,11 @@ def _bar_reference_time(
     duration = TIMEFRAME_SECONDS.get(timeframe)
     if duration:
         close_time = timestamp + timedelta(seconds=duration)
-        # Don't show a future close time — the bar is still forming.
-        # Cap at now so "As Of" never exceeds the current wall-clock time.
-        now = datetime.now(UTC)
-        return min(close_time, now)
+        effective_now = now if now is not None else datetime.now(UTC)
+        # Bar still forming — use open time; close time is in the future.
+        if close_time > effective_now:
+            return timestamp
+        return close_time
     return timestamp
 
 
@@ -115,7 +121,7 @@ def build_trend_evidence(
     # and must render unavailable rather than being guessed from the signal.
     source_timestamp = raw_source_timestamp if metadata else signal_timestamp
     provider = metadata.get("provider") if metadata else None
-    source_as_of = _bar_reference_time(timeframe, source_timestamp, provider)
+    source_as_of = _bar_reference_time(timeframe, source_timestamp, provider, now=now)
     data_status = _normalized_data_status(
         metadata.get("data_status", getattr(trend_signal, "data_quality", None))
     )

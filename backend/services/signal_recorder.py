@@ -21,6 +21,7 @@ import json
 import logging
 import threading
 import time
+from collections import OrderedDict
 from datetime import datetime, timedelta
 
 from sqlalchemy import and_, func
@@ -50,6 +51,9 @@ logger = logging.getLogger(__name__)
 # on the same process, since this work still competes for the GIL even off the event loop.
 SEED_BUDGET_SECONDS = 6.0
 SEED_MAX_BARS = 50000
+# _last_recorded is a fast-path dedup cache for the public record_signal API path.
+# Bounded to avoid unbounded growth over long server uptimes.
+_MAX_LAST_RECORDED = 10_000
 # Most urgently needed first (MD-07): whichever pair's bars close most often has the freshest
 # unrecorded bar waiting, and matters most for near-real-time features (Chat's recent signal
 # history, AI signal stats, Replay markers) — 1m closes every minute, 1wk every week. This
@@ -84,7 +88,10 @@ class SignalRecorder:
     """Persists historical signals and backfills forward outcomes."""
 
     def __init__(self) -> None:
-        self._last_recorded: dict[tuple[str, str, datetime], datetime] = {}
+        # Bounded LRU set: oldest entry evicted once _MAX_LAST_RECORDED is reached.
+        # Only the public record_signal path writes here; the recording loop uses
+        # insert_ignoring_duplicates for dedup.
+        self._last_recorded: OrderedDict[tuple[str, str, datetime | None], None] = OrderedDict()
         # One replay engine per (symbol, timeframe), seeded from stored bars and then advanced a
         # closed bar at a time. Guarded by ``_lock``: the recording loop, startup hygiene and
         # POST /api/signals/record all reach it from different threads.
@@ -149,7 +156,7 @@ class SignalRecorder:
                 .first()
             )
             if existing is not None:
-                self._last_recorded[key] = ts
+                self._cache_dedup(key)
                 return None
 
             confidence_json = json.dumps(confidence_inputs) if confidence_inputs else None
@@ -171,16 +178,16 @@ class SignalRecorder:
                 confidence_inputs=confidence_json,
                 strategy_version=strategy_version or settings.trend.strategy_version,
                 data_quality=data_quality,
-                _outcome_missing=True,
+                outcome_computed=False,
             )
-            self._last_recorded[key] = ts
+            self._cache_dedup(key)
             logger.debug(f"Recorded signal for {sym}/{tf} @ {ts}")
             return signal
         except IntegrityError:
             # Another writer stored this bar between the check above and the insert;
             # the unique index turned the race into a duplicate, which is a no-op.
             db.rollback()
-            self._last_recorded[key] = ts
+            self._cache_dedup(key)
             return None
         except Exception as e:
             logger.error(f"Failed to record signal for {symbol}/{timeframe}: {e}")
@@ -343,6 +350,12 @@ class SignalRecorder:
         for bar in rows:
             buckets[(bar.symbol, bar.timeframe)].append(bar)
         return buckets
+
+    def _cache_dedup(self, key: tuple) -> None:
+        """Add key to the bounded dedup cache, evicting the oldest entry if full."""
+        self._last_recorded[key] = None
+        if len(self._last_recorded) > _MAX_LAST_RECORDED:
+            self._last_recorded.popitem(last=False)
 
     def get_stats(self, symbol: str, timeframe: str | None = None) -> dict:
         """Track-record statistics for ``symbol`` (optionally one ``timeframe``).
@@ -507,9 +520,13 @@ class SignalRecorder:
         """Record every closed bar of one (symbol, timeframe) that has no signal yet (the gap
         fill and new-symbol backfill path). Replays the pair's stored bars, newest ``max_bars``,
         from the start, so a late bar is labelled from all the history before it. Returns the
-        number of new signals written."""
-        with self._lock:
-            return self._seed_pair(db, symbol, timeframe, max_bars, now or now_ny())
+        number of new signals written.
+
+        Does NOT hold ``self._lock`` for the full replay (50K bars × 0.15 ms = up to 7.5 s per
+        TF); that would block the recording loop for all other symbols during a watchlist-add.
+        ``_seed_pair`` acquires the lock briefly only at the end, to store the finished replay.
+        """
+        return self._seed_pair(db, symbol, timeframe, max_bars, now or now_ny())
 
     def _seed_pair(self, db, symbol: str, timeframe: str, max_bars: int, now: datetime) -> int:
         """Replay the pair's closed bars, write the ones without a row, keep the engine so
@@ -540,7 +557,15 @@ class SignalRecorder:
         written = self._insert_rows(
             db, symbol, timeframe, [(b, sc) for b, sc in scored if b.timestamp not in existing], now
         )
-        self._replays[(symbol, timeframe)] = replay
+        # Hold the lock only for the dict write; a concurrent record_from_recent_bars may have
+        # also seeded this pair — keep whichever advanced further (RLock so re-entry is safe).
+        with self._lock:
+            existing_replay = self._replays.get((symbol, timeframe))
+            if existing_replay is None or replay.last_ts is None or (
+                existing_replay.last_ts is not None
+                and replay.last_ts >= existing_replay.last_ts
+            ):
+                self._replays[(symbol, timeframe)] = replay
         return written
 
     def _advance_pair(
@@ -612,7 +637,7 @@ class SignalRecorder:
                         }
                     ),
                     strategy_version=settings.trend.strategy_version,
-                    _outcome_missing=True,
+                    outcome_computed=False,
                 )
             )
         try:
@@ -741,7 +766,7 @@ class SignalRecorder:
             signal.return_20b = return_20b
             signal.mfe = mfe
             signal.mae = mae
-            signal._outcome_missing = not all(
+            signal.outcome_computed = all(
                 value is not None
                 for value in (return_5b, return_10b, return_20b, mfe, mae)
             )

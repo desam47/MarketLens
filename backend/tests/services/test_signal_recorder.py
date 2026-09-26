@@ -177,7 +177,7 @@ class TestSignalRecorderBackfillOutcomes(unittest.TestCase):
                 timestamp=ts,
                 price=price,
                 trend_state="bullish",
-                _outcome_missing=True,
+                outcome_computed=False,
             )
             db.add(sig)
             db.commit()
@@ -201,7 +201,7 @@ class TestSignalRecorderBackfillOutcomes(unittest.TestCase):
         self.assertIsNotNone(sig.return_20b)
         self.assertIsNotNone(sig.mfe)
         self.assertIsNotNone(sig.mae)
-        self.assertEqual(sig._outcome_missing, False)
+        self.assertEqual(sig.outcome_computed, True)
 
     def test_backfill_outcomes_skips_when_insufficient_bars(self):
         """With zero future bars, the row is left alone (no MFE/MAE possible)."""
@@ -256,7 +256,7 @@ class TestSignalRecorderBackfillOutcomes(unittest.TestCase):
         self.assertIsNone(sig.return_20b)  # not enough bars
         self.assertIsNone(sig.mfe)  # excursions use the completed 20-bar window
         self.assertIsNone(sig.mae)
-        self.assertTrue(sig._outcome_missing)
+        self.assertFalse(sig.outcome_computed)
 
         # Add bars 11 through 20 and prove a later pass revisits this same row.
         with self.Session() as db:
@@ -275,7 +275,7 @@ class TestSignalRecorderBackfillOutcomes(unittest.TestCase):
         self.assertIsNotNone(sig.return_20b)
         self.assertIsNotNone(sig.mfe)
         self.assertIsNotNone(sig.mae)
-        self.assertFalse(sig._outcome_missing)
+        self.assertTrue(sig.outcome_computed)
 
     def test_backfill_outcomes_is_not_blocked_by_rows_that_cannot_finish(self):
         """HS-15: a full batch of stuck older rows must not starve a newer finishable row."""
@@ -299,7 +299,7 @@ class TestSignalRecorderBackfillOutcomes(unittest.TestCase):
             aapl = db.query(HistoricalSignal).filter_by(symbol="AAPL").one()
             nok = db.query(HistoricalSignal).filter_by(symbol="NOK").all()
         self.assertIsNotNone(aapl.return_20b)
-        self.assertFalse(aapl._outcome_missing)
+        self.assertTrue(aapl.outcome_computed)
         self.assertTrue(all(sig.return_5b is None for sig in nok))
 
     def test_backfill_outcomes_zero_candidates(self):

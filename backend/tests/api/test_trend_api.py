@@ -144,11 +144,13 @@ class TestTrendBatchAPI(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         profiles = [row["scoring"] for row in response.json()]
+        # TREND_SIGNAL_V2=true: 1m gains SuperTrend + ADX and uses the same
+        # intraday_directional profile as 5m.
         self.assertEqual(
             [profile["id"] for profile in profiles],
-            ["directional_core", "intraday_directional", "full_technical"],
+            ["intraday_directional", "intraday_directional", "full_technical"],
         )
-        self.assertEqual([len(profile["components"]) for profile in profiles], [3, 4, 8])
+        self.assertEqual([len(profile["components"]) for profile in profiles], [4, 4, 8])
         self.assertTrue(all(not profile["score_comparable_across_timeframes"] for profile in profiles))
 
     def test_batch_matches_single_timeframe_endpoint(self):

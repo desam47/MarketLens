@@ -31,9 +31,13 @@ router = APIRouter(prefix="/api/ai/jobs", tags=["ai-jobs"])
 class JobEnqueueRequest(BaseModel):
     """Body for ``POST /api/ai/jobs``."""
 
-    symbol: str = Field(..., min_length=1, max_length=10)
+    symbol: str = Field(..., min_length=1, max_length=10, pattern=r"^[A-Za-z0-9.\-]+$")
     timeframe: str = Field(default="1d", pattern=r"^(1d|1h|4h|15m|5m|1m)$")
     template_id: int | None = Field(default=None, ge=1)
+    portfolio_symbols: list[str] | None = Field(
+        default=None,
+        description="Optional peer tickers for cross-ticker context (O10).",
+    )
 
 
 class JobEnqueueResponse(BaseModel):
@@ -94,23 +98,13 @@ def enqueue_job(
     template_name: str | None = None
     if req.template_id is not None:
         # Capture the template name up-front so workers don't need a DB read.
+        from ...api.ai_templates.router import _resolve_template_for_request
         from ...database import SessionLocal
-        from ...models import AITemplate
 
         db = SessionLocal()
         try:
-            tmpl = db.query(AITemplate).filter(AITemplate.id == req.template_id).first()
-            if tmpl is None:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"AI template {req.template_id} not found",
-                )
-            if not tmpl.is_active:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"AI template {req.template_id} is inactive",
-                )
-            template_name = tmpl.name
+            tmpl = _resolve_template_for_request(db, req.template_id)
+            template_name = tmpl.name if tmpl else None
         finally:
             db.close()
 
@@ -119,6 +113,7 @@ def enqueue_job(
         timeframe=req.timeframe,
         template_id=req.template_id,
         template_name=template_name,
+        portfolio_symbols=req.portfolio_symbols,
     )
     if rq_job_id is None:
         raise HTTPException(

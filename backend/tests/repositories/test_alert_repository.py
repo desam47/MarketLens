@@ -10,7 +10,7 @@ import unittest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from backend.models import Alert, AlertTrigger
+from backend.models import Alert, AlertDelivery, AlertTrigger
 from backend.repositories.alert_repository import AlertRepository
 
 
@@ -20,7 +20,7 @@ class TestAlertRepository(unittest.TestCase):
             "sqlite:///:memory:",
             connect_args={"check_same_thread": False},
         )
-        for model in (Alert, AlertTrigger):
+        for model in (Alert, AlertTrigger, AlertDelivery):
             model.__table__.create(self.engine, checkfirst=True)
         self.Session = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
         self.db = self.Session()
@@ -77,6 +77,23 @@ class TestAlertRepository(unittest.TestCase):
 
     def test_delete_all_triggers_on_empty_table_is_a_clean_noop(self):
         self.assertEqual(self._repo().delete_all_triggers(), 0)
+
+    def test_delete_all_triggers_also_clears_alert_deliveries(self):
+        """Deliveries linked to triggers must be deleted before the triggers."""
+        repo = self._repo()
+        alert = repo.create("A", "AAPL", "price_above", "200")
+        trigger = AlertTrigger(alert_id=alert.id, symbol="AAPL", message="fired")
+        self.db.add(trigger)
+        self.db.flush()
+        delivery = AlertDelivery(trigger_id=trigger.id, channel="webhook", status="delivered")
+        self.db.add(delivery)
+        self.db.commit()
+
+        deleted = repo.delete_all_triggers()
+
+        self.assertEqual(deleted, 1)
+        self.assertEqual(self.db.query(AlertTrigger).count(), 0)
+        self.assertEqual(self.db.query(AlertDelivery).count(), 0)
 
 
 if __name__ == "__main__":

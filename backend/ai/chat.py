@@ -75,6 +75,7 @@ import logging
 import re
 import threading
 import time
+import uuid
 from collections import OrderedDict
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
@@ -648,7 +649,7 @@ def _prepare_turn(
         reused_context=reused_context,
         preferences=preferences,
         previous_evidence_fingerprint=previous_fingerprint,
-        carried_confirmation=next_state.get("pending_confirmation"),
+        carried_confirmation=_stamp_confirmation_nonce(next_state.get("pending_confirmation")),
     )
 
 
@@ -691,17 +692,33 @@ def _material_change(turn: _Turn, current_fingerprint: str | None) -> bool:
     )
 
 
+def _stamp_confirmation_nonce(conf: dict | None) -> dict | None:
+    """Stamp a unique nonce onto a pending-confirmation dict (once only).
+
+    The nonce lets _expire_carried_confirmation compare by value rather
+    than Python object identity, so a deep-copy of planner_state (e.g.
+    for logging or serialisation) does not silently break the expiry logic.
+    """
+    if conf is not None and "_nonce" not in conf:
+        conf["_nonce"] = uuid.uuid4().hex
+    return conf
+
+
 def _expire_carried_confirmation(turn: _Turn) -> None:
     """Drop a confirmation request this turn did not answer.
 
     A server-authored confirmation prompt is valid for the very next user
     turn only. If that turn declined, changed the subject, or asked
     something else, a later unrelated "ok"/"yes" must not execute the old
-    destructive action. A prompt created during this turn is a new dict,
-    so identity distinguishes it from the carried-over one.
+    destructive action. We compare by nonce (value) rather than object
+    identity so that a copy of planner_state never silently re-activates
+    a stale prompt.
     """
     carried = turn.carried_confirmation
-    if carried is not None and turn.planner_state.get("pending_confirmation") is carried:
+    if carried is None:
+        return
+    current = turn.planner_state.get("pending_confirmation")
+    if current is not None and current.get("_nonce") == carried.get("_nonce"):
         turn.planner_state["pending_confirmation"] = None
 
 

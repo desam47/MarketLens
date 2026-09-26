@@ -85,8 +85,10 @@ class HistoricalSignal(Base):
     mfe = Column(Float, nullable=True)  # Maximum Favorable Excursion (best % gain while in trade)
     mae = Column(Float, nullable=True)  # Maximum Adverse Excursion (worst % loss while in trade)
 
-    # Index for outcome backfill queries: find signals that need outcomes computed.
-    _outcome_missing = Column(
+    # TRUE = all forward outcomes present; FALSE / NULL = still pending.
+    # Use ``outcome_computed.isnot(True)`` to find pending rows — that hits
+    # ``ix_historical_signals_outcome_computed`` instead of a full-table scan.
+    outcome_computed = Column(
         "outcome_computed",
         Boolean,
         nullable=True,
