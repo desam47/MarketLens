@@ -168,7 +168,9 @@ def upsert_saved_plan(payload: SavedPlanPayload, db: Session = Depends(get_db)):
         "stop_source": payload.stop_source,
         "reward_risk": payload.reward_risk,
         "thesis": payload.thesis,
-        "created_at": now_ny(),
+        "created_at": (
+            datetime.fromisoformat(payload.created_at) if payload.created_at else now_ny()
+        ),
     }
     plan = repo.upsert(data)
     return _serialize_plan(plan)

@@ -116,6 +116,9 @@ describe('TradePlanningPage', () => {
     window.localStorage.clear();
     jest.restoreAllMocks();
     jest.spyOn(api, 'getSymbolCatalog').mockResolvedValue(['AAPL', 'SPY']);
+    jest.spyOn(api, 'listSavedPlans').mockResolvedValue([]);
+    jest.spyOn(api, 'upsertSavedPlan').mockResolvedValue({});
+    jest.spyOn(api, 'deleteSavedPlan').mockResolvedValue(undefined);
   });
 
   it('renders the setup form and no plan before building', () => {
@@ -265,5 +268,61 @@ describe('TradePlanningPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /Build plan/i }));
     expect(await screen.findByText(/boom/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Retry/i })).toBeInTheDocument();
+  });
+
+  it('merges remote plans with localStorage on mount, deduplicating by id', async () => {
+    const remotePlan = {
+      id: 'remote-1',
+      symbol: 'AAPL',
+      side: 'long',
+      timeframe: '1d',
+      entryPrice: 220,
+      stopPrice: 215,
+      targetPrice: 230,
+      quantity: 10,
+      stopSource: 'structural',
+      rewardRisk: 2.0,
+      thesis: 'breakout',
+      createdAt: '2026-09-20T10:00:00.000Z',
+    };
+    // A local-only plan that should survive the merge.
+    const localOnlyPlan = {
+      id: 'local-only',
+      symbol: 'SPY',
+      side: 'short',
+      timeframe: '5m',
+      entryPrice: 500,
+      stopPrice: 505,
+      targetPrice: 490,
+      quantity: 5,
+      stopSource: 'volatility',
+      rewardRisk: 1.5,
+      thesis: '',
+      createdAt: '2026-09-21T08:00:00.000Z',
+    };
+    // A local plan whose id collides with the remote — the remote version wins.
+    const localDupe = { ...remotePlan, entryPrice: 999 };
+
+    window.localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ accountValue: null, riskPercent: 1, plans: [localDupe, localOnlyPlan] }),
+    );
+
+    jest.spyOn(api, 'listSavedPlans').mockResolvedValue([remotePlan]);
+
+    render(<TradePlanningPage />);
+
+    // After mount the merge runs and the table should contain exactly two rows.
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Remove AAPL plan/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Remove SPY plan/i })).toBeInTheDocument();
+    });
+
+    // The remote entry price (220) wins over the local dupe (999).
+    const stored = JSON.parse(window.localStorage.getItem(STORAGE_KEY) || '{}');
+    expect(stored.plans).toHaveLength(2);
+    const aapl = stored.plans.find((p: any) => p.id === 'remote-1');
+    expect(aapl?.entryPrice).toBe(220);
+    expect(aapl?.createdAt).toBe('2026-09-20T10:00:00.000Z');
   });
 });

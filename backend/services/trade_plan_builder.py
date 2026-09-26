@@ -23,7 +23,9 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Sequence
-from datetime import date, datetime
+from datetime import date
+
+from backend.utils.timezone import now_ny
 from typing import Any, Literal
 
 from sqlalchemy.orm import Session
@@ -250,9 +252,9 @@ def _options_implied(symbol: str, entry: float) -> dict[str, Any]:
         return {"available": False, "error": "No near-term IV available."}
 
     days = None
-    for value in response.expirations:
+    for value in sorted(response.expirations):
         try:
-            days = (date.fromisoformat(value) - datetime.now().date()).days
+            days = (date.fromisoformat(value) - now_ny().date()).days
         except ValueError:
             continue
         if days and days > 0:
@@ -325,7 +327,7 @@ def _collect_stops(sources: dict[str, Any], entry: float, direction: Direction) 
                 )
 
     empirical = sources["empirical"]
-    adverse = empirical.get("adverse_excursion_pct") if empirical.get("available") else None
+    adverse = empirical.get("adverse_excursion_pct") if empirical.get("available") and empirical.get("sufficient") else None
     if adverse:
         pct = adverse[STOP_PERCENTILE]
         stops.append(
@@ -358,7 +360,7 @@ def _collect_targets(sources: dict[str, Any], entry: float, direction: Direction
             )
 
     empirical = sources["empirical"]
-    favorable = empirical.get("favorable_excursion_pct") if empirical.get("available") else None
+    favorable = empirical.get("favorable_excursion_pct") if empirical.get("available") and empirical.get("sufficient") else None
     if favorable:
         pct = favorable[TARGET_PERCENTILE]
         targets.append(

@@ -5,8 +5,15 @@ import api, {
   TradePlanDraft,
 } from '../services/api';
 import type { NavigationState } from '../utils/appNavigation';
-import { TIMEFRAMES, TIMEFRAME_LABELS, DEFAULT_TIMEFRAME } from '../utils/timeframeUtils';
+import { DEFAULT_TIMEFRAME } from '../utils/timeframeUtils';
 import { SymbolAutocompleteInput, resolveWatchlistSymbol } from '../components/SymbolAutocompleteInput';
+
+const TRADE_PRESETS: { label: string; timeframe: string }[] = [
+  { label: 'Scalp',     timeframe: '5m'  },
+  { label: 'Day Trade', timeframe: '15m' },
+  { label: 'Swing',     timeframe: '1d'  },
+  { label: 'Position',  timeframe: '1wk' },
+];
 
 const STORAGE_KEY = 'marketlens.trade.plans';
 
@@ -271,14 +278,16 @@ export function TradePlanningPage({ navigation }: { navigation?: NavigationState
   }, [store]);
 
   const buildDraft = useCallback(async () => {
-    const resolvedSymbol = await resolveWatchlistSymbol(symbol);
-    if (!resolvedSymbol) {
-      setError('Choose a symbol from a Watchlist.');
-      return;
-    }
     const version = ++requestVersion.current;
     setLoading(true);
     setError(null);
+    const resolvedSymbol = await resolveWatchlistSymbol(symbol);
+    if (version !== requestVersion.current) return;
+    if (!resolvedSymbol) {
+      setLoading(false);
+      setError('Choose a symbol from a Watchlist.');
+      return;
+    }
     try {
       const result = await api.getTradePlanDraft({
         symbol: resolvedSymbol,
@@ -380,6 +389,7 @@ export function TradePlanningPage({ navigation }: { navigation?: NavigationState
       stop_source: saved.stopSource,
       reward_risk: saved.rewardRisk,
       thesis: saved.thesis,
+      created_at: saved.createdAt,
     }).catch(() => { /* best-effort */ });
   };
 
@@ -411,14 +421,21 @@ export function TradePlanningPage({ navigation }: { navigation?: NavigationState
               placeholder="SPY"
             />
           </label>
-          <label>
-            Timeframe
-            <select value={timeframe} onChange={e => setTimeframe(e.target.value)}>
-              {TIMEFRAMES.map(tf => (
-                <option key={tf} value={tf}>{TIMEFRAME_LABELS[tf] || tf}</option>
+          <div className="trade-preset-field">
+            <span className="trade-preset-label">Timeframe</span>
+            <div className="trade-preset-buttons" role="group" aria-label="Timeframe preset">
+              {TRADE_PRESETS.map(p => (
+                <button
+                  key={p.timeframe}
+                  type="button"
+                  className={`trade-preset-btn${timeframe === p.timeframe ? ' active' : ''}`}
+                  onClick={() => setTimeframe(p.timeframe)}
+                >
+                  {p.label}
+                </button>
               ))}
-            </select>
-          </label>
+            </div>
+          </div>
           <label>
             Direction
             <select

@@ -114,15 +114,16 @@ export function MarketDataFreshnessBadge({
     ? (sourceState === 'stale' ? 'stale' : 'cached')
     : staleByAge ? 'stale' : connectionState ?? sourceState;
   // The market being closed (evening, weekend, holiday) is expected, not a data
-  // problem — don't let an age-driven 'delayed'/'stale'/'cached' reading read as
-  // an incident. Genuine problems (reconnecting/unavailable) still surface as-is,
-  // and API-paused mode keeps its own distinct label.
+  // problem — don't let an age-driven or freshly-fetched reading show as 'Live'
+  // or alarm as 'delayed'/'stale' when trading is simply not happening.
+  // Genuine problems (reconnecting/unavailable) still surface as-is, and
+  // API-paused mode keeps its own distinct label.
   const isClosedOverride = marketSession === 'closed'
     && startupMode !== 'api'
-    && (rawState === 'delayed' || rawState === 'stale' || rawState === 'cached');
+    && (rawState === 'live' || rawState === 'delayed' || rawState === 'stale' || rawState === 'cached');
   const state: BadgeState = isClosedOverride ? 'closed' : rawState;
   const label = startupMode === 'api' ? `Paused · ${labels[state]}` : labels[state];
-  const age = showAge ? formatAge(computedAge, timestamp) : null;
+  const age = showAge && state !== 'closed' ? formatAge(computedAge, timestamp) : null;
   const providerLabel = provider ? provider.toUpperCase() : null;
   const title = startupMode === 'api'
     ? 'STARTUP_MODE=api is active, so live market-data updates are paused.'
