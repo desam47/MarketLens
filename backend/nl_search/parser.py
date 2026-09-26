@@ -234,9 +234,6 @@ def _apply_conflict_rules(conflict_clause: str, primary_direction: str = "bullis
         "1h": "1h",
         "hour": "1h",
         "hours": "1h",
-        "weekly": "1w",
-        "week": "1w",
-        "1w": "1w",
     }
 
     # If the conflict clause starts with a direction word (e.g. "bearish 5m"),

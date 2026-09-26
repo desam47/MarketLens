@@ -32,20 +32,32 @@ describe('MarketDataFreshnessBadge', () => {
     expect(screen.getByText('Delayed · 2m ago')).toBeInTheDocument();
   });
 
-  it('relabels a delayed reading as Closed when the exchange session is closed', () => {
+  it('relabels a delayed reading as Closed and drops the age when the session is closed', () => {
     render(
       <MarketDataFreshnessBadge dataStatus="DELAYED" ageSeconds={3600} showAge marketSession="closed" />,
     );
 
-    expect(screen.getByText('Closed · 1h ago')).toBeInTheDocument();
+    // The age is suppressed deliberately: the point of the Closed relabel is to stop an
+    // ever-growing "Xh ago" reading alarming the user over an evening or a weekend, when
+    // nothing is trading and the price is simply the last one available.
+    expect(screen.getByText('Closed')).toBeInTheDocument();
+    expect(screen.queryByText(/ago/)).not.toBeInTheDocument();
   });
 
-  it('does not relabel a live quote as closed even during a closed session', () => {
+  it('relabels a freshly-polled live quote as Closed during a closed session', () => {
     render(
       <MarketDataFreshnessBadge dataStatus="LIVE" ageSeconds={5} showAge marketSession="closed" />,
     );
 
-    expect(screen.getByText('Live · 5s ago')).toBeInTheDocument();
+    // This assertion is the reverse of what it used to be. It previously expected
+    // "Live · 5s ago" to survive a closed session, on the reading that a fresh quote is
+    // genuinely live whatever the clock says. In practice that surfaced "Live · WEBULL · 4s
+    // ago" on the Alerts page at times when no equity was trading: the age reflects how
+    // recently the backend was polled, not that a trade occurred. Outside every session
+    // (premarket/regular/after-hours are all separately reported) a 5-second-old equity
+    // quote is a re-sent last value, so Closed is the honest label.
+    expect(screen.getByText('Closed')).toBeInTheDocument();
+    expect(screen.queryByText(/Live/)).not.toBeInTheDocument();
   });
 
   it('leaves the delayed label alone when the session is open', () => {

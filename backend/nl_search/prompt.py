@@ -18,7 +18,7 @@ below. You may ONLY emit a JSON object; no prose, no markdown outside a \
 single ```json ... ``` block.
 
 Schema (all fields optional unless noted):
-- timeframe:        one of "1m","5m","15m","30m","1h","4h","1d","1w"
+- timeframe:        one of "1m","5m","15m","30m","1h","4h","1d"
 - direction:        "bullish" | "bearish" | "neutral"
 - min_confidence:   number 0.0-1.0, default 0.5
 - trend_min:        number 0-100

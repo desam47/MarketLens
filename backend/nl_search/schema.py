@@ -17,7 +17,10 @@ from pydantic import BaseModel, Field, model_validator
 
 # --- Vocabulary -----------------------------------------------------
 
-Timeframe = Literal["1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"]
+# Weekly is absent deliberately: the trend engine never clears warm-up on the
+# available weekly history, so a weekly trend filter can only ever match zero
+# rows. It was also spelled "1w" here while every bar row uses "1wk".
+Timeframe = Literal["1m", "5m", "15m", "30m", "1h", "4h", "1d"]
 Direction = Literal["bullish", "bearish", "neutral"]
 Ranking = Literal[
     "strongest_bullish",

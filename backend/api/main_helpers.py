@@ -30,7 +30,7 @@ from sqlalchemy import func
 from backend.database import SessionLocal
 from backend.models import HistoricalSignal
 from backend.models.market_data_sql import BarModel
-from backend.services.signal_recorder import signal_recorder
+from backend.services.signal_recorder import SKIP_SIGNAL_TIMEFRAMES, signal_recorder
 from backend.services.signal_replay import bar_length
 from backend.utils.timezone import now_ny
 
@@ -92,6 +92,10 @@ def _fill_signal_gaps(symbol: str) -> dict[str, int]:
     filled: dict[str, int] = {}
     now = now_ny()
     for tf, bar_n in bar_counts.items():
+        # A timeframe that is never recorded shows its whole bar count as a gap on every
+        # startup, and the backfill it triggers can only ever return 0 rows.
+        if tf in SKIP_SIGNAL_TIMEFRAMES:
+            continue
         sig_n = sig_counts.get(tf, 0)
         # A bar that is still forming has no signal yet, by design (it is recorded once it
         # closes), so it is not a gap: counting it would replay every pair on every startup.

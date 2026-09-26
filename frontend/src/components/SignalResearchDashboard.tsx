@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import api, { SignalResearchMetrics, SignalResearchSummary, SignalScopeMode, Watchlist } from '../services/api';
-import { DEFAULT_TIMEFRAME, TIMEFRAMES, TIMEFRAME_LABELS } from '../utils/timeframeUtils';
+import { DEFAULT_TIMEFRAME, SIGNAL_TIMEFRAMES, TIMEFRAME_LABELS } from '../utils/timeframeUtils';
 
 const ALL_TIMEFRAMES = 'all';
 
@@ -131,7 +131,7 @@ export function SignalResearchDashboard() {
         <label>
           <span>Timeframe</span>
           <select value={timeframe} onChange={(event) => setTimeframe(event.target.value)} aria-label="Research timeframe">
-            {TIMEFRAMES.map((tf) => <option key={tf} value={tf}>{TIMEFRAME_LABELS[tf] || tf}</option>)}
+            {SIGNAL_TIMEFRAMES.map((tf) => <option key={tf} value={tf}>{TIMEFRAME_LABELS[tf] || tf}</option>)}
             <option value={ALL_TIMEFRAMES}>All timeframes (coverage only)</option>
           </select>
         </label>

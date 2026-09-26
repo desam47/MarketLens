@@ -526,14 +526,44 @@ class TestLiveRecording(_Db):
             self.recorder.record_from_recent_bars(["LIVEH"], budget_seconds=0.0, now=now), 0
         )
 
+    def test_no_write_path_stores_a_weekly_signal(self):
+        """Weekly bars are kept and charted, but never produce a signal row.
+
+        Exercises all three entry points against the same stored weekly bars, because each one
+        was a separate writer before SKIP_SIGNAL_TIMEFRAMES existed: the live recording loop,
+        the gap-fill/backfill path, and the public record_signal API. A daily control proves
+        the fixture itself records, so a green assertion cannot come from bars that were never
+        stored."""
+        weekly = _bars(260)
+        self._store_bars("WKLY", "1wk", weekly)
+        self._store_bars("WKLY", "1d", weekly)
+        now = weekly[-1].timestamp + timedelta(days=30)
+
+        self.recorder.record_from_recent_bars(["WKLY"], budget_seconds=0.0, now=now)
+        self.recorder.backfill_signals_for_symbol("WKLY", timeframe="1wk")
+        self.recorder.backfill_signals_for_symbol("WKLY")
+        self.assertIsNone(
+            self.recorder.record_signal("WKLY", "1wk", trend_score=42.0, trend_state="bullish"),
+            "the public API must refuse a weekly row even when handed a real score",
+        )
+
+        self.assertEqual(self._signals("WKLY", "1wk"), [], "no write path may store weekly")
+        self.assertNotEqual(
+            self._signals("WKLY", "1d"), [], "control: the daily pair must still record"
+        )
+
     def test_the_seed_order_ranks_every_timeframe_by_how_often_it_closes(self):
         """The full order, not just a two-timeframe pair: 1m first (closes every minute) through
-        1wk last (closes weekly) — matches rec_mod._SEED_ORDER exactly, so this fails the moment
-        that table's priority (not just its membership) drifts from "most urgent first"."""
+        1d last — matches rec_mod._SEED_ORDER exactly, so this fails the moment that table's
+        priority (not just its membership) drifts from "most urgent first".
+
+        1wk is absent by design (see SKIP_SIGNAL_TIMEFRAMES): it is never seeded because it is
+        never recorded."""
         self.assertEqual(
             sorted(rec_mod._SEED_ORDER, key=rec_mod._SEED_ORDER.get),
-            ["1m", "2m", "3m", "5m", "15m", "30m", "1h", "4h", "1d", "1wk"],
+            ["1m", "2m", "3m", "5m", "15m", "30m", "1h", "4h", "1d"],
         )
+        self.assertNotIn("1wk", rec_mod._SEED_ORDER)
 
     def test_a_dense_intraday_pair_is_seeded_before_a_stale_daily_one(self):
         """The concrete live symptom (MD-07): after a restart, 1m signals for several symbols

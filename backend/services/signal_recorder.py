@@ -63,8 +63,17 @@ _MAX_LAST_RECORDED = 10_000
 # happened to list them first, and 1m — the one the live symptom above was actually about —
 # was always seeded dead last, after every other pair of every symbol.
 _SEED_ORDER = {
-    tf: i for i, tf in enumerate(["1m", "2m", "3m", "5m", "15m", "30m", "1h", "4h", "1d", "1wk"])
+    tf: i for i, tf in enumerate(["1m", "2m", "3m", "5m", "15m", "30m", "1h", "4h", "1d"])
 }
+
+# Timeframes whose bars are kept and charted but which produce no signal row.
+# 1wk: the trend engine's indicator warm-up exceeds the ~156 weekly bars three
+# years of history yields, so every score comes back None and every column the
+# score determines (trend_state, strength, momentum, structure) is NULL. The
+# 3,451 rows written before this guard carry no usable value — no directional
+# state, so excursion stats can never condition on them. Revisit only once
+# weekly history is long enough to clear warm-up.
+SKIP_SIGNAL_TIMEFRAMES = frozenset({"1wk"})
 # A row written this soon after its bar closed may carry today's market regime.
 _FRESH = timedelta(minutes=15)
 
@@ -126,6 +135,8 @@ class SignalRecorder:
         """
         sym = symbol.upper()
         tf = timeframe
+        if tf in SKIP_SIGNAL_TIMEFRAMES:
+            return None
         # Store as naive America/New_York (EDT/EST) to match the bar table
         # convention (2026-09-02+). The signal API serializes these with an
         # explicit ``-04:00``/``-05:00`` suffix so the browser parses them
@@ -411,6 +422,8 @@ class SignalRecorder:
             with self._lock:
                 unseeded = []
                 for symbol, timeframe, last_bar in latest:
+                    if timeframe in SKIP_SIGNAL_TIMEFRAMES:
+                        continue
                     replay = self._replays.get((symbol, timeframe))
                     if replay is None:
                         unseeded.append((symbol, timeframe))
@@ -494,12 +507,14 @@ class SignalRecorder:
                     .all()
                 ]
                 # Order timeframes so shorter (denser) ones go first — they
-                # produce the most rows for the budget. 1d/1wk go last so
+                # produce the most rows for the budget. 1d goes last so
                 # the cap doesn't get eaten by sub-hour bars.
-                order = ["1m", "2m", "3m", "5m", "15m", "30m", "1h", "4h", "1d", "1wk"]
+                order = ["1m", "2m", "3m", "5m", "15m", "30m", "1h", "4h", "1d"]
                 timeframes.sort(key=lambda t: order.index(t) if t in order else 99)
 
             for tf in timeframes:
+                if tf in SKIP_SIGNAL_TIMEFRAMES:
+                    continue
                 recorded += self._bulk_record_bars(db, sym, tf, max_bars)
         except Exception as e:
             logger.error(f"backfill_signals_for_symbol({sym}) failed: {e}")
@@ -602,8 +617,12 @@ class SignalRecorder:
     def _insert_rows(self, db, symbol: str, timeframe: str, scored, now: datetime) -> int:
         """Bulk-insert one signal per ``(bar, score)``. A row written within
         ``FRESH_MINUTES`` of its bar closing also records the current market regime; an older
-        one leaves it empty, because the regime engine only knows the present."""
-        if not scored:
+        one leaves it empty, because the regime engine only knows the present.
+
+        Every write path reaches this method, so the SKIP_SIGNAL_TIMEFRAMES check here is the
+        one that actually guarantees the exclusion -- the guards at the callers just avoid the
+        wasted replay."""
+        if not scored or timeframe in SKIP_SIGNAL_TIMEFRAMES:
             return 0
         regime, regime_loaded = None, False
         records = []

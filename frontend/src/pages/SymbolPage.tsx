@@ -650,7 +650,10 @@ function mergeLiveBarIntoMinuteBars(bars: Bar[], update: BarUpdateData): Bar[] {
 const TREND_TIMEFRAME_GROUPS: Array<{ label: string; timeframes: string[] }> = [
   { label: 'Timing · 1m–5m', timeframes: ['1m', '2m', '3m', '5m'] },
   { label: 'Structure · 15m–1h', timeframes: ['15m', '30m', '1h'] },
-  { label: 'Bias · 4h–Weekly', timeframes: ['4h', '1d', '1wk'] },
+  // Weekly is excluded: the trend engine's warm-up exceeds the weekly bar
+  // history available, so its score is always null and it contributed a
+  // permanently blank third input to this group's bias reading.
+  { label: 'Bias · 4h–Daily', timeframes: ['4h', '1d'] },
 ];
 
 function TrendCardSkeleton() {
@@ -1096,7 +1099,7 @@ const fetchBars = useCallback(async () => {
     setTrendsLoading(true);
     setTrendsError(null);
     try {
-      const data = await api.getTrends(requestedSymbol, ['1m', '2m', '3m', '5m', '15m', '30m', '1h', '4h', '1d', '1wk']);
+      const data = await api.getTrends(requestedSymbol, ['1m', '2m', '3m', '5m', '15m', '30m', '1h', '4h', '1d']);
       if (requestedSymbol !== symbol) return;
       setTrends(data);
     } catch (err: any) {

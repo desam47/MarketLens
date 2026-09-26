@@ -4,6 +4,15 @@ export const TIMEFRAMES = [
 ] as const;
 export type Timeframe = typeof TIMEFRAMES[number];
 
+/** Timeframes that carry recorded signals — use this, not TIMEFRAMES, for any
+ * selector that filters signals, signal research or signal replay.
+ *
+ * Weekly is excluded: the backend records no weekly signal (the trend engine
+ * never clears indicator warm-up on the ~156 weekly bars three years of
+ * history yields, so every score is null). Weekly *bars* are still stored and
+ * charted, which is why TIMEFRAMES keeps it. */
+export const SIGNAL_TIMEFRAMES = TIMEFRAMES.filter(tf => tf !== '1wk');
+
 /** Default timeframe for every timeframe selector (chart interval the
  * symbol-scoped AI + analysis views open on). */
 export const DEFAULT_TIMEFRAME: Timeframe = '1d';

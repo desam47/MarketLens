@@ -8,11 +8,14 @@ import type { NavigationState } from '../utils/appNavigation';
 import { DEFAULT_TIMEFRAME } from '../utils/timeframeUtils';
 import { SymbolAutocompleteInput, resolveWatchlistSymbol } from '../components/SymbolAutocompleteInput';
 
+// No Position preset: it mapped to 1wk, and weekly signals carry no directional
+// state (the trend engine never clears warm-up on the ~156 weekly bars three
+// years of history yields), so a weekly plan could never produce an empirical
+// stop or target. 1d is the longest horizon the signal history supports.
 const TRADE_PRESETS: { label: string; timeframe: string }[] = [
   { label: 'Scalp',     timeframe: '5m'  },
   { label: 'Day Trade', timeframe: '15m' },
   { label: 'Swing',     timeframe: '1d'  },
-  { label: 'Position',  timeframe: '1wk' },
 ];
 
 const STORAGE_KEY = 'marketlens.trade.plans';

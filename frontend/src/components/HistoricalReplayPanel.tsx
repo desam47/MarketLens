@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import api, { Bar, HistoricalSignal, TickSignalReplayResponse } from '../services/api';
 import { formatETDateTime } from './chartMath';
-import { TIMEFRAMES, TIMEFRAME_LABELS } from '../utils/timeframeUtils';
+import { SIGNAL_TIMEFRAMES, TIMEFRAME_LABELS } from '../utils/timeframeUtils';
 import { readSessionPreference, sessionMatchesPreference, SESSION_PREFERENCE_KEY, type SessionPreference } from '../utils/marketSession';
 import { directionalOutcome, isDirectionalSignal, isDirectionalWin, isSignalOutcomeComplete } from '../utils/signalOutcomes';
 import { SymbolAutocompleteInput, resolveWatchlistSymbol } from './SymbolAutocompleteInput';
@@ -288,7 +288,7 @@ export function HistoricalReplayPanel({ defaultSymbol = 'SPY' }: HistoricalRepla
         <label>
           <span>Timeframe</span>
           <select value={timeframe} onChange={(event) => setTimeframe(event.target.value)} aria-label="Replay timeframe">
-            {TIMEFRAMES.map((tf) => <option key={tf} value={tf}>{TIMEFRAME_LABELS[tf] || tf}</option>)}
+            {SIGNAL_TIMEFRAMES.map((tf) => <option key={tf} value={tf}>{TIMEFRAME_LABELS[tf] || tf}</option>)}
           </select>
         </label>
         <button className="btn btn-primary" onClick={() => void loadReplay()} disabled={loading}>

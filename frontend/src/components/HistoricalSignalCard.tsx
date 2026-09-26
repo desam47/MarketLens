@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import api, { HistoricalSignal, RegimeCount, RegimePerformance, SignalResearchSummary, SignalScopeMode, Watchlist } from '../services/api';
 import { fmtPrice } from './watchlistUtils';
-import { DEFAULT_TIMEFRAME, TIMEFRAMES, TIMEFRAME_LABELS } from '../utils/timeframeUtils';
+import { DEFAULT_TIMEFRAME, SIGNAL_TIMEFRAMES, TIMEFRAME_LABELS } from '../utils/timeframeUtils';
 import { directionalOutcome, isSignalOutcomeComplete } from '../utils/signalOutcomes';
 import { SymbolAutocompleteInput, resolveWatchlistSymbol } from './SymbolAutocompleteInput';
 
@@ -207,7 +207,7 @@ export function HistoricalSignalCard({ defaultSymbol = '' }: HistoricalSignalCar
         <label>
           <span>Timeframe</span>
           <select value={timeframe} onChange={(e) => setTimeframe(e.target.value)} aria-label="Historical signal timeframe">
-            {TIMEFRAMES.map((tf) => (
+            {SIGNAL_TIMEFRAMES.map((tf) => (
               <option key={tf} value={tf}>{TIMEFRAME_LABELS[tf] || tf}</option>
             ))}
           </select>

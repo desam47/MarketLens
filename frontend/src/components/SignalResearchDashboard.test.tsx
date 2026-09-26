@@ -60,7 +60,10 @@ describe('SignalResearchDashboard', () => {
     await waitFor(() => expect(screen.getByText('Avg signal 5-bar return')).toBeInTheDocument());
 
     const options = Array.from((screen.getByLabelText('Research timeframe') as HTMLSelectElement).options).map((option) => option.value);
-    expect(options).toEqual(['1m', '2m', '3m', '5m', '15m', '30m', '1h', '4h', '1d', '1wk', 'all']);
+    // Weekly is absent: the backend records no weekly signal, so research on it
+    // could only ever report an empty sample.
+    expect(options).toEqual(['1m', '2m', '3m', '5m', '15m', '30m', '1h', '4h', '1d', 'all']);
+    expect(options).not.toContain('1wk');
 
     summarySpy.mockResolvedValue({
       ...dailySummary, timeframe: null, recorded: 912, complete: 860, timeframe_coverage: coverage,

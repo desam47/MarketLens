@@ -25,7 +25,10 @@ describe('HistoricalSignalCard', () => {
     await waitFor(() => expect(screen.getByLabelText('Regime coverage')).toHaveTextContent('3 of 30 complete outcomes carry a regime'));
     expect(screen.getByLabelText('Regime coverage')).toHaveTextContent('live snapshot');
     const options = Array.from((screen.getByLabelText('Historical signal timeframe') as HTMLSelectElement).options).map((option) => option.value);
-    expect(options).toEqual(['1m', '2m', '3m', '5m', '15m', '30m', '1h', '4h', '1d', '1wk']);
+    // Weekly is absent: the backend records no weekly signal, so offering it here
+    // would be a filter that can only ever return zero rows.
+    expect(options).toEqual(['1m', '2m', '3m', '5m', '15m', '30m', '1h', '4h', '1d']);
+    expect(options).not.toContain('1wk');
     expect(performance).toHaveBeenLastCalledWith('all_active', undefined, '1d');
 
     fireEvent.change(screen.getByLabelText('Historical signal timeframe'), { target: { value: '4h' } });
