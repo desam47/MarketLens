@@ -352,7 +352,73 @@ h4 {
 
 .symbol-input {
   display: flex;
+  align-items: flex-start;
   gap: 0.5rem;
+}
+
+.symbol-autocomplete {
+  position: relative;
+  width: 100%;
+}
+
+.symbol-input .symbol-autocomplete {
+  width: auto;
+}
+
+/* In every grid/flex form context the <input> inside .symbol-autocomplete
+   has no explicit width, so it renders at its browser-intrinsic size
+   (~180 px) and overflows its container column/cell into the next field.
+   Force it to fill the wrapper in all contexts.  The .symbol-input
+   override below restores auto-sizing for the standalone SymbolInput
+   component where the wrapper is width:auto. */
+.symbol-autocomplete input {
+  width: 100%;
+  box-sizing: border-box;
+}
+.symbol-input .symbol-autocomplete input {
+  width: auto;
+}
+
+.symbol-autocomplete-list {
+  position: absolute;
+  z-index: 1000;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  margin: 0;
+  padding: 0.25rem 0;
+  list-style: none;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.28);
+  min-width: 120px;
+  max-height: min(8rem, 30vh);
+  overflow-y: auto;
+}
+
+.symbol-autocomplete-option {
+  display: block;
+  width: 100%;
+  padding: 0.45rem 0.7rem;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+.symbol-autocomplete-option:hover,
+.symbol-autocomplete-option.is-highlighted {
+  background: var(--bg-tertiary);
+  color: var(--accent-primary);
+}
+
+.symbol-autocomplete-status {
+  padding: 0.45rem 0.7rem;
+  color: var(--text-muted);
+  font-size: 0.8rem;
 }
 
 .symbol-field {
@@ -842,6 +908,13 @@ h4 {
 /* Historical signal replay */
 .historical-replay-card {
   margin-bottom: 1.25rem;
+  /* backdrop-filter on every .card creates an independent stacking context,
+     which traps the autocomplete dropdown inside the replay card's context
+     and prevents it painting over the sibling Signal Research card.
+     Raising the replay card's z-index lets its stacking context sit above
+     sibling cards so the dropdown can overlay them. */
+  position: relative;
+  z-index: 2;
 }
 
 .replay-heading {
@@ -888,6 +961,15 @@ h4 {
   background: var(--bg-secondary);
   color: var(--text-primary);
 }
+
+/* SymbolAutocompleteInput renders a width:100% wrapper div; without a
+   concrete width on the label it expands to fill the flex row and overlaps
+   the From/To datetime inputs.  Pin it to a concrete width so the Symbol
+   label stays the same size as the From/To inputs in the flex row. */
+.replay-controls .symbol-autocomplete {
+  width: 140px;
+}
+
 
 .replay-toolbar {
   display: flex;
