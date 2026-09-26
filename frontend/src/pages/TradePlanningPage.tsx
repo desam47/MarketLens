@@ -6,6 +6,7 @@ import api, {
 } from '../services/api';
 import type { NavigationState } from '../utils/appNavigation';
 import { TIMEFRAMES, TIMEFRAME_LABELS, DEFAULT_TIMEFRAME } from '../utils/timeframeUtils';
+import { SymbolAutocompleteInput, resolveWatchlistSymbol } from '../components/SymbolAutocompleteInput';
 
 const STORAGE_KEY = 'marketlens.trade.plans';
 
@@ -270,13 +271,17 @@ export function TradePlanningPage({ navigation }: { navigation?: NavigationState
   }, [store]);
 
   const buildDraft = useCallback(async () => {
-    if (!symbol.trim()) return;
+    const resolvedSymbol = await resolveWatchlistSymbol(symbol);
+    if (!resolvedSymbol) {
+      setError('Choose a symbol from a Watchlist.');
+      return;
+    }
     const version = ++requestVersion.current;
     setLoading(true);
     setError(null);
     try {
       const result = await api.getTradePlanDraft({
-        symbol: symbol.trim(),
+        symbol: resolvedSymbol,
         timeframe,
         direction,
         accountValue: store.accountValue,
@@ -399,10 +404,9 @@ export function TradePlanningPage({ navigation }: { navigation?: NavigationState
         <div className="risk-form-grid">
           <label>
             Symbol
-            <input
-              type="text"
+            <SymbolAutocompleteInput
               value={symbol}
-              onChange={e => setSymbol(e.target.value.toUpperCase())}
+              onChange={setSymbol}
               onKeyDown={e => { if (e.key === 'Enter') buildDraft(); }}
               placeholder="SPY"
             />

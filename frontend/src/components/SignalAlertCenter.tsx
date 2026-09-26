@@ -3,6 +3,7 @@ import api, { Alert, AlertDelivery, AlertDeliverySummary, AlertTrigger } from '.
 import { formatETDateTime } from './chartMath';
 import { TIMEFRAME_LABELS } from '../utils/timeframeUtils';
 import { openAlertConversation } from '../utils/alertConversation';
+import { SymbolAutocompleteInput, resolveWatchlistSymbol } from './SymbolAutocompleteInput';
 
 const ALERT_TIMEFRAMES = ['1m', '5m', '15m', '1h', '1d'] as const;
 const ACK_KEY = 'marketlens.signal-alerts.acknowledged';
@@ -316,6 +317,10 @@ export function SignalAlertCenter() {
       setStatus({ message: 'Score must be 0–100 and strength must be 0–1.', error: true });
       return;
     }
+    if (!await resolveWatchlistSymbol(symbol)) {
+      setStatus({ message: 'Choose a symbol from a Watchlist.', error: true });
+      return;
+    }
     setSubmitting(true);
     try {
       const profile = profileFromForm();
@@ -395,7 +400,7 @@ export function SignalAlertCenter() {
 
       <form className="signal-alert-form" onSubmit={handleSubmit}>
         <label><span>Name</span><input value={form.name} onChange={(event) => updateProfile('name', event.target.value)} placeholder="SPY bullish setup" maxLength={80} /></label>
-        <label><span>Symbol</span><input value={form.symbol} disabled={editingAlertId !== null} onChange={(event) => updateProfile('symbol', event.target.value.toUpperCase())} maxLength={8} /></label>
+        <label><span>Symbol</span><SymbolAutocompleteInput value={form.symbol} disabled={editingAlertId !== null} onChange={(value) => updateProfile('symbol', value)} /></label>
         <label><span>Direction</span><select value={form.direction} onChange={(event) => updateProfile('direction', event.target.value)}><option value="bullish">Bullish</option><option value="bearish">Bearish</option><option value="any">Any</option></select></label>
         <label><span>Timeframe</span><select value={form.timeframe} onChange={(event) => updateProfile('timeframe', event.target.value)}><option value="">All timeframes</option>{ALERT_TIMEFRAMES.map((tf) => <option key={tf} value={tf}>{TIMEFRAME_LABELS[tf] || tf}</option>)}</select></label>
         <label><span>Min score</span><input type="number" min="0" max="100" step="1" value={form.minScore} onChange={(event) => updateProfile('minScore', Number(event.target.value))} /></label>

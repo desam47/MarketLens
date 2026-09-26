@@ -3,6 +3,7 @@ import api, { HistoricalSignal, RegimeCount, RegimePerformance, SignalResearchSu
 import { fmtPrice } from './watchlistUtils';
 import { DEFAULT_TIMEFRAME, TIMEFRAMES, TIMEFRAME_LABELS } from '../utils/timeframeUtils';
 import { directionalOutcome, isSignalOutcomeComplete } from '../utils/signalOutcomes';
+import { SymbolAutocompleteInput, resolveWatchlistSymbol } from './SymbolAutocompleteInput';
 
 const strPrice = fmtPrice;
 
@@ -68,11 +69,17 @@ export function HistoricalSignalCard({ defaultSymbol = '' }: HistoricalSignalCar
   }, [defaultSymbol]);
 
   const loadSignals = useCallback(async () => {
+    const requestedSymbol = symbol.trim().toUpperCase();
+    if (requestedSymbol && !await resolveWatchlistSymbol(requestedSymbol)) {
+      setStatus({ msg: 'Choose a symbol from a Watchlist.', isError: true });
+      setSignals([]);
+      return;
+    }
     setLoading(true);
     setStatus(null);
     try {
       const rows = await api.listSignals(
-        symbol.trim().toUpperCase() || undefined,
+        requestedSymbol || undefined,
         timeframe,
         100,
         completedOnly,
@@ -191,12 +198,10 @@ export function HistoricalSignalCard({ defaultSymbol = '' }: HistoricalSignalCar
         </label>
         <label>
           <span>Symbol</span>
-          <input
-            type="text"
+          <SymbolAutocompleteInput
             value={symbol}
             placeholder="(all)"
-            onChange={(e) => setSymbol(e.target.value.toUpperCase())}
-            maxLength={8}
+            onChange={setSymbol}
           />
         </label>
         <label>

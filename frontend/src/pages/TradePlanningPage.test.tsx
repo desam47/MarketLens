@@ -115,6 +115,7 @@ describe('TradePlanningPage', () => {
   beforeEach(() => {
     window.localStorage.clear();
     jest.restoreAllMocks();
+    jest.spyOn(api, 'getSymbolCatalog').mockResolvedValue(['AAPL', 'SPY']);
   });
 
   it('renders the setup form and no plan before building', () => {

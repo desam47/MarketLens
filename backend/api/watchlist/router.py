@@ -14,6 +14,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from backend.config.settings import settings as _settings
+from backend.models.watchlist import WatchlistSymbol
 from backend.repositories.watchlist_repository import WatchlistRepository
 from backend.services.purge_service import purge_symbol_from_database_safe
 from backend.symbols.validator import validate_symbol
@@ -282,6 +283,45 @@ def delete_watchlist(watchlist_id: int, db: Session = Depends(get_db)):
                 f"backtest_runs={result['backtest_runs']}, "
                 f"drawings={result['drawing_tools']}"
             )
+
+
+# Symbol suggestions
+def _known_symbols(db: Session) -> set[str]:
+    """Return the deduplicated symbol set across every Watchlist."""
+    return {
+        symbol.strip().upper()
+        for (symbol,) in db.query(WatchlistSymbol.symbol).filter(WatchlistSymbol.symbol.isnot(None)).distinct().all()
+        if symbol and symbol.strip()
+    }
+
+
+@router.get("/symbols/catalog", response_model=list[str])
+def get_known_symbol_catalog(
+    db: Session = Depends(get_db),
+) -> list[str]:
+    """Return all Watchlist symbols used by autocomplete fields.
+
+    The frontend fetches this once and filters it locally while a user types.
+    It intentionally excludes provider/configuration/history-only symbols.
+    """
+    return sorted(_known_symbols(db))
+
+
+@router.get("/symbols/search", response_model=list[str])
+def search_known_symbols(
+    q: str = Query(..., min_length=1, max_length=20, description="Prefix or substring to match"),
+    limit: int = Query(20, ge=1, le=50),
+    db: Session = Depends(get_db),
+) -> list[str]:
+    """Search the local symbol universe for API consumers that need it."""
+    needle = q.strip().upper()
+    if not needle:
+        return []
+
+    known = _known_symbols(db)
+    matches = [symbol for symbol in known if needle in symbol.upper()]
+    matches.sort(key=lambda symbol: (not symbol.upper().startswith(needle), len(symbol), symbol))
+    return matches[:limit]
 
 
 # Watchlist symbol endpoints

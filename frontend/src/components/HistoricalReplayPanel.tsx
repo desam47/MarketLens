@@ -4,6 +4,7 @@ import { formatETDateTime } from './chartMath';
 import { TIMEFRAMES, TIMEFRAME_LABELS } from '../utils/timeframeUtils';
 import { readSessionPreference, sessionMatchesPreference, SESSION_PREFERENCE_KEY, type SessionPreference } from '../utils/marketSession';
 import { directionalOutcome, isDirectionalSignal, isDirectionalWin, isSignalOutcomeComplete } from '../utils/signalOutcomes';
+import { SymbolAutocompleteInput, resolveWatchlistSymbol } from './SymbolAutocompleteInput';
 
 const REPLAY_LIMIT = 180;
 const REPLAY_SESSIONS = [
@@ -111,6 +112,10 @@ export function HistoricalReplayPanel({ defaultSymbol = 'SPY' }: HistoricalRepla
     const requestedSymbol = symbolRef.current.trim().toUpperCase();
     if (!requestedSymbol) {
       setError('Enter a symbol to replay.');
+      return;
+    }
+    if (!await resolveWatchlistSymbol(requestedSymbol)) {
+      setError('Choose a symbol from a Watchlist.');
       return;
     }
     const requestId = ++requestRef.current;
@@ -273,10 +278,9 @@ export function HistoricalReplayPanel({ defaultSymbol = 'SPY' }: HistoricalRepla
       <div className="replay-controls">
         <label>
           <span>Symbol</span>
-          <input
+          <SymbolAutocompleteInput
             value={symbol}
-            maxLength={8}
-            onChange={(event) => setSymbol(event.target.value.toUpperCase())}
+            onChange={setSymbol}
             onKeyDown={(event) => { if (event.key === 'Enter') void loadReplay(); }}
             aria-label="Replay symbol"
           />

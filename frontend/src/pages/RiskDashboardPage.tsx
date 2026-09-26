@@ -1,6 +1,7 @@
 import React, { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import api, { Bar } from '../services/api';
 import { earningsDaysAway } from '../components/EarningsBadge';
+import { SymbolAutocompleteInput, resolveWatchlistSymbol } from '../components/SymbolAutocompleteInput';
 import type { NavigationState } from '../utils/appNavigation';
 
 const STORAGE_KEY = 'marketlens.risk.positions';
@@ -279,7 +280,7 @@ export function RiskDashboardPage({ navigation }: { navigation?: NavigationState
     [snapshots, earningsWarningDays],
   );
 
-  const addPosition = (event: FormEvent) => {
+  const addPosition = async (event: FormEvent) => {
     event.preventDefault();
     const normalizedSymbol = symbol.trim().toUpperCase();
     const parsedQuantity = Number(quantity);
@@ -291,6 +292,10 @@ export function RiskDashboardPage({ navigation }: { navigation?: NavigationState
     }
     if (parsedStop != null && (!Number.isFinite(parsedStop) || parsedStop <= 0)) {
       setError('Stop price must be blank or a positive number.');
+      return;
+    }
+    if (!await resolveWatchlistSymbol(normalizedSymbol)) {
+      setError('Choose a symbol from a Watchlist.');
       return;
     }
     const existing = positions.find(position => position.symbol === normalizedSymbol && position.side === side);
@@ -328,7 +333,7 @@ export function RiskDashboardPage({ navigation }: { navigation?: NavigationState
       <form className="card risk-position-form" onSubmit={addPosition}>
         <div className="risk-form-heading"><div><h2>Add position</h2><span className="info-text">Add again to the same symbol and side to increase the position and update its average entry.</span></div></div>
         <div className="risk-form-grid">
-          <label>Symbol<input value={symbol} onChange={event => setSymbol(event.target.value)} placeholder="AAPL" /></label>
+          <label>Symbol<SymbolAutocompleteInput value={symbol} onChange={setSymbol} placeholder="AAPL" /></label>
           <label>Side<select value={side} onChange={event => setSide(event.target.value as 'long' | 'short')}><option value="long">Long</option><option value="short">Short</option></select></label>
           <label>Quantity<input type="number" min="0" step="any" value={quantity} onChange={event => setQuantity(event.target.value)} placeholder="100" /></label>
           <label>Entry price<input type="number" min="0" step="any" value={entryPrice} onChange={event => setEntryPrice(event.target.value)} placeholder="185.00" /></label>

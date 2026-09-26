@@ -6,6 +6,7 @@ import { TradeJournalPage } from './TradeJournalPage';
 describe('TradeJournalPage', () => {
   beforeEach(() => {
     window.localStorage.clear();
+    jest.spyOn(api, 'getSymbolCatalog').mockResolvedValue(['AAPL', 'SPY']);
     jest.spyOn(api, 'getLatestSignalsForSymbol').mockResolvedValue({
       '1d': {
         id: 1,

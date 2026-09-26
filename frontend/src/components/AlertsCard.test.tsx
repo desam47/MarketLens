@@ -5,6 +5,7 @@ import api from '../services/api';
 jest.mock('../services/api', () => ({
   __esModule: true,
   default: {
+    getSymbolCatalog: jest.fn(),
     getAlerts: jest.fn(),
     getActiveAlertTriggers: jest.fn(),
     createAlert: jest.fn(),
@@ -33,6 +34,7 @@ const trigger = (over: Partial<any> = {}) => ({
 beforeEach(() => {
   jest.clearAllMocks();
   window.sessionStorage.clear();
+  mockApi.getSymbolCatalog.mockResolvedValue(['AAPL', 'SPY']);
   mockApi.getAlerts.mockResolvedValue([]);
   mockApi.getActiveAlertTriggers.mockResolvedValue([]);
 });

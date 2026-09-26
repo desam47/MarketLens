@@ -1,6 +1,7 @@
 import React, { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import api, { HistoricalSignal, ScanResult, TapeSnapshot } from '../services/api';
 import type { NavigationState } from '../utils/appNavigation';
+import { SymbolAutocompleteInput, resolveWatchlistSymbol } from '../components/SymbolAutocompleteInput';
 
 const STORAGE_KEY = 'marketlens.trade.journal';
 const PENDING_DRAFT_KEY = 'marketlens.trade.journal.pending';
@@ -254,6 +255,9 @@ export function TradeJournalPage({ navigation }: { navigation?: NavigationState 
     if (optionalPrices.some(value => value != null && (!Number.isFinite(value) || value <= 0))) {
       setFormError('Exit, stop, and target prices must be blank or positive numbers.'); return;
     }
+    if (!await resolveWatchlistSymbol(normalizedSymbol)) {
+      setFormError('Choose a symbol from a Watchlist.'); return;
+    }
     setSaving(true); setFormError(null);
     let attachedSignal: JournalSignalContext | null = null;
     let attachedMarket: JournalMarketContext | null = null;
@@ -345,7 +349,7 @@ export function TradeJournalPage({ navigation }: { navigation?: NavigationState 
       <form className="card journal-form" onSubmit={saveEntry}>
         <div className="journal-form-heading"><div><h2>{editingId ? 'Edit trade' : 'Record a trade'}</h2><span className="info-text">Use planned and open entries to document your thesis before the outcome is known.</span></div>{editingId && <button className="btn" type="button" onClick={resetForm}>Cancel edit</button>}</div>
         <div className="journal-form-grid">
-          <label>Symbol<input aria-label="Trade symbol" value={symbol} onChange={event => setSymbol(event.target.value)} placeholder="AAPL" maxLength={10} /></label>
+          <label>Symbol<SymbolAutocompleteInput aria-label="Trade symbol" value={symbol} onChange={setSymbol} placeholder="AAPL" maxLength={10} /></label>
           <label>Side<select aria-label="Trade side" value={side} onChange={event => setSide(event.target.value as TradeSide)}><option value="long">Long</option><option value="short">Short</option></select></label>
           <label>Status<select aria-label="Trade status" value={status} onChange={event => setStatus(event.target.value as TradeStatus)}><option value="planned">Planned</option><option value="open">Open</option><option value="closed">Closed</option></select></label>
           <label>Entry date<input aria-label="Entry date" type="date" value={entryDate} onChange={event => setEntryDate(event.target.value)} /></label>

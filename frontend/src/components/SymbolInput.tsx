@@ -1,4 +1,5 @@
-import React, { useState, useImperativeHandle, forwardRef } from 'react';
+import React, { useState, useImperativeHandle, forwardRef, useEffect, useRef } from 'react';
+import { SymbolAutocompleteInput, rememberSymbol, resolveWatchlistSymbol, type SymbolAutocompleteInputHandle } from './SymbolAutocompleteInput';
 
 interface SymbolInputProps {
   symbol: string;
@@ -14,16 +15,21 @@ export interface SymbolInputHandle {
 export const SymbolInput = forwardRef<SymbolInputHandle, SymbolInputProps>(
   function SymbolInput({ symbol, onChange, onSubmit }, ref) {
   const [inputValue, setInputValue] = useState(symbol);
+  const inputRef = useRef<SymbolAutocompleteInputHandle | null>(null);
+
+  useEffect(() => setInputValue(symbol), [symbol]);
 
   useImperativeHandle(ref, () => ({
-    focus: () => { /* input is uncontrolled-ish; focus handled by the form */ },
+    focus: () => inputRef.current?.focus(),
     setValue: (v: string) => setInputValue(v.toUpperCase()),
   }), []);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const normalized = inputValue.toUpperCase().trim();
     if (!normalized) return;
+    if (!await resolveWatchlistSymbol(normalized)) return;
+    rememberSymbol(normalized);
     if (normalized !== symbol) {
       // Parent's effect on `symbol` will fetch the new symbol once its
       // state updates — calling onSubmit here too would fetch the old
@@ -36,12 +42,11 @@ export const SymbolInput = forwardRef<SymbolInputHandle, SymbolInputProps>(
 
   return (
     <form onSubmit={handleSubmit} className="symbol-input">
-      <input
-        type="text"
+      <SymbolAutocompleteInput
+        ref={inputRef}
         value={inputValue}
-        onChange={(e) => setInputValue(e.target.value.toUpperCase())}
+        onChange={setInputValue}
         placeholder="SYMBOL"
-        maxLength={5}
         className="symbol-field"
       />
       <button type="submit" className="btn btn-primary">

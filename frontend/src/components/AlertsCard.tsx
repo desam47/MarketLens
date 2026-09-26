@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import api, { Alert, AlertTrigger } from '../services/api';
 import { formatETDateTime } from './chartMath';
 import { openAlertConversation } from '../utils/alertConversation';
+import { SymbolAutocompleteInput, resolveWatchlistSymbol } from './SymbolAutocompleteInput';
 
 interface AlertsCardProps {
   /** Optional symbol to prefill the form with. */
@@ -238,6 +239,10 @@ export function AlertsCard({ defaultSymbol = '' }: AlertsCardProps) {
       setStatus({ msg: 'All fields are required.', isError: true });
       return;
     }
+    if (!await resolveWatchlistSymbol(payload.symbol)) {
+      setStatus({ msg: 'Choose a symbol from a Watchlist.', isError: true });
+      return;
+    }
     setSubmitting(true);
     try {
       if (editingId !== null) {
@@ -325,12 +330,10 @@ export function AlertsCard({ defaultSymbol = '' }: AlertsCardProps) {
         </label>
         <label>
           <span>Symbol</span>
-          <input
-            type="text"
+          <SymbolAutocompleteInput
             value={symbol}
-            onChange={e => setSymbol(e.target.value.toUpperCase())}
+            onChange={setSymbol}
             placeholder="AAPL"
-            maxLength={5}
             disabled={submitting || editingId !== null}
             title={editingId !== null ? "Can't change the symbol of an existing alert" : undefined}
           />

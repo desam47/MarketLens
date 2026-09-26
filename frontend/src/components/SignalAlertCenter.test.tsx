@@ -41,6 +41,7 @@ describe('SignalAlertCenter', () => {
     }]);
     jest.spyOn(api, 'getAlertDeliveries').mockResolvedValue([]);
     jest.spyOn(api, 'getAlertDeliverySummary').mockResolvedValue({ total: 0, by_status: {}, by_channel: {} });
+    jest.spyOn(api, 'getSymbolCatalog').mockResolvedValue(['SPY']);
     const create = jest.spyOn(api, 'createAlert').mockResolvedValue(alert);
 
     render(<SignalAlertCenter />);

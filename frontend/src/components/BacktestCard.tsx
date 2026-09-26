@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import api, { BacktestRun, BacktestTrade } from '../services/api';
 import { formatETDateTime } from './chartMath';
 import type { NavigationState } from '../utils/appNavigation';
+import { SymbolAutocompleteInput, resolveWatchlistSymbol } from './SymbolAutocompleteInput';
 
 interface BacktestCardProps {
   /** Optional symbol to prefill the form with. */
@@ -125,6 +126,10 @@ export function BacktestCard({ defaultSymbol = '', defaultNavigation }: Backtest
       setStatus({ msg: 'End date must be after start date.', isError: true });
       return;
     }
+    if (!await resolveWatchlistSymbol(cleanSymbol)) {
+      setStatus({ msg: 'Choose a symbol from a Watchlist.', isError: true });
+      return;
+    }
 
     setSubmitting(true);
     setStatus({ msg: 'Running backtest… (this can take a few seconds)', isError: false });
@@ -169,11 +174,9 @@ export function BacktestCard({ defaultSymbol = '', defaultNavigation }: Backtest
       <form className="backtest-form" onSubmit={handleSubmit}>
         <label>
           <span>Symbol</span>
-          <input
-            type="text"
+          <SymbolAutocompleteInput
             value={symbol}
-            onChange={e => setSymbol(e.target.value.toUpperCase())}
-            maxLength={5}
+            onChange={setSymbol}
             disabled={submitting}
           />
         </label>

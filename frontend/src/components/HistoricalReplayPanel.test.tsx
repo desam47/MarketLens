@@ -5,6 +5,10 @@ import { HistoricalReplayPanel } from './HistoricalReplayPanel';
 import { SESSION_PREFERENCE_KEY } from '../utils/marketSession';
 
 describe('HistoricalReplayPanel', () => {
+  beforeEach(() => {
+    jest.spyOn(api, 'getSymbolCatalog').mockResolvedValue(['SPY']);
+  });
+
   afterEach(() => {
     jest.restoreAllMocks();
   });

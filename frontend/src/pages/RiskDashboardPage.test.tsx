@@ -6,6 +6,7 @@ import { RiskDashboardPage } from './RiskDashboardPage';
 describe('RiskDashboardPage', () => {
   beforeEach(() => {
     window.localStorage.clear();
+    jest.spyOn(api, 'getSymbolCatalog').mockResolvedValue(['AAPL', 'SPY']);
     jest.spyOn(api, 'getQuote').mockResolvedValue({ price: 110, timestamp: '2026-01-02T15:00:00Z' });
     jest.spyOn(api, 'getAnalysisBars').mockResolvedValue({
       symbol: 'AAPL', timeframe: '1d', count: 4,
@@ -38,13 +39,17 @@ describe('RiskDashboardPage', () => {
 
   it('adds a position and calculates exposure, stop risk, and sector', async () => {
     render(<RiskDashboardPage />);
-    fireEvent.change(screen.getByLabelText('Symbol'), { target: { value: 'AAPL' } });
+    const symbolInput = screen.getByLabelText('Symbol');
+    fireEvent.change(symbolInput, { target: { value: 'AAPL' } });
+    expect(symbolInput).toHaveValue('AAPL');
     fireEvent.change(screen.getByLabelText('Quantity'), { target: { value: '10' } });
     fireEvent.change(screen.getByLabelText('Entry price'), { target: { value: '100' } });
     fireEvent.change(screen.getByLabelText(/Stop price/), { target: { value: '95' } });
     fireEvent.click(screen.getByRole('button', { name: '+ Add position' }));
 
-    await waitFor(() => expect(screen.getByText('AAPL')).toBeInTheDocument());
+    // The autocomplete also renders AAPL as a suggestion, so wait for the
+    // computed position metric rather than the duplicated ticker text.
+    await waitFor(() => expect(screen.getAllByText('$1,100').length).toBeGreaterThan(0));
     expect(screen.getAllByText('$1,100').length).toBeGreaterThan(0);
     expect(screen.getAllByText('$50').length).toBeGreaterThan(0);
     expect(screen.getByText('Technology')).toBeInTheDocument();

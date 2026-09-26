@@ -2146,6 +2146,16 @@ class ApiService {
     return this.fetch<WatchlistSymbol[]>(`/watchlists/${watchlistId}/symbols`);
   }
 
+  async getSymbolCatalog(): Promise<string[]> {
+    return this.fetch<string[]>('/watchlists/symbols/catalog');
+  }
+
+  async searchSymbols(query: string, limit = 20): Promise<string[]> {
+    return this.fetch<string[]>(
+      `/watchlists/symbols/search?q=${encodeURIComponent(query)}&limit=${limit}`,
+    );
+  }
+
   async getWatchlistCalendar(watchlistId: number): Promise<WatchlistCalendar> {
     return this.fetch<WatchlistCalendar>(`/calendar/watchlist/${watchlistId}`);
   }

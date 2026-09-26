@@ -3,6 +3,7 @@ import api, { Watchlist } from '../services/api';
 import { WatchlistSkeleton } from '../components/skeletons/WatchlistSkeleton';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { WatchlistTable } from '../components/WatchlistTable';
+import { clearSymbolCatalogCache } from '../components/SymbolAutocompleteInput';
 
 interface WatchlistPageProps {
   onSelectSymbol: (symbol: string) => void;
@@ -93,6 +94,7 @@ export function WatchlistPage({ onSelectSymbol }: WatchlistPageProps) {
     const symbol = newSymbol.toUpperCase().trim();
     try {
       await api.addSymbolToWatchlist(selectedWatchlist.id, symbol, newSymbolType);
+      clearSymbolCatalogCache();
       await fetchWatchlists();
       setNewSymbol('');
       setNewSymbolType('stock');
@@ -105,6 +107,7 @@ export function WatchlistPage({ onSelectSymbol }: WatchlistPageProps) {
     if (!window.confirm('Delete this watchlist?')) return;
     try {
       await api.deleteWatchlist(id);
+      clearSymbolCatalogCache();
       // Re-fetch the watchlists from the API rather than filtering stale local
       // state, so we stay in sync with any concurrent changes.
       await fetchWatchlists();
@@ -152,6 +155,7 @@ export function WatchlistPage({ onSelectSymbol }: WatchlistPageProps) {
     setImporting(true);
     try {
       const result: ImportResult = await api.importWatchlist(selectedWatchlist.id, parsed);
+      clearSymbolCatalogCache();
       setInfo(
         `Imported ${result.imported.length}, skipped ${result.skipped.length}, errors ${result.errors.length}`,
       );
@@ -314,7 +318,7 @@ export function WatchlistPage({ onSelectSymbol }: WatchlistPageProps) {
                   placeholder="Add symbol (e.g., NVDA)"
                   value={newSymbol}
                   onChange={e => setNewSymbol(e.target.value.toUpperCase())}
-                  maxLength={5}
+                  maxLength={10}
                 />
                 <select
                   className="entity-type-select"

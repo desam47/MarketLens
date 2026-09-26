@@ -13,6 +13,7 @@ import api, {
   MarketSessionType,
 } from '../services/api';
 import { formatETTime } from './chartMath';
+import { clearSymbolCatalogCache } from './SymbolAutocompleteInput';
 import { MarketDataFreshnessBadge } from './MarketDataFreshnessBadge';
 import { useMarketSession } from '../hooks/useMarketSession';
 import { classifySessionFromTimestamp } from '../utils/marketSession';
@@ -554,6 +555,7 @@ export function WatchlistTable({
     setPendingAction('delete');
     try {
       await api.removeSymbolFromWatchlist(watchlistId, symbol);
+      clearSymbolCatalogCache();
       setRows(prev => prev.filter(r => r.symbol !== symbol));
     } catch (err: any) {
       setError(err?.message || 'Failed to remove symbol');
