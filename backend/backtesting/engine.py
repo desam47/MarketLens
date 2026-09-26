@@ -264,7 +264,7 @@ class BacktestEngine:
                 if sig == "HIGH_VOLUME":
                     rel = _relative_volume(
                         current=bars[i].volume,
-                        history=bars[max(0, i - VOLUME_LOOKBACK) : i + 1],
+                        history=bars[max(0, i - VOLUME_LOOKBACK) : i],
                     )
                     if rel < HIGH_VOLUME_MULTIPLIER:
                         continue
@@ -438,11 +438,21 @@ def _run_with_oos_flag(
     config: BacktestConfig,
     out_of_sample: bool,
 ) -> int:
-    """Run a backtest and then patch the OOS flag onto the saved row."""
+    """Run a backtest and then patch the OOS flag onto the saved row.
+
+    Preserves status="failed" if the engine already marked the run as
+    failed — the unconditional status="completed" override was a bug
+    that hid insufficient-history failures.
+    """
     run_id = engine.run(config)
     repo = BacktestRepository()
     try:
-        repo.update_run_status(run_id, status="completed", out_of_sample=out_of_sample)
+        run = repo.get_run(run_id)
+        if run is None:
+            return run_id
+        # Only promote to completed if the engine didn't already fail it.
+        new_status = run.status if run.status == "failed" else "completed"
+        repo.update_run_status(run_id, status=new_status, out_of_sample=out_of_sample)
     finally:
         repo.close()
     return run_id
@@ -499,10 +509,12 @@ def replay_generate_signals(result: ScanResult, params: ExperimentParameters | N
             else:
                 signals.append("MACD_BEARISH")
 
-        # HIGH_VOLUME: caller is responsible for relative-volume check;
-        # we just echo the signal if the caller set it.
-        if "HIGH_VOLUME" in result.signals:
-            signals.append("HIGH_VOLUME")
+        # HIGH_VOLUME: always emit as a candidate so the main loop's
+        # relative-volume check can evaluate it. result.signals is empty
+        # at this point (build_scan_result never populates it), so the
+        # previous guard `if "HIGH_VOLUME" in result.signals` always
+        # short-circuited and the signal was never produced.
+        signals.append("HIGH_VOLUME")
 
         result.signals = signals
     except Exception:
@@ -676,7 +688,15 @@ def _compute_metrics(trades: Sequence[BacktestTrade], total_bars: int) -> dict:
             # Compound: (1 + r1/100) * (1 + r2/100) - 1, expressed as %
             cum_return = (1 + cum_return / 100) * (1 + t.return_1d / 100) - 1
             cum_return *= 100
-        ts = t.entry_date.isoformat() if t.entry_date else None
+        # Use exit_date_1d (the bar where the return is realised) so
+        # drawdown timing on the equity chart is not off by one day.
+        exit_dt = t.exit_date_1d if isinstance(t.exit_date_1d, datetime) else None
+        entry_dt = t.entry_date if isinstance(t.entry_date, datetime) else None
+        ts = (
+            exit_dt.isoformat()
+            if exit_dt is not None
+            else (entry_dt.isoformat() if entry_dt is not None else None)
+        )
         equity_points.append([ts, round(cum_return, 4)])
     equity_curve_json = json.dumps(equity_points) if equity_points else None
 

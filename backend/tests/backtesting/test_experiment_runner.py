@@ -41,7 +41,7 @@ class TestSplitSlices(unittest.TestCase):
         oos_end = slices[2][2]
         self.assertEqual(is_end, slices[1][1])  # IS.end == Val.start
         self.assertEqual(val_end, slices[2][1])  # Val.end == OOS.start
-        self.assertEqual(oos_end - start, (end - start) / 3)  # OOS.end = window boundary
+        self.assertEqual(oos_end, end)            # OOS.end == full range end (not 1/n_splits)
 
     def test_empty_range_returns_empty_list(self):
         result = _split_slices(datetime(2025, 1, 1), datetime(2025, 1, 1), 3, 0.2, 0.2)

@@ -16,7 +16,7 @@ chose). The bounds exist to catch obvious nonsense in the form.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class ExperimentParameters(BaseModel):
@@ -83,6 +83,15 @@ class ExperimentParameters(BaseModel):
     weight_momentum: float = Field(default=0.10, ge=0.0, le=2.0)
     weight_supertrend: float = Field(default=0.20, ge=0.0, le=2.0)
     weight_bollinger: float = Field(default=0.10, ge=0.0, le=2.0)
+
+    @model_validator(mode="after")
+    def _macd_periods_ordered(self) -> "ExperimentParameters":
+        if self.macd_fast >= self.macd_slow:
+            raise ValueError(
+                f"macd_fast ({self.macd_fast}) must be less than "
+                f"macd_slow ({self.macd_slow})"
+            )
+        return self
 
     def indicator_defaults(self) -> dict[str, int | float]:
         """Return a dict compatible with ``IndicatorDefaults`` field names.

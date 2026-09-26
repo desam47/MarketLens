@@ -82,28 +82,27 @@ class ExperimentConfig:
 
 
 def _split_slices(
-    start: datetime, end: datetime, n_splits: int, val_pct: float, oos_pct: float
+    start: datetime, end: datetime, n_splits: int, val_pct: float, oos_pct: float  # noqa: ARG001
 ) -> list[tuple[str, datetime, datetime]]:
     """Return a list of (slice_name, start, end) for IS/Val/OOS.
 
-    The total range is divided into ``n_splits`` equal windows; the
-    **first** window is then further divided into IS / Val / OOS by
-    ``val_pct`` / ``oos_pct``. Subsequent windows are not used for
-    the 3-way split — the brief is one IS, one Val, one OOS, not
-    rolling. A future phase could add rolling splits.
+    The full date range is split proportionally by ``val_pct`` and
+    ``oos_pct``; the remaining fraction is in-sample.  ``n_splits`` is
+    reserved for a future rolling-split extension and is not used here.
+
+    Previous implementation divided the range by n_splits and used only
+    the first window, silently discarding (n_splits-1)/n_splits of the
+    data and leaving Val/OOS slices far too short.
     """
     total_seconds = (end - start).total_seconds()
     if total_seconds <= 0:
         return []
-    window_seconds = total_seconds / n_splits
-    first_window_end = start + _seconds(window_seconds)
-
-    is_end = start + _seconds(window_seconds * (1.0 - val_pct - oos_pct))
-    val_end = start + _seconds(window_seconds * (1.0 - oos_pct))
+    is_end = start + _seconds(total_seconds * (1.0 - val_pct - oos_pct))
+    val_end = start + _seconds(total_seconds * (1.0 - oos_pct))
     return [
         ("in_sample", start, is_end),
         ("validation", is_end, val_end),
-        ("out_of_sample", val_end, first_window_end),
+        ("out_of_sample", val_end, end),
     ]
 
 
@@ -233,33 +232,18 @@ def run_experiment(config: ExperimentConfig) -> int:
     report = compute_overfit_report(is_metrics, val_metrics, oos_metrics)
     overfit_warning = "; ".join(report.warnings) if report.warnings else None
 
-    # Persist aggregated metrics + overfit score.
+    # Persist all end-of-run fields in a single commit so a mid-write
+    # crash cannot leave partial metrics with status="running".
     exp_repo = ExperimentRepository()
     try:
-        exp_repo.update_metrics(
+        exp_repo.finalize(
             experiment_id,
-            slice_prefix="is_",
-            metrics=is_metrics,
-        )
-        exp_repo.update_metrics(
-            experiment_id,
-            slice_prefix="val_",
-            metrics=val_metrics,
-        )
-        exp_repo.update_metrics(
-            experiment_id,
-            slice_prefix="oos_",
-            metrics=oos_metrics,
-        )
-        exp_repo.update_overfit(
-            experiment_id,
+            is_metrics=is_metrics,
+            val_metrics=val_metrics,
+            oos_metrics=oos_metrics,
             overfit_score=report.score,
             overfitting_warning=overfit_warning,
-        )
-        exp_repo.update_run_ids(experiment_id, run_ids)
-        exp_repo.update_status(
-            experiment_id,
-            status="completed",
+            run_ids=run_ids,
             completed_at=now_ny(),
         )
     finally:
@@ -304,16 +288,27 @@ def _tag_run_slice(run_id: int, slice_name: str) -> None:
     OOS slice, and validation is encoded as ``out_of_sample=True``
     with the ``error`` field set to ``__slice:validation`` as a
     private marker. The aggregation helper matches on these.
+
+    Preserves status="failed" if the engine already marked the run as
+    failed — overwriting to "completed" was hiding insufficient-history
+    failures in short validation/OOS slices.
     """
     repo = BacktestRepository()
     try:
+        run = repo.get_run(run_id)
+        if run is None:
+            return
+        # Preserve a pre-existing failure; only promote to completed when
+        # the engine itself did not mark the run as failed.
+        new_status = "failed" if run.status == "failed" else "completed"
         if slice_name == "out_of_sample":
-            repo.update_run_status(run_id, status="completed", out_of_sample=True)
+            repo.update_run_status(run_id, status=new_status, out_of_sample=True)
         elif slice_name == "validation":
-            # Encode via error field as a private marker; clear later.
+            # Encode via error field as a private marker so _runs_by_slice
+            # can identify validation runs regardless of pass/fail status.
             repo.update_run_status(
                 run_id,
-                status="completed",
+                status=new_status,
                 out_of_sample=True,
                 error="__slice:validation",
             )

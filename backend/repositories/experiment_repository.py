@@ -5,6 +5,7 @@ Mirrors the ``BacktestRepository`` style: self-managed SQLAlchemy
 session, method-per-query, returns ORM objects (no DTOs).
 """
 
+import json
 from datetime import datetime
 
 from sqlalchemy import desc
@@ -154,12 +155,54 @@ class ExperimentRepository:
         experiment_id: int,
         run_ids: "list[int]",
     ) -> Experiment | None:
-        import json
-
         exp = self.get(experiment_id)
         if exp is None:
             return None
         exp.run_ids_json = json.dumps(run_ids)
+        self.db.commit()
+        self.db.refresh(exp)
+        return exp
+
+    def finalize(
+        self,
+        experiment_id: int,
+        is_metrics: dict,
+        val_metrics: dict,
+        oos_metrics: dict,
+        overfit_score: float,
+        overfitting_warning: str | None,
+        run_ids: "list[int]",
+        completed_at: datetime,
+    ) -> "Experiment | None":
+        """Persist all end-of-run fields in a single commit.
+
+        Replaces the previous pattern of five separate commits
+        (update_metrics×3, update_overfit, update_run_ids, update_status)
+        that left partial DB state when the process was killed between any
+        two of them.  All fields are written on the same ORM instance and
+        committed once; if the commit fails the experiment stays in
+        status="running" with no partial writes.
+        """
+        exp = self.get(experiment_id)
+        if exp is None:
+            return None
+        for key, val in is_metrics.items():
+            col_name = _map_metric_key("is_", key)
+            if hasattr(exp, col_name):
+                setattr(exp, col_name, val)
+        for key, val in val_metrics.items():
+            col_name = _map_metric_key("val_", key)
+            if hasattr(exp, col_name):
+                setattr(exp, col_name, val)
+        for key, val in oos_metrics.items():
+            col_name = _map_metric_key("oos_", key)
+            if hasattr(exp, col_name):
+                setattr(exp, col_name, val)
+        exp.overfit_score = overfit_score
+        exp.overfitting_warning = overfitting_warning
+        exp.run_ids_json = json.dumps(run_ids)
+        exp.status = "completed"
+        exp.completed_at = completed_at
         self.db.commit()
         self.db.refresh(exp)
         return exp
